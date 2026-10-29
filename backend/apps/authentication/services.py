@@ -31,3 +31,17 @@ def revoke_all_user_sessions(user) -> int:
     user.auth_version += 1
     user.save(update_fields=['auth_version'])
     return user.auth_version
+
+
+def check_can_modify_user_department_or_status(user) -> bool:
+    """
+    Guard service checking whether user's department or active status can be modified.
+    Rejects modification (returns False) if the user currently holds active assets
+    or has pending asset requests awaiting review.
+    Ready for Task 3/5 integration.
+    """
+    if hasattr(user, 'assigned_assets') and user.assigned_assets.filter(status='IN_USE').exists():
+        return False
+    if hasattr(user, 'asset_requests') and user.asset_requests.filter(status='PENDING').exists():
+        return False
+    return True
