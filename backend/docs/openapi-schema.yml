@@ -1,0 +1,2556 @@
+openapi: 3.0.3
+info:
+  title: AssetHub API
+  version: 1.0.0
+  description: AssetHub physical asset management REST API
+paths:
+  /api/assets/:
+    get:
+      operationId: assets_list
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Danh sách tài sản (Phân quyền theo vai trò)
+      parameters:
+      - in: query
+        name: category_id
+        schema:
+          type: integer
+        description: Lọc theo danh mục tài sản
+      - in: query
+        name: department_id
+        schema:
+          type: string
+        description: Lọc theo phòng ban hoặc 'unallocated' (Chỉ Admin)
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Tìm kiếm theo mã, tên, hoặc số serial
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Lọc theo trạng thái
+      tags:
+      - assets
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAssetList'
+          description: ''
+    post:
+      operationId: assets_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Tạo hồ sơ tài sản mới (Chỉ Admin)
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetCreate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetCreate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetCreate'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/:
+    get:
+      operationId: assets_retrieve
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Chi tiết tài sản
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+    patch:
+      operationId: assets_partial_update
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Cập nhật thông tin tài sản (Chỉ Admin, strict allowlist)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAssetUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAssetUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAssetUpdate'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/allocate/:
+    post:
+      operationId: assets_allocate_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Cấp phát tài sản cho nhân viên
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetAllocateAction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetAllocateAction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetAllocateAction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/complete-maintenance/:
+    post:
+      operationId: assets_complete_maintenance_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Hoàn tất bảo dưỡng/sửa chữa
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetCompleteMaintenanceAction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetCompleteMaintenanceAction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetCompleteMaintenanceAction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/confirm-disposal/:
+    post:
+      operationId: assets_confirm_disposal_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Xác nhận thanh lý tài sản (Chỉ Admin)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetConfirmDisposalAction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetConfirmDisposalAction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetConfirmDisposalAction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/history/:
+    get:
+      operationId: assets_history_list
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Lịch sử vòng đời tài sản (Admin toàn quyền, Manager trong phòng ban)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      tags:
+      - assets
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAssetHistoryLogList'
+          description: ''
+  /api/assets/{id}/mark-damaged/:
+    post:
+      operationId: assets_mark_damaged_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Báo hỏng tài sản tại kho
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetMarkDamagedAction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetMarkDamagedAction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetMarkDamagedAction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/propose-disposal/:
+    post:
+      operationId: assets_propose_disposal_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Đề xuất thanh lý tài sản
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetProposeDisposalAction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetProposeDisposalAction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetProposeDisposalAction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/revoke/:
+    post:
+      operationId: assets_revoke_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Thu hồi tài sản
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetRevokeAction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetRevokeAction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetRevokeAction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/send-maintenance/:
+    post:
+      operationId: assets_send_maintenance_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Gửi tài sản đi bảo dưỡng/sửa chữa
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetSendMaintenanceAction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetSendMaintenanceAction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetSendMaintenanceAction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/assets/{id}/transfer/:
+    post:
+      operationId: assets_transfer_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Điều chuyển tài sản sang phòng ban khác hoặc kho công ty (Chỉ Admin)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetTransferAction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetTransferAction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetTransferAction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+          description: ''
+  /api/auth/change-password/:
+    post:
+      operationId: auth_change_password_create
+      description: |-
+        Change password endpoint.
+        Validates old_password and applies Django password validators to new_password.
+        Increments auth_version to invalidate all existing tokens upon success.
+      summary: Đổi mật khẩu
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePassword'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ChangePassword'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChangePassword'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: Đổi mật khẩu thành công, cần đăng nhập lại.
+        '400':
+          description: Mật khẩu cũ sai hoặc mật khẩu mới không thỏa mãn chính sách.
+        '401':
+          description: Chưa xác thực.
+  /api/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: |-
+        Authentication endpoint returning access and refresh JWT tokens and user profile.
+        Inactive users or invalid credentials receive 401 Unauthorized.
+      summary: Đăng nhập tài khoản
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Login'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Login'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Login'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+          description: Đăng nhập thành công, trả về cặp token JWT và thông tin tài
+            khoản.
+        '400':
+          description: Thiếu tên đăng nhập hoặc mật khẩu.
+        '401':
+          description: Sai thông tin đăng nhập hoặc tài khoản chưa được kích hoạt.
+        '429':
+          description: Vượt quá giới hạn số lượt gửi yêu cầu.
+  /api/auth/logout/:
+    post:
+      operationId: auth_logout_create
+      description: |-
+        Logout endpoint that increments user's auth_version in database,
+        revoking all existing access and refresh tokens across all sessions.
+      summary: Đăng xuất khỏi tất cả phiên làm việc
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: Đăng xuất thành công, tất cả phiên bị thu hồi.
+        '401':
+          description: Chưa xác thực hoặc token không hợp lệ.
+  /api/auth/profile/:
+    get:
+      operationId: auth_profile_retrieve
+      description: |-
+        Current user profile endpoint.
+        GET: retrieve current profile.
+        PATCH: update full_name, email, phone only.
+      summary: Xem thông tin cá nhân
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: Thông tin cá nhân người dùng hiện tại.
+        '401':
+          description: Chưa xác thực.
+    patch:
+      operationId: auth_profile_partial_update
+      description: |-
+        Current user profile endpoint.
+        GET: retrieve current profile.
+        PATCH: update full_name, email, phone only.
+      summary: Cập nhật thông tin cá nhân
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedProfileUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedProfileUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedProfileUpdate'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: Hồ sơ cập nhật thành công.
+        '400':
+          description: Dữ liệu không hợp lệ hoặc cố gắng thay đổi trường bị cấm.
+        '401':
+          description: Chưa xác thực.
+  /api/auth/refresh/:
+    post:
+      operationId: auth_refresh_create
+      description: |-
+        Endpoint to obtain a new access token using a valid refresh token.
+        Verifies token claims and DB state (user is_active and auth_version).
+      summary: Làm mới access token
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomTokenRefresh'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CustomTokenRefresh'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CustomTokenRefresh'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefreshResponse'
+          description: Access token mới.
+        '400':
+          description: Thiếu refresh token.
+        '401':
+          description: Refresh token không hợp lệ, hết hạn hoặc phiên đã bị thu hồi.
+  /api/auth/register/:
+    post:
+      operationId: auth_register_create
+      description: |-
+        Public user registration endpoint.
+        New accounts are assigned role=USER, is_active=False, department=None,
+        and must be activated by an Administrator before login is permitted.
+      summary: Đăng ký tài khoản người dùng
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Register'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Register'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Register'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: Tài khoản được tạo thành công, ở trạng thái chờ kích hoạt.
+        '400':
+          description: Dữ liệu không hợp lệ hoặc chứa trường bị cấm.
+        '429':
+          description: Vượt quá giới hạn số lượt gửi yêu cầu.
+  /api/categories/:
+    get:
+      operationId: categories_list
+      description: |-
+        Category management API.
+        - Admin: create and patch categories.
+        - Manager and User: read-only list and detail.
+        - DELETE and PUT are strictly disabled.
+      summary: Danh sách danh mục tài sản
+      tags:
+      - categories
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Category'
+          description: ''
+    post:
+      operationId: categories_create
+      description: |-
+        Category management API.
+        - Admin: create and patch categories.
+        - Manager and User: read-only list and detail.
+        - DELETE and PUT are strictly disabled.
+      summary: Tạo danh mục tài sản
+      tags:
+      - categories
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Category'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Category'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Category'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+  /api/categories/{id}/:
+    get:
+      operationId: categories_retrieve
+      description: |-
+        Category management API.
+        - Admin: create and patch categories.
+        - Manager and User: read-only list and detail.
+        - DELETE and PUT are strictly disabled.
+      summary: Chi tiết danh mục tài sản
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Category.
+        required: true
+      tags:
+      - categories
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    patch:
+      operationId: categories_partial_update
+      description: |-
+        Category management API.
+        - Admin: create and patch categories.
+        - Manager and User: read-only list and detail.
+        - DELETE and PUT are strictly disabled.
+      summary: Cập nhật danh mục tài sản
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Category.
+        required: true
+      tags:
+      - categories
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+  /api/departments/:
+    get:
+      operationId: departments_list
+      description: |-
+        Department management API.
+        - Admin: full CRUD (except DELETE/PUT).
+        - Manager and User: read-only access to their assigned department.
+      summary: Danh sách phòng ban
+      tags:
+      - departments
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Department'
+          description: ''
+    post:
+      operationId: departments_create
+      description: |-
+        Department management API.
+        - Admin: full CRUD (except DELETE/PUT).
+        - Manager and User: read-only access to their assigned department.
+      summary: Tạo phòng ban mới
+      tags:
+      - departments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Department'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Department'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Department'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Department'
+          description: ''
+  /api/departments/{id}/:
+    get:
+      operationId: departments_retrieve
+      description: |-
+        Department management API.
+        - Admin: full CRUD (except DELETE/PUT).
+        - Manager and User: read-only access to their assigned department.
+      summary: Chi tiết phòng ban
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Department.
+        required: true
+      tags:
+      - departments
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Department'
+          description: ''
+    patch:
+      operationId: departments_partial_update
+      description: |-
+        Department management API.
+        - Admin: full CRUD (except DELETE/PUT).
+        - Manager and User: read-only access to their assigned department.
+      summary: Cập nhật phòng ban
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Department.
+        required: true
+      tags:
+      - departments
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedDepartment'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedDepartment'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedDepartment'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Department'
+          description: ''
+  /api/health/:
+    get:
+      operationId: health_retrieve
+      description: Public health endpoint checking application and database status
+        without exposing internal config.
+      summary: Service health check
+      tags:
+      - health
+      responses:
+        '200':
+          description: Service and database operational
+        '503':
+          description: Database service unavailable
+  /api/me/asset-history/:
+    get:
+      operationId: me_asset_history_list
+      description: |-
+        Read-only personal asset history for the authenticated user.
+        Strictly scoped to events where the user was recipient (to_user) or returner (from_user).
+      summary: Lịch sử tài sản cá nhân của người dùng đăng nhập
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      tags:
+      - assets
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPersonalAssetHistoryList'
+          description: ''
+  /api/reports/charts/:
+    get:
+      operationId: reports_charts_retrieve
+      description: |-
+        Charts distribution and monthly trend view.
+        - status_distribution: Active asset count per status.
+        - category_distribution: Active asset count per category.
+        - department_distribution: Company-wide department asset count (Admin only; Manager receives empty list).
+        - monthly_trend: New vs Disposed assets per month in Asia/Bangkok time.
+      summary: Dữ liệu biểu đồ phân bố và xu hướng tháng
+      parameters:
+      - in: query
+        name: category_id
+        schema:
+          type: integer
+        description: Lọc theo ID danh mục tài sản
+      - in: query
+        name: department_id
+        schema:
+          type: string
+        description: Lọc theo ID phòng ban hoặc 'unallocated' (Chỉ Admin)
+      - in: query
+        name: end_month
+        schema:
+          type: string
+        description: Tháng kết thúc (YYYY-MM)
+      - in: query
+        name: start_month
+        schema:
+          type: string
+        description: Tháng bắt đầu (YYYY-MM)
+      tags:
+      - reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportCharts'
+          description: ''
+  /api/reports/kpis/:
+    get:
+      operationId: reports_kpis_retrieve
+      description: |-
+        KPI metrics view for Assets and pending requests.
+        - User: 403 Forbidden.
+        - Manager: Locked to user's assigned department.
+        - Admin: Full company scope by default, with optional department/unallocated filters.
+      summary: Thống kê KPIs tổng quan tài sản
+      parameters:
+      - in: query
+        name: category_id
+        schema:
+          type: integer
+        description: Lọc theo ID danh mục tài sản
+      - in: query
+        name: department_id
+        schema:
+          type: string
+        description: Lọc theo ID phòng ban hoặc 'unallocated' (Chỉ Admin)
+      tags:
+      - reports
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportKPI'
+          description: ''
+  /api/requests/:
+    get:
+      operationId: requests_list
+      description: |-
+        List and create asset requests.
+        - User only views own requests.
+        - Manager views department requests.
+        - Admin views all requests across the company.
+      tags:
+      - requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AssetRequest'
+          description: ''
+    post:
+      operationId: requests_create
+      description: |-
+        List and create asset requests.
+        - User only views own requests.
+        - Manager views department requests.
+        - Admin views all requests across the company.
+      tags:
+      - requests
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetRequestCreate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssetRequestCreate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssetRequestCreate'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetRequestCreate'
+          description: ''
+  /api/requests/{id}/:
+    get:
+      operationId: requests_retrieve
+      description: Retrieve single request details within actor's scope.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - requests
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetRequest'
+          description: ''
+  /api/requests/{id}/approve/:
+    post:
+      operationId: requests_approve_create
+      description: Approve an AssetRequest (Manager of matching department or Admin
+        only).
+      summary: Duyệt phiếu yêu cầu tài sản
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - requests
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestApprove'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RequestApprove'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RequestApprove'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetRequest'
+          description: ''
+  /api/requests/{id}/reject/:
+    post:
+      operationId: requests_reject_create
+      description: Reject an AssetRequest (Manager of matching department or Admin
+        only).
+      summary: Từ chối phiếu yêu cầu tài sản
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - requests
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestReject'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RequestReject'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RequestReject'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetRequest'
+          description: ''
+  /api/users/:
+    get:
+      operationId: users_list
+      description: |-
+        User Administration API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update). Strictly no DELETE or PUT.
+        - Manager: Read-only access (GET list, GET detail) scoped to their assigned department.
+        - User: Completely blocked (403 Forbidden).
+      summary: Danh sách người dùng (Quản trị)
+      parameters:
+      - in: query
+        name: department_id
+        schema:
+          type: integer
+        description: Lọc theo phòng ban
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+        description: Lọc theo trạng thái hoạt động
+      - in: query
+        name: role
+        schema:
+          type: string
+        description: 'Lọc theo vai trò: ADMIN, MANAGER, USER'
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Tìm kiếm theo username, email, full_name
+      tags:
+      - users
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserAdmin'
+          description: ''
+    post:
+      operationId: users_create
+      description: |-
+        User Administration API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update). Strictly no DELETE or PUT.
+        - Manager: Read-only access (GET list, GET detail) scoped to their assigned department.
+        - User: Completely blocked (403 Forbidden).
+      summary: Tạo tài khoản người dùng mới (Chỉ Admin)
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserAdminCreate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserAdminCreate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserAdminCreate'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+  /api/users/{id}/:
+    get:
+      operationId: users_retrieve
+      description: |-
+        User Administration API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update). Strictly no DELETE or PUT.
+        - Manager: Read-only access (GET list, GET detail) scoped to their assigned department.
+        - User: Completely blocked (403 Forbidden).
+      summary: Chi tiết người dùng (Quản trị)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this User.
+        required: true
+      tags:
+      - users
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+    patch:
+      operationId: users_partial_update
+      description: |-
+        User Administration API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update). Strictly no DELETE or PUT.
+        - Manager: Read-only access (GET list, GET detail) scoped to their assigned department.
+        - User: Completely blocked (403 Forbidden).
+      summary: Cập nhật tài khoản người dùng (Chỉ Admin)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this User.
+        required: true
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAdminUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAdminUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAdminUpdate'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdmin'
+          description: ''
+components:
+  schemas:
+    ActionTypeEnum:
+      enum:
+      - CREATE
+      - ALLOCATE
+      - RETURN
+      - DAMAGE
+      - MAINTENANCE_START
+      - MAINTENANCE_END
+      - TRANSFER
+      - DISPOSAL_PROPOSE
+      - DISPOSAL_CONFIRM
+      type: string
+      description: |-
+        * `CREATE` - Create
+        * `ALLOCATE` - Allocate
+        * `RETURN` - Return
+        * `DAMAGE` - Damage
+        * `MAINTENANCE_START` - Maintenance Start
+        * `MAINTENANCE_END` - Maintenance End
+        * `TRANSFER` - Transfer
+        * `DISPOSAL_PROPOSE` - Disposal Propose
+        * `DISPOSAL_CONFIRM` - Disposal Confirm
+    Asset:
+      type: object
+      description: |-
+        Representation serializer for Asset list, detail, and mutation responses.
+        Exposes both foreign key IDs and descriptive snapshots/names.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        asset_code:
+          type: string
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        category:
+          type: integer
+          readOnly: true
+        category_id:
+          type: integer
+          readOnly: true
+        category_name:
+          type: string
+          readOnly: true
+        serial_number:
+          type: string
+          readOnly: true
+        specification:
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/AssetStatusEnum'
+          readOnly: true
+        department:
+          type: integer
+          readOnly: true
+          nullable: true
+        department_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        department_name:
+          type: string
+          readOnly: true
+          nullable: true
+        department_code:
+          type: string
+          readOnly: true
+          nullable: true
+        assigned_to_user:
+          type: integer
+          readOnly: true
+          nullable: true
+        assigned_to_user_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        assigned_to_user_name:
+          type: string
+          readOnly: true
+          nullable: true
+        assigned_to_user_username:
+          type: string
+          readOnly: true
+          nullable: true
+        image:
+          type: string
+          readOnly: true
+        document:
+          type: string
+          readOnly: true
+        purchase_date:
+          type: string
+          format: date
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - asset_code
+      - assigned_to_user
+      - assigned_to_user_id
+      - assigned_to_user_name
+      - assigned_to_user_username
+      - category
+      - category_id
+      - category_name
+      - created_at
+      - department
+      - department_code
+      - department_id
+      - department_name
+      - document
+      - id
+      - image
+      - name
+      - purchase_date
+      - serial_number
+      - specification
+      - status
+      - updated_at
+    AssetAllocateAction:
+      type: object
+      properties:
+        assigned_to_user_id:
+          type: integer
+        reason:
+          type: string
+      required:
+      - assigned_to_user_id
+      - reason
+    AssetCompleteMaintenanceAction:
+      type: object
+      properties:
+        result:
+          $ref: '#/components/schemas/ResultEnum'
+        reason:
+          type: string
+      required:
+      - reason
+      - result
+    AssetConfirmDisposalAction:
+      type: object
+      properties:
+        reason:
+          type: string
+      required:
+      - reason
+    AssetCreate:
+      type: object
+      description: |-
+        Serializer for Admin creating a new asset.
+        - Forces status=AVAILABLE and assigned_to_user=None.
+        - Rejects client-supplied status, assigned_to_user, holder, or asset_code with 400.
+        - Auto-generates asset_code via generate_identifier('AST').
+        - Atomically creates exactly one CREATE AssetHistoryLog record with snapshots.
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        category_id:
+          type: integer
+        department_id:
+          type: integer
+          nullable: true
+        serial_number:
+          type: string
+          default: ''
+          maxLength: 100
+        specification: {}
+        purchase_date:
+          type: string
+          format: date
+          nullable: true
+        image:
+          type: string
+          default: ''
+          maxLength: 500
+        document:
+          type: string
+          default: ''
+          maxLength: 500
+        reason:
+          type: string
+          default: ''
+      required:
+      - category_id
+      - name
+    AssetHistoryLog:
+      type: object
+      description: Read-only serializer for append-only asset history audit trail.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        asset_id:
+          type: integer
+          readOnly: true
+        actor_id:
+          type: integer
+          readOnly: true
+        actor_name:
+          type: string
+          readOnly: true
+        actor_username:
+          type: string
+          readOnly: true
+        action_type:
+          allOf:
+          - $ref: '#/components/schemas/ActionTypeEnum'
+          readOnly: true
+        from_status:
+          type: string
+          readOnly: true
+        to_status:
+          type: string
+          readOnly: true
+        from_user_id:
+          type: integer
+          nullable: true
+          readOnly: true
+        from_user_name:
+          type: string
+          readOnly: true
+          nullable: true
+        to_user_id:
+          type: integer
+          nullable: true
+          readOnly: true
+        to_user_name:
+          type: string
+          readOnly: true
+          nullable: true
+        from_department_id:
+          type: integer
+          nullable: true
+          readOnly: true
+        from_department_name:
+          type: string
+          readOnly: true
+          nullable: true
+        to_department_id:
+          type: integer
+          nullable: true
+          readOnly: true
+        to_department_name:
+          type: string
+          readOnly: true
+          nullable: true
+        reason:
+          type: string
+          readOnly: true
+        asset_code_snapshot:
+          type: string
+          readOnly: true
+        asset_name_snapshot:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - action_type
+      - actor_id
+      - actor_name
+      - actor_username
+      - asset_code_snapshot
+      - asset_id
+      - asset_name_snapshot
+      - created_at
+      - from_department_id
+      - from_department_name
+      - from_status
+      - from_user_id
+      - from_user_name
+      - id
+      - reason
+      - to_department_id
+      - to_department_name
+      - to_status
+      - to_user_id
+      - to_user_name
+    AssetMarkDamagedAction:
+      type: object
+      properties:
+        reason:
+          type: string
+      required:
+      - reason
+    AssetProposeDisposalAction:
+      type: object
+      properties:
+        received_confirmed:
+          type: boolean
+          default: false
+        reason:
+          type: string
+      required:
+      - reason
+    AssetRequest:
+      type: object
+      description: |-
+        Detailed read serializer for AssetRequest responses.
+        Exposes foreign key IDs alongside readable descriptive names.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        request_code:
+          type: string
+          readOnly: true
+        request_type:
+          allOf:
+          - $ref: '#/components/schemas/RequestTypeEnum'
+          readOnly: true
+        requester:
+          type: integer
+          readOnly: true
+        requester_id:
+          type: integer
+          readOnly: true
+        requester_name:
+          type: string
+          readOnly: true
+        requester_username:
+          type: string
+          readOnly: true
+        asset:
+          type: integer
+          readOnly: true
+          nullable: true
+        asset_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        asset_code:
+          type: string
+          readOnly: true
+          nullable: true
+        asset_name:
+          type: string
+          readOnly: true
+          nullable: true
+        requested_category:
+          type: integer
+          readOnly: true
+          nullable: true
+        requested_category_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        requested_category_name:
+          type: string
+          readOnly: true
+          nullable: true
+        department:
+          type: integer
+          readOnly: true
+        department_id:
+          type: integer
+          readOnly: true
+        department_name:
+          type: string
+          readOnly: true
+        department_code:
+          type: string
+          readOnly: true
+        reason:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/AssetRequestStatusEnum'
+          readOnly: true
+          default: PENDING
+        reviewed_by:
+          type: integer
+          readOnly: true
+          nullable: true
+        reviewed_by_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        reviewed_by_name:
+          type: string
+          readOnly: true
+          nullable: true
+        reviewed_by_username:
+          type: string
+          readOnly: true
+          nullable: true
+        reviewed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        rejection_reason:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - asset
+      - asset_code
+      - asset_id
+      - asset_name
+      - created_at
+      - department
+      - department_code
+      - department_id
+      - department_name
+      - id
+      - reason
+      - rejection_reason
+      - request_code
+      - request_type
+      - requested_category
+      - requested_category_id
+      - requested_category_name
+      - requester
+      - requester_id
+      - requester_name
+      - requester_username
+      - reviewed_at
+      - reviewed_by
+      - reviewed_by_id
+      - reviewed_by_name
+      - reviewed_by_username
+      - status
+    AssetRequestCreate:
+      type: object
+      description: |-
+        Serializer for creating an AssetRequest.
+        - Sets requester = request.user, department = request.user.department.
+        - ALLOCATE requires requested_category_id and non-empty reason; client must NOT send asset_id.
+        - RETURN requires asset_id; asset must be IN_USE and assigned to requester.
+        - DAMAGE_REPORT requires asset_id; asset must be IN_USE and assigned to requester.
+      properties:
+        request_type:
+          $ref: '#/components/schemas/RequestTypeEnum'
+        requested_category_id:
+          type: integer
+          nullable: true
+        asset_id:
+          type: integer
+          nullable: true
+        reason:
+          type: string
+      required:
+      - reason
+      - request_type
+    AssetRequestStatusEnum:
+      enum:
+      - PENDING
+      - APPROVED
+      - REJECTED
+      type: string
+      description: |-
+        * `PENDING` - Chờ duyệt
+        * `APPROVED` - Đã duyệt
+        * `REJECTED` - Từ chối
+    AssetRevokeAction:
+      type: object
+      properties:
+        received_confirmed:
+          type: boolean
+        condition:
+          $ref: '#/components/schemas/ConditionEnum'
+        to_status:
+          $ref: '#/components/schemas/ToStatusEnum'
+        reason:
+          type: string
+      required:
+      - reason
+    AssetSendMaintenanceAction:
+      type: object
+      properties:
+        reason:
+          type: string
+      required:
+      - reason
+    AssetStatusEnum:
+      enum:
+      - AVAILABLE
+      - IN_USE
+      - DAMAGED_PENDING_REPAIR
+      - UNDER_MAINTENANCE
+      - PENDING_DISPOSAL
+      - DISPOSED
+      type: string
+      description: |-
+        * `AVAILABLE` - Available
+        * `IN_USE` - In Use
+        * `DAMAGED_PENDING_REPAIR` - Damaged Pending Repair
+        * `UNDER_MAINTENANCE` - Under Maintenance
+        * `PENDING_DISPOSAL` - Pending Disposal
+        * `DISPOSED` - Disposed
+    AssetTransferAction:
+      type: object
+      properties:
+        to_department_id:
+          type: integer
+          nullable: true
+        target_department_id:
+          type: integer
+          nullable: true
+        reason:
+          type: string
+      required:
+      - reason
+    Category:
+      type: object
+      description: Serializer for Category model.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - name
+    CategoryDistributionItem:
+      type: object
+      properties:
+        category_id:
+          type: integer
+        category_name:
+          type: string
+        count:
+          type: integer
+      required:
+      - category_id
+      - category_name
+      - count
+    ChangePassword:
+      type: object
+      description: Serializer for changing current user password.
+      properties:
+        old_password:
+          type: string
+          writeOnly: true
+        new_password:
+          type: string
+          writeOnly: true
+      required:
+      - new_password
+      - old_password
+    ConditionEnum:
+      enum:
+      - GOOD
+      - DAMAGED
+      type: string
+      description: |-
+        * `GOOD` - GOOD
+        * `DAMAGED` - DAMAGED
+    CustomTokenRefresh:
+      type: object
+      description: |-
+        Serializer to refresh JWT access token.
+        Validates token signature and checks database user is_active and auth_version.
+      properties:
+        refresh:
+          type: string
+      required:
+      - refresh
+    Department:
+      type: object
+      description: Serializer for Department model.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        code:
+          type: string
+          maxLength: 50
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - code
+      - created_at
+      - id
+      - name
+    DepartmentDistributionItem:
+      type: object
+      properties:
+        department_id:
+          type: integer
+          nullable: true
+        department_name:
+          type: string
+        count:
+          type: integer
+      required:
+      - count
+      - department_id
+      - department_name
+    Login:
+      type: object
+      description: Serializer for user credentials on login.
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - password
+      - username
+    LoginResponse:
+      type: object
+      description: Schema for successful login response.
+      properties:
+        access:
+          type: string
+        refresh:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserProfile'
+      required:
+      - access
+      - refresh
+      - user
+    MessageResponse:
+      type: object
+      description: Standard message response.
+      properties:
+        message:
+          type: string
+      required:
+      - message
+    MonthlyTrendItem:
+      type: object
+      properties:
+        month:
+          type: string
+        new_assets:
+          type: integer
+        disposed_assets:
+          type: integer
+      required:
+      - disposed_assets
+      - month
+      - new_assets
+    NullEnum:
+      enum:
+      - null
+    PaginatedAssetHistoryLogList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetHistoryLog'
+    PaginatedAssetList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Asset'
+    PaginatedPersonalAssetHistoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersonalAssetHistory'
+    PatchedAssetUpdate:
+      type: object
+      description: |-
+        Serializer for Admin updating asset metadata (PATCH).
+        Strict allowlist: name, category_id, serial_number, specification, purchase_date.
+        Any forbidden workflow/protected fields (status, department, assigned_to_user, asset_code)
+        immediately result in a 400 Bad Request error.
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        category_id:
+          type: integer
+        serial_number:
+          type: string
+          maxLength: 100
+        specification: {}
+        purchase_date:
+          type: string
+          format: date
+          nullable: true
+    PatchedCategory:
+      type: object
+      description: Serializer for Category model.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+    PatchedDepartment:
+      type: object
+      description: Serializer for Department model.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        code:
+          type: string
+          maxLength: 50
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+    PatchedProfileUpdate:
+      type: object
+      description: |-
+        Serializer for user updating own profile.
+        Only allows: full_name, email, phone.
+        Rejects attempts to modify role, department, is_active, username, etc.
+      properties:
+        full_name:
+          type: string
+          description: Full name of the user
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          description: Required unique email address
+          maxLength: 254
+        phone:
+          type: string
+          description: Contact phone number
+          maxLength: 20
+    PatchedUserAdminUpdate:
+      type: object
+      description: |-
+        Serializer for Admin updating an existing user (PATCH).
+        Enforces active department rule, last active Admin protection,
+        service guard for assets/requests, and immediate session revocation.
+      properties:
+        email:
+          type: string
+          format: email
+        full_name:
+          type: string
+          maxLength: 150
+        phone:
+          type: string
+          maxLength: 20
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        department_id:
+          type: integer
+          nullable: true
+        is_active:
+          type: boolean
+    PersonalAssetHistory:
+      type: object
+      description: |-
+        Safe serializer for personal asset history.
+        Exposes only allowed non-sensitive fields and friendly localized message.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        asset_id:
+          type: integer
+          readOnly: true
+        asset_code_snapshot:
+          type: string
+          readOnly: true
+        asset_name_snapshot:
+          type: string
+          readOnly: true
+        action_type:
+          allOf:
+          - $ref: '#/components/schemas/ActionTypeEnum'
+          readOnly: true
+        from_status:
+          type: string
+          readOnly: true
+        to_status:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        message:
+          type: string
+          readOnly: true
+      required:
+      - action_type
+      - asset_code_snapshot
+      - asset_id
+      - asset_name_snapshot
+      - created_at
+      - from_status
+      - id
+      - message
+      - to_status
+    Register:
+      type: object
+      description: |-
+        Public registration serializer with strict field allowlist.
+        Only allows: username, email, password, full_name, phone.
+        Any attempt to set privileged fields (role, is_active, department) or unexpected fields is rejected with 400.
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+          description: Required unique email address
+        password:
+          type: string
+          writeOnly: true
+          description: User password, validated by Django password validators
+        full_name:
+          type: string
+          default: ''
+          maxLength: 150
+        phone:
+          type: string
+          default: ''
+          maxLength: 20
+      required:
+      - email
+      - password
+      - username
+    ReportCharts:
+      type: object
+      properties:
+        status_distribution:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusDistributionItem'
+        category_distribution:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryDistributionItem'
+        department_distribution:
+          type: array
+          items:
+            $ref: '#/components/schemas/DepartmentDistributionItem'
+        monthly_trend:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonthlyTrendItem'
+      required:
+      - category_distribution
+      - department_distribution
+      - monthly_trend
+      - status_distribution
+    ReportKPI:
+      type: object
+      properties:
+        total_active:
+          type: integer
+        available:
+          type: integer
+        in_use:
+          type: integer
+        damaged_under_maintenance:
+          type: integer
+        pending_disposal:
+          type: integer
+        pending_requests:
+          type: integer
+        last_updated:
+          type: string
+      required:
+      - available
+      - damaged_under_maintenance
+      - in_use
+      - last_updated
+      - pending_disposal
+      - pending_requests
+      - total_active
+    RequestApprove:
+      type: object
+      description: |-
+        Serializer for approving a request.
+        Validates input parameters depending on request_type.
+      properties:
+        selected_asset_id:
+          type: integer
+          nullable: true
+        received_confirmed:
+          type: boolean
+          default: false
+        condition:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/ConditionEnum'
+          - $ref: '#/components/schemas/NullEnum'
+    RequestReject:
+      type: object
+      description: Serializer for rejecting a request with mandatory reason.
+      properties:
+        rejection_reason:
+          type: string
+      required:
+      - rejection_reason
+    RequestTypeEnum:
+      enum:
+      - ALLOCATE
+      - RETURN
+      - DAMAGE_REPORT
+      type: string
+      description: |-
+        * `ALLOCATE` - Cấp phát
+        * `RETURN` - Thu hồi / Trả lại
+        * `DAMAGE_REPORT` - Báo hỏng
+    ResultEnum:
+      enum:
+      - RETURN_TO_USER
+      - RETURN_TO_STOCK
+      type: string
+      description: |-
+        * `RETURN_TO_USER` - RETURN_TO_USER
+        * `RETURN_TO_STOCK` - RETURN_TO_STOCK
+    RoleEnum:
+      enum:
+      - ADMIN
+      - MANAGER
+      - USER
+      type: string
+      description: |-
+        * `ADMIN` - Admin
+        * `MANAGER` - Manager
+        * `USER` - User
+    StatusDistributionItem:
+      type: object
+      properties:
+        status:
+          type: string
+        label:
+          type: string
+        count:
+          type: integer
+      required:
+      - count
+      - label
+      - status
+    ToStatusEnum:
+      enum:
+      - AVAILABLE
+      - DAMAGED_PENDING_REPAIR
+      type: string
+      description: |-
+        * `AVAILABLE` - AVAILABLE
+        * `DAMAGED_PENDING_REPAIR` - DAMAGED_PENDING_REPAIR
+    TokenRefreshResponse:
+      type: object
+      description: Response serializer containing new access token.
+      properties:
+        access:
+          type: string
+      required:
+      - access
+    UserAdmin:
+      type: object
+      description: |-
+        Representation serializer for user administration list/detail and responses.
+        Strictly excludes password, password_hash, and auth_version.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+        email:
+          type: string
+          format: email
+          readOnly: true
+          description: Required unique email address
+        full_name:
+          type: string
+          readOnly: true
+          description: Full name of the user
+        phone:
+          type: string
+          readOnly: true
+          description: Contact phone number
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+          description: |-
+            User role in system RBAC
+
+            * `ADMIN` - Admin
+            * `MANAGER` - Manager
+            * `USER` - User
+        department_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        department_name:
+          type: string
+          readOnly: true
+          nullable: true
+        department_code:
+          type: string
+          readOnly: true
+          nullable: true
+        is_active:
+          type: boolean
+          readOnly: true
+          title: Active
+          description: Designates whether this user should be treated as active. Unselect
+            this instead of deleting accounts.
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp when user was created
+      required:
+      - created_at
+      - department_code
+      - department_id
+      - department_name
+      - email
+      - full_name
+      - id
+      - is_active
+      - phone
+      - role
+      - username
+    UserAdminCreate:
+      type: object
+      description: |-
+        Serializer for Admin creating a new user.
+        Hashed password properly; enforces department assignment for active USER/MANAGER.
+      properties:
+        username:
+          type: string
+          maxLength: 150
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+        full_name:
+          type: string
+          default: ''
+          maxLength: 150
+        phone:
+          type: string
+          default: ''
+          maxLength: 20
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          default: USER
+        department_id:
+          type: integer
+          nullable: true
+        is_active:
+          type: boolean
+          default: true
+      required:
+      - email
+      - password
+      - username
+    UserProfile:
+      type: object
+      description: Public read-only serializer for user profile information.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+        email:
+          type: string
+          format: email
+          readOnly: true
+          description: Required unique email address
+        full_name:
+          type: string
+          readOnly: true
+          description: Full name of the user
+        phone:
+          type: string
+          readOnly: true
+          description: Contact phone number
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+          description: |-
+            User role in system RBAC
+
+            * `ADMIN` - Admin
+            * `MANAGER` - Manager
+            * `USER` - User
+        department_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp when user was created
+      required:
+      - created_at
+      - department_id
+      - email
+      - full_name
+      - id
+      - phone
+      - role
+      - username
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

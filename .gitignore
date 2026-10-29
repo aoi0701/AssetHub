@@ -60,6 +60,11 @@ node_modules/
 # Cloudflare / Wrangler local state
 .wrangler/
 
+# Postman / Newman local environments and reports
+tools/postman/environment.local.json
+logs/
+reports/
+
 # IDE & OS
 .idea/
 .vscode/

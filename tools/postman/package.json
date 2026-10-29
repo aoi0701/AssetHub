@@ -1,0 +1,12 @@
+{
+  "name": "assethub-postman-tests",
+  "version": "1.0.0",
+  "description": "AssetHub API end-to-end tests via Newman",
+  "private": true,
+  "scripts": {
+    "test:api": "newman run ../../backend/docs/postman/AssetHub.postman_collection.json -e environment.local.json --reporters cli,json --reporter-json-export ../../logs/newman/report.json"
+  },
+  "devDependencies": {
+    "newman": "^6.2.1"
+  }
+}

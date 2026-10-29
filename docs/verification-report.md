@@ -416,6 +416,57 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend p
 - **Exit code:** 0
 - **Kết quả:** `145 passed in 40.39s` (100% passed, 0 failures, 0 regressions)
 
+---
+
+### Task 7: OpenAPI và Postman/Newman thực chạy (Hoàn thành: 2026-10-29)
+
+#### Lệnh 1: Validate OpenAPI Schema (DRF Spectacular)
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend python manage.py spectacular --file docs/openapi-schema.yml --validate --fail-on-warn
+```
+- **Exit code:** 0
+- **Kết quả:** Schema OpenAPI 3.0 được sinh tại `backend/docs/openapi-schema.yml` (73KB) và validate thành công, 0 lỗi, 0 cảnh báo. Đầy đủ các paths API (`/api/auth/*`, `/api/users/*`, `/api/departments/*`, `/api/categories/*`, `/api/assets/*`, `/api/requests/*`, `/api/me/asset-history/`, `/api/reports/*`) và security scheme `jwtAuth` (HTTP Bearer).
+
+#### Lệnh 2: Kiểm thử tự động kiểm tra tài liệu và Schema bằng Pytest
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest tests/test_schema.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `2 passed in 0.35s` (`test_swagger_ui_endpoint` và `test_schema_endpoint` đều trả HTTP 200).
+
+#### Lệnh 3: Chạy thực tế Newman chống Backend Docker
+```bash
+npm --prefix tools/postman run test:api
+```
+- **Exit code:** 0
+- **File báo cáo raw:** `logs/newman/report.json` (gitignored)
+- **File môi trường local:** `tools/postman/environment.local.json` (`chmod 600`, gitignored)
+- **File môi trường mẫu:** `backend/docs/postman/AssetHub.postman_environment.json` (chỉ chứa placeholder, không lộ mật khẩu)
+- **Thống kê Newman thực chạy:**
+  - Iterations: 1
+  - Requests: 48
+  - Test Scripts: 47
+  - Prerequest Scripts: 6
+  - **Assertions: 86 passed / 0 failed**
+  - **Thời gian chạy:** 2.6s
+  - **Modules kiểm thử:**
+    - `00_HealthCheck`: Kiểm tra health status DB và API.
+    - `01_Auth`: Đăng ký tài khoản (PENDING_APPROVAL) → Admin kích hoạt → Đăng nhập → Lấy profile → Cập nhật profile → Đổi mật khẩu → Đăng nhập lại với mật khẩu mới → Thu hồi phiên đăng xuất.
+    - `02_Departments_and_Categories`: CRUD phòng ban và danh mục.
+    - `03_User_Admin`: Quản lý danh sách người dùng, cập nhật vai trò/phòng ban, chặn vô hiệu hóa user đang giữ tài sản (HTTP 409).
+    - `04_Assets_Lifecycle`: Toàn bộ vòng đời tài sản (Tạo mới AVAILABLE → Cấp phát IN_USE → Thu hồi AVAILABLE → Báo hỏng DAMAGED_PENDING_REPAIR → Đi bảo trì UNDER_MAINTENANCE → Hoàn thành bảo trì AVAILABLE → Chuyển phòng ban → Đề xuất thanh lý PENDING_DISPOSAL → Xác nhận thanh lý DISPOSED).
+    - `05_Requests`: Tạo phiếu cấp phát, tạo phiếu hoàn trả, duyệt phiếu cấp phát (chuyển trạng thái tài sản tự động), duyệt/từ chối phiếu hoàn trả, chặn tạo trùng phiếu PENDING (HTTP 409).
+    - `06_History_and_Reports`: Lịch sử quản trị tài sản (Admin), lịch sử tài sản cá nhân (`/api/me/asset-history/` an toàn cho User), báo cáo KPIs và các biểu đồ phân bố/biến động 12 tháng.
+    - `07_Security_and_Negative_Tests`: User cố truy cập lịch sử quản trị (HTTP 403), User cố truy cập báo cáo KPIs (HTTP 403), Manager cố truy cập báo cáo kho chưa phân bổ (HTTP 403), duyệt lại phiếu đã đóng (HTTP 409).
+
+#### Lệnh 4: Chạy toàn bộ test suite dự án (Hồi quy toàn diện)
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest -q
+```
+- **Exit code:** 0
+- **Kết quả:** `147 passed in 40.54s` (100% passed, 0 failures, 0 regressions)
+
+
 
 
 
