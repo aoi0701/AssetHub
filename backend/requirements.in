@@ -8,4 +8,7 @@ gunicorn
 pytest
 pytest-django
 Pillow
+pypdf
+django-storages
+boto3
 python-dotenv

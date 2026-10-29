@@ -545,6 +545,59 @@ npm --prefix frontend run build
 - **Exit code:** 0
 - **Kết quả:** `dist/index.html` (0.47 kB), `dist/assets/index.css` (27.08 kB), `dist/assets/index.js` (785.83 kB). Bundle hoàn tất trong 3.21s, không lỗi bundle.
 
+---
+
+### Task 10: R2 private và quyền upload/download (Hoàn thành: 2026-10-29)
+
+#### Lệnh 1: Kiểm thử Backend Storage & Permissions bằng Pytest
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest tests/test_storage.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `13 passed in 3.04s`
+- **Nội dung kiểm thử chi tiết:**
+  - `test_valid_real_images_upload_succeeds`: Tải lên ảnh thật định dạng JPEG, PNG, WEBP (dung lượng dưới 5 MiB) thành công (HTTP 200).
+  - `test_valid_real_pdf_upload_succeeds`: Tải lên tài liệu PDF thật (dung lượng dưới 10 MiB) thành công (HTTP 200).
+  - `test_reject_oversized_image_with_400`: Chặn ảnh vượt quá 5 MiB với HTTP 400.
+  - `test_reject_oversized_pdf_with_400`: Chặn PDF vượt quá 10 MiB với HTTP 400.
+  - `test_reject_fake_image_disguised_with_extension`: Chặn tệp văn bản giả mạo đuôi `.png` bằng Pillow `Image.verify()` thật (HTTP 400).
+  - `test_reject_fake_pdf_disguised_with_extension`: Chặn tệp văn bản giả mạo đuôi `.pdf` bằng pypdf `PdfReader` thật (HTTP 400).
+  - `test_upload_on_disposed_asset_rejected_with_400`: Chặn tải lên tệp đính kèm trên tài sản đã thanh lý (`DISPOSED`) với HTTP 400.
+  - `test_admin_can_upload_manager_and_user_forbidden`: Chỉ Admin có quyền tải lên tệp đính kèm; Manager và User bị từ chối với HTTP 403 Forbidden.
+  - `test_download_permissions_admin_manager_user`: Phân quyền tải tệp đính kèm nghiêm ngặt: Admin được tải toàn công ty; Manager chỉ được tải tài sản trong phòng ban; User chỉ được tải tài sản đang được giao cho chính mình, ngay sau khi thu hồi tài sản thì User lập tức bị chặn với HTTP 403 Forbidden.
+  - `test_orphan_file_cleaned_up_if_database_save_fails`: Dọn dẹp tệp mồ côi (compensating cleanup) trên storage nếu quá trình lưu DB xảy ra lỗi.
+  - `test_old_file_cleaned_up_when_replacing_attachment`: Khi thay thế tệp đính kèm mới, tệp cũ được dọn sạch sau khi giao dịch commit (`transaction.on_commit`).
+  - `test_local_signed_download_flow_and_expiration`: Tạo URL ký HMAC hết hạn sau 60 giây và kiểm tra header `Cache-Control: no-store`.
+  - `test_r2_storage_presigned_url_generation`: Kiểm tra khả năng tương thích tạo presigned URL với Cloudflare R2 / S3 Boto3 API.
+
+#### Lệnh 2: Kiểm thử hồi quy toàn bộ Backend
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest -q
+```
+- **Exit code:** 0
+- **Kết quả:** `160 passed in 43.89s` (100% passed, 0 failures, 0 regressions)
+
+#### Lệnh 3: Kiểm thử tự động Frontend bằng Vitest
+```bash
+npm --prefix frontend test
+```
+- **Exit code:** 0
+- **Kết quả:** `33 passed in 2.95s` (7 test suites, 33 tests passed, 0 failures)
+- **Nội dung kiểm thử chi tiết (`Attachments.test.jsx` - 5 tests):**
+  - `Renders attachments component with preview and download buttons`: Hiển thị ảnh xem trước và nút tải tài liệu đính kèm.
+  - `Admin can upload attachments`: Admin tải tệp đính kèm thành công với phản hồi cập nhật.
+  - `User can download attachments of assigned assets`: Nhân viên tải tài liệu của tài sản mình đang giữ.
+  - `Upload error alert maintains form state`: Khi tải lên gặp lỗi, form giữ nguyên dữ liệu đã chọn để người dùng không phải nhập lại.
+  - `AssetDetailPage integrates AssetAttachments`: Tích hợp mượt mà vào trang chi tiết tài sản.
+
+#### Lệnh 4: Build Production Frontend (Vite)
+```bash
+npm --prefix frontend run build
+```
+- **Exit code:** 0
+- **Kết quả:** Build sạch sẽ, 0 lỗi bundle.
+
+
 
 
 

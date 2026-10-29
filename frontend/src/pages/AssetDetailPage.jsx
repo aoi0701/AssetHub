@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import AssetStatusBadge from '../components/AssetStatusBadge';
 import AssetEditModal from '../components/AssetEditModal';
 import AssetActionModal from '../components/AssetActionModal';
+import AssetAttachments from '../components/AssetAttachments';
 import {
   Package,
   ArrowLeft,
@@ -425,6 +426,11 @@ const AssetDetailPage = () => {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Attachments Section */}
+      <div className="mt-6">
+        <AssetAttachments asset={asset} onUploadSuccess={fetchAssetData} />
       </div>
 
       {/* Edit Modal (Admin only) */}

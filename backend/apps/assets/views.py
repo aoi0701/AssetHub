@@ -1,10 +1,18 @@
+import os
+import uuid
+
+from django.db import transaction
 from django.db.models import Q
-from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from django.utils.text import get_valid_filename
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
+from apps.assets.attachments import validate_attachment
 from apps.assets.models import Asset
 from apps.assets.serializers import (
     AssetAllocateActionSerializer,
@@ -23,6 +31,7 @@ from apps.assets.serializers import (
 from apps.assets.services import AssetService
 from apps.authentication.models import User
 from apps.common.exceptions import ConflictError
+from apps.common.storage_backends import AttachmentStorage
 
 
 class AssetPagination(PageNumberPagination):
@@ -69,17 +78,17 @@ class AssetPermission(permissions.BasePermission):
             return True
 
         if user.role == User.Role.USER:
-            # User only has read access to list/retrieve; forbidden for history and any actions
-            if view.action in ['list', 'retrieve']:
+            # User only has read access to list/retrieve/download; forbidden for history, attachments, and actions
+            if view.action in ['list', 'retrieve', 'download']:
                 return True
             return False
 
         if user.role == User.Role.MANAGER:
-            # Manager cannot create or patch assets
-            if view.action in ['create', 'update', 'partial_update']:
+            # Manager cannot create, patch, or upload attachments
+            if view.action in ['create', 'update', 'partial_update', 'attachments']:
                 return False
             # Manager can invoke detail actions and safe views (queryset scoping handles department)
-            if view.action in self.ACTION_NAMES or view.action in ['list', 'retrieve', 'history']:
+            if view.action in self.ACTION_NAMES or view.action in ['list', 'retrieve', 'history', 'download']:
                 return True
             return False
 
@@ -94,11 +103,13 @@ class AssetPermission(permissions.BasePermission):
             return True
 
         if user.role == User.Role.USER:
-            if view.action == 'history':
+            if view.action in ['history', 'attachments']:
                 return False
             return obj.assigned_to_user_id == user.id
 
         if user.role == User.Role.MANAGER:
+            if view.action == 'attachments':
+                return False
             # Must match department
             if not user.department_id or obj.department_id != user.department_id:
                 return False
@@ -155,6 +166,9 @@ class AssetViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user or not user.is_authenticated:
             return Asset.objects.none()
+
+        if self.action in ['download', 'attachments']:
+            return Asset.objects.all().select_related('category', 'department', 'assigned_to_user')
 
         # Role-based scoping
         if user.role == User.Role.ADMIN:
@@ -402,3 +416,125 @@ class AssetViewSet(viewsets.ModelViewSet):
             logs = asset.history_logs.all().order_by('created_at', 'id')
         serializer = AssetHistoryLogSerializer(logs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        summary="Tải lên tệp đính kèm tài sản (Chỉ Admin)",
+        tags=["assets"],
+        request={
+            "multipart/form-data": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["image", "document"]},
+                    "file": {"type": "string", "format": "binary"},
+                },
+                "required": ["kind", "file"],
+            }
+        },
+        responses={200: OpenApiResponse(description="Tải tệp lên thành công")},
+    )
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='attachments',
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def attachments(self, request, pk=None):
+        asset = self.get_object()
+        if asset.status == Asset.Status.DISPOSED:
+            return Response(
+                {"detail": "Không thể tải tệp lên tài sản đã thanh lý."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        kind = request.data.get('kind')
+        if not kind or kind not in ('image', 'document'):
+            raise ValidationError(
+                {"kind": "Loại tệp không hợp lệ. Chỉ chấp nhận 'image' hoặc 'document'."}
+            )
+
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            raise ValidationError({"file": "Vui lòng chọn tệp để tải lên."})
+
+        # Validate file size, extension, MIME, and actual binary content
+        validate_attachment(file_obj, kind)
+
+        safe_name = get_valid_filename(file_obj.name)
+        key = f"assets/{asset.id}/{kind}/{uuid.uuid4().hex}_{safe_name}"
+
+        storage = AttachmentStorage()
+        saved_key = storage.save(key, file_obj)
+        old_key = getattr(asset, kind, '')
+
+        try:
+            with transaction.atomic():
+                setattr(asset, kind, saved_key)
+                asset.save(update_fields=[kind, 'updated_at'])
+                if old_key and old_key != saved_key:
+                    transaction.on_commit(lambda: storage.delete(old_key))
+        except Exception:
+            storage.delete(saved_key)
+            raise
+
+        return Response(
+            {
+                "message": "Tải tệp lên thành công",
+                "kind": kind,
+                "key": saved_key,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        summary="Lấy URL tải xuống tệp đính kèm với chữ ký bảo mật 60s",
+        tags=["assets"],
+        parameters=[
+            OpenApiParameter(
+                name="kind",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Loại tệp ('image' hoặc 'document')",
+                enum=["image", "document"],
+            )
+        ],
+        responses={200: OpenApiResponse(description="Presigned download URL thành công")},
+    )
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path=r'attachments/(?P<kind>[^/.]+)/download',
+    )
+    def download(self, request, pk=None, kind=None):
+        if kind not in ('image', 'document'):
+            return Response(
+                {"detail": f"Loại tệp không hợp lệ: '{kind}'. Chỉ chấp nhận 'image' hoặc 'document'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        asset = self.get_object()
+        file_key = getattr(asset, kind, None)
+        if not file_key:
+            return Response(
+                {"detail": f"Tài sản không có {'ảnh' if kind == 'image' else 'tài liệu'} đính kèm."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        storage = AttachmentStorage()
+        as_attachment = (kind == 'document') or (request.query_params.get('attachment') == '1')
+        download_url = storage.get_presigned_download_url(
+            name=file_key,
+            expire_seconds=60,
+            filename=os.path.basename(file_key),
+            as_attachment=as_attachment,
+        )
+
+        response = Response(
+            {
+                "download_url": download_url,
+                "expires_in": 60,
+                "kind": kind,
+            },
+            status=status.HTTP_200_OK,
+        )
+        response['Cache-Control'] = 'no-store'
+        return response
