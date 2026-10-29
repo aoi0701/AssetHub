@@ -20,6 +20,21 @@ def test_health_check_endpoint(api_client):
 
 
 @pytest.mark.django_db
+def test_health_check_database_failure(api_client, monkeypatch):
+    """GET /api/health/ should return 503 if database connection fails."""
+    from unittest.mock import MagicMock
+    from django.db import connection
+
+    def mock_cursor():
+        raise Exception("Database connection failure")
+
+    monkeypatch.setattr(connection, "cursor", mock_cursor)
+    response = api_client.get('/api/health/')
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.json() == {"status": "error", "db": "unavailable"}
+
+
+@pytest.mark.django_db
 def test_custom_user_model_configured():
     """Verify AUTH_USER_MODEL resolves to apps.authentication.models.User."""
     user_model = get_user_model()

@@ -8,6 +8,11 @@ class User(AbstractUser):
         MANAGER = 'MANAGER', 'Manager'
         USER = 'USER', 'User'
 
+    email = models.EmailField(
+        unique=True,
+        blank=False,
+        help_text='Required unique email address',
+    )
     role = models.CharField(
         max_length=20,
         choices=Role.choices,
