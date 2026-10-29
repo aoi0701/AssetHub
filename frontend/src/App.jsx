@@ -11,14 +11,12 @@ import UserAdminPage from './pages/UserAdminPage';
 import DepartmentPage from './pages/DepartmentPage';
 import CategoryPage from './pages/CategoryPage';
 
-const PlaceholderPage = ({ title, description }) => (
-  <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
-      <h1 className="text-2xl font-bold text-gray-900 mb-2">{title}</h1>
-      <p className="text-gray-500 max-w-md mx-auto">{description}</p>
-    </div>
-  </div>
-);
+import DashboardPage from './pages/DashboardPage';
+import AssetListPage from './pages/AssetListPage';
+import AssetDetailPage from './pages/AssetDetailPage';
+import UserPortalPage from './pages/UserPortalPage';
+import PersonalHistoryPage from './pages/PersonalHistoryPage';
+import RequestInboxPage from './pages/RequestInboxPage';
 
 const HomeRedirect = () => {
   const { isAuthenticated, user } = useAuth();
@@ -56,10 +54,7 @@ function App() {
             path="/my-assets"
             element={
               <ProtectedRoute allowedRoles={['USER']}>
-                <PlaceholderPage
-                  title="Tài sản của tôi"
-                  description="Danh sách tài sản doanh nghiệp đang được bàn giao cho bạn."
-                />
+                <UserPortalPage />
               </ProtectedRoute>
             }
           />
@@ -67,10 +62,7 @@ function App() {
             path="/my-history"
             element={
               <ProtectedRoute allowedRoles={['USER']}>
-                <PlaceholderPage
-                  title="Lịch sử tài sản"
-                  description="Nhật ký bàn giao, thu hồi và luân chuyển tài sản cá nhân."
-                />
+                <PersonalHistoryPage />
               </ProtectedRoute>
             }
           />
@@ -78,10 +70,7 @@ function App() {
             path="/my-requests"
             element={
               <ProtectedRoute allowedRoles={['USER']}>
-                <PlaceholderPage
-                  title="Yêu cầu của tôi"
-                  description="Danh sách các yêu cầu cấp phát, thu hồi hoặc sửa chữa tài sản."
-                />
+                <RequestInboxPage />
               </ProtectedRoute>
             }
           />
@@ -91,10 +80,7 @@ function App() {
             path="/dashboard"
             element={
               <ProtectedRoute allowedRoles={['ADMIN', 'MANAGER']}>
-                <PlaceholderPage
-                  title="Bảng điều khiển (Dashboard)"
-                  description="Tổng quan số liệu tài sản, phòng ban và yêu cầu cần xử lý."
-                />
+                <DashboardPage />
               </ProtectedRoute>
             }
           />
@@ -102,10 +88,15 @@ function App() {
             path="/assets"
             element={
               <ProtectedRoute allowedRoles={['ADMIN', 'MANAGER']}>
-                <PlaceholderPage
-                  title="Quản lý tài sản"
-                  description="Danh sách và thông tin chi tiết tài sản doanh nghiệp."
-                />
+                <AssetListPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/assets/:id"
+            element={
+              <ProtectedRoute allowedRoles={['ADMIN', 'MANAGER']}>
+                <AssetDetailPage />
               </ProtectedRoute>
             }
           />
@@ -113,10 +104,7 @@ function App() {
             path="/requests"
             element={
               <ProtectedRoute allowedRoles={['ADMIN', 'MANAGER']}>
-                <PlaceholderPage
-                  title="Quản lý yêu cầu"
-                  description="Duyệt và xử lý các yêu cầu tài sản từ nhân viên."
-                />
+                <RequestInboxPage />
               </ProtectedRoute>
             }
           />

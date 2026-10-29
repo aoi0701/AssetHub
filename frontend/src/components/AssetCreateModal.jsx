@@ -1,0 +1,233 @@
+import React, { useState } from 'react';
+import axiosClient from '../api/axiosClient';
+import { X, AlertCircle } from 'lucide-react';
+
+const AssetCreateModal = ({ isOpen, onClose, onSuccess, categories = [], departments = [] }) => {
+  const [name, setName] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [serialNumber, setSerialNumber] = useState('');
+  const [specificationText, setSpecificationText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  if (!isOpen) return null;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    if (!name.trim()) {
+      setError('Vui lòng nhập tên tài sản.');
+      return;
+    }
+    if (!categoryId) {
+      setError('Vui lòng chọn danh mục tài sản.');
+      return;
+    }
+
+    let parsedSpec = {};
+    if (specificationText.trim()) {
+      try {
+        parsedSpec = JSON.parse(specificationText.trim());
+      } catch {
+        // If not valid JSON, store as text description
+        parsedSpec = { description: specificationText.trim() };
+      }
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        name: name.trim(),
+        category_id: parseInt(categoryId, 10),
+        serial_number: serialNumber.trim(),
+        specification: parsedSpec,
+      };
+
+      if (departmentId) {
+        payload.department_id = parseInt(departmentId, 10);
+      }
+
+      const res = await axiosClient.post('/api/assets/', payload);
+      if (onSuccess) {
+        onSuccess(res.data);
+      }
+      onClose();
+    } catch (err) {
+      if (err.response?.status === 400 && err.response?.data) {
+        const data = err.response.data;
+        if (typeof data === 'object') {
+          const messages = Object.entries(data)
+            .map(([field, msg]) => `${field}: ${Array.isArray(msg) ? msg.join(', ') : msg}`)
+            .join(' | ');
+          setError(messages);
+        } else {
+          setError(String(data));
+        }
+      } else if (err.response?.data?.detail) {
+        setError(err.response.data.detail);
+      } else {
+        setError('Không thể tạo tài sản mới. Vui lòng kiểm tra lại thông tin.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-asset-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+    >
+      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-gray-100 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+          <h2 id="create-asset-title" className="text-lg font-bold text-gray-900">
+            Tạo tài sản mới
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+            aria-label="Đóng"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {error && (
+          <div
+            role="alert"
+            className="my-4 p-3 bg-red-50 border-l-4 border-red-500 rounded-r-lg flex items-start space-x-2 text-xs text-red-700"
+          >
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">{error}</div>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          <div>
+            <label
+              htmlFor="asset-name"
+              className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+            >
+              Tên tài sản <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="asset-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="VD: Laptop Dell XPS 15"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label
+                htmlFor="asset-category"
+                className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+              >
+                Danh mục <span className="text-red-500">*</span>
+              </label>
+              <select
+                id="asset-category"
+                value={categoryId}
+                onChange={(e) => setCategoryId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                required
+              >
+                <option value="">-- Chọn danh mục --</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="asset-department"
+                className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+              >
+                Phòng ban (tùy chọn)
+              </label>
+              <select
+                id="asset-department"
+                value={departmentId}
+                onChange={(e) => setDepartmentId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">-- Kho công ty (Chưa gán) --</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} ({d.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label
+              htmlFor="asset-serial"
+              className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+            >
+              Số serial
+            </label>
+            <input
+              id="asset-serial"
+              type="text"
+              value={serialNumber}
+              onChange={(e) => setSerialNumber(e.target.value)}
+              placeholder="VD: SN-2026-XPS-001"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="asset-spec"
+              className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+            >
+              Thông số kỹ thuật (Văn bản hoặc JSON)
+            </label>
+            <textarea
+              id="asset-spec"
+              rows={3}
+              value={specificationText}
+              onChange={(e) => setSpecificationText(e.target.value)}
+              placeholder='VD: {"cpu": "Core i7", "ram": "16GB", "ssd": "512GB"}'
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Hủy
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+            >
+              {loading ? 'Đang tạo...' : 'Tạo tài sản'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+export default AssetCreateModal;

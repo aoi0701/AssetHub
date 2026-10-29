@@ -506,6 +506,46 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
 - **Exit code:** 0
 - **Kết quả:** Cấu hình compose dev hợp lệ, service frontend được ánh xạ đúng cổng `127.0.0.1:5173:5173` và biến môi trường `VITE_API_BASE_URL=http://127.0.0.1:8000`.
 
+---
+
+### Task 9: React nghiệp vụ và dashboard (Hoàn thành: 2026-10-29)
+
+#### Lệnh 1: Kiểm thử tự động Frontend bằng Vitest
+```bash
+npm --prefix frontend test
+```
+- **Exit code:** 0
+- **Kết quả:** `28 passed in 2.89s` (6 test suites, 28 tests passed, 0 failures)
+- **Nội dung kiểm thử chi tiết:**
+  - **Luồng Tài sản (`AssetFlows.test.jsx` - 5 tests):**
+    - `AssetListPage renders assets with search and status badges`: Hiển thị danh sách tài sản, tìm kiếm, lọc theo trạng thái và hiển thị badge màu đúng chuẩn.
+    - `Admin creates asset, edits asset`: Admin tạo tài sản mới theo strict allowlist và chỉnh sửa thông tin tài sản (chặn sửa trường bất biến).
+    - `Manager cannot see create asset button`: Nút tạo tài sản bị ẩn hoàn toàn với Manager.
+    - `AssetDetailPage allows Admin to edit asset and allocate asset`: Chi tiết tài sản cho phép thực hiện thao tác cấp phát, chuyển trạng thái.
+    - `AssetActionModal handles 409 Conflict gracefully with alert`: Xử lý xung đột trạng thái (HTTP 409) bằng thông báo tiếng Việt rõ ràng, yêu cầu tải lại dữ liệu.
+  - **Luồng Phiếu Yêu Cầu (`RequestFlows.test.jsx` - 4 tests):**
+    - `User creates ALLOCATE request`: Nhân viên gửi yêu cầu cấp phát tài sản chọn danh mục và nhập lý do.
+    - `User creates RETURN request and duplicate is prevented with 409`: Nhân viên tạo phiếu hoàn trả và xử lý chặn tạo trùng phiếu PENDING (HTTP 409).
+    - `Manager approves ALLOCATE request selecting available asset`: Quản lý duyệt cấp phát bắt buộc chọn tài sản đang khả dụng (AVAILABLE) trong phòng ban.
+    - `Manager rejects request with non-empty reason`: Quản lý từ chối phiếu bắt buộc nhập lý do từ chối.
+  - **Lịch sử Tài sản Cá nhân (`PersonalHistory.test.jsx` - 2 tests):**
+    - `Loads /api/me/asset-history/ and renders event snapshots and messages`: Tải lịch sử cá nhân an toàn, hiển thị đúng thông điệp thân thiện và snapshot mã/tên tài sản, không chứa link sang timeline toàn công ty.
+    - `Persists historical events after asset is returned and no longer held`: Lịch sử cá nhân vẫn được bảo toàn sau khi tài sản đã hoàn trả hoặc chuyển đi phòng ban khác.
+  - **Dashboard & Báo cáo Recharts (`Dashboard.test.jsx` - 5 tests):**
+    - `Renders 6 KPI cards with metric values`: 6 thẻ KPI tổng thể (`total_active`, `available`, `in_use`, `damaged_under_maintenance`, `pending_disposal`, `pending_requests`).
+    - `Admin sees all 4 charts including department distribution`: Admin quan sát đủ 4 biểu đồ (Trạng thái, Danh mục, Phòng ban kèm Chưa phân bổ, Biến động 12 tháng).
+    - `Manager sees 3 charts and department distribution is hidden`: Manager bị ẩn hoàn toàn biểu đồ phân bố phòng ban toàn công ty.
+    - `Category and department filters update request queries`: Thay đổi bộ lọc đồng bộ cập nhật tham số truy vấn dữ liệu.
+    - `Enforces date range validation (start <= end, max 12 months)`: Cảnh báo lỗi giao diện khi chọn khoảng thời gian không hợp lệ hoặc vượt quá 12 tháng liên tiếp.
+
+#### Lệnh 2: Build Production Frontend (Vite)
+```bash
+npm --prefix frontend run build
+```
+- **Exit code:** 0
+- **Kết quả:** `dist/index.html` (0.47 kB), `dist/assets/index.css` (27.08 kB), `dist/assets/index.js` (785.83 kB). Bundle hoàn tất trong 3.21s, không lỗi bundle.
+
+
 
 
 
