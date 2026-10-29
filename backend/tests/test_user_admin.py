@@ -497,3 +497,55 @@ def test_real_service_guard_with_assigned_asset_blocks_department_or_deactivatio
     regular_user.refresh_from_db()
     assert regular_user.department == dept_hr
 
+
+@pytest.mark.django_db
+def test_real_service_guard_with_pending_request_blocks_department_or_deactivation(
+    admin_user, regular_user, dept_it, dept_hr
+):
+    from apps.departments.models import Category
+    from apps.requests.models import AssetRequest
+
+    client = auth_client_for(admin_user)
+    cat = Category.objects.create(name="Guard Category")
+
+    req = AssetRequest.objects.create(
+        request_type=AssetRequest.RequestType.ALLOCATE,
+        requester=regular_user,
+        department=dept_it,
+        requested_category=cat,
+        reason="Need equipment for new project",
+        status=AssetRequest.Status.PENDING,
+    )
+
+    # 1. Department change blocked by guard -> 409 Conflict
+    resp1 = client.patch(
+        f"/api/users/{regular_user.id}/",
+        data={"department_id": dept_hr.id},
+        format="json",
+    )
+    assert resp1.status_code == 409
+
+    # 2. Deactivation blocked by guard -> 409 Conflict
+    resp2 = client.patch(
+        f"/api/users/{regular_user.id}/",
+        data={"is_active": False},
+        format="json",
+    )
+    assert resp2.status_code == 409
+
+    # 3. Resolve the pending request: reject it
+    req.status = AssetRequest.Status.REJECTED
+    req.rejection_reason = "Rejected"
+    req.save()
+
+    # 4. Now department change succeeds -> 200 OK
+    resp3 = client.patch(
+        f"/api/users/{regular_user.id}/",
+        data={"department_id": dept_hr.id},
+        format="json",
+    )
+    assert resp3.status_code == 200
+    regular_user.refresh_from_db()
+    assert regular_user.department == dept_hr
+
+

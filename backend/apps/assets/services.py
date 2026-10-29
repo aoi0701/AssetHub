@@ -232,6 +232,48 @@ class AssetService:
             return asset
 
     @classmethod
+    def confirm_damage_report(cls, asset_id: int, actor: User, reason: str) -> Asset:
+        """
+        Confirm damage reported on an IN_USE asset by its holder.
+        Transitions: IN_USE -> DAMAGED_PENDING_REPAIR.
+        Retains holder for accountability.
+        """
+        if not reason or not reason.strip():
+            raise ValidationError({"reason": "Lý do báo hỏng không được để trống."})
+
+        with transaction.atomic():
+            asset = cls._get_locked_asset(asset_id, actor)
+
+            if asset.status != Asset.Status.IN_USE:
+                raise ConflictError(
+                    f"Tài sản đang ở trạng thái {asset.status}, chỉ tài sản IN_USE mới có thể xác nhận báo hỏng."
+                )
+
+            if asset.assigned_to_user is None:
+                raise ConflictError("Tài sản không có người giữ để xác nhận báo hỏng.")
+
+            old_holder = asset.assigned_to_user
+            from_status = asset.status
+            asset.status = Asset.Status.DAMAGED_PENDING_REPAIR
+            # Keeps assigned_to_user intact
+            asset.save()
+
+            cls._create_log(
+                asset=asset,
+                actor=actor,
+                action_type=AssetHistoryLog.ActionType.DAMAGE,
+                from_status=from_status,
+                to_status=Asset.Status.DAMAGED_PENDING_REPAIR,
+                from_user=old_holder,
+                to_user=old_holder,
+                from_department=asset.department,
+                to_department=asset.department,
+                reason=reason,
+            )
+
+            return asset
+
+    @classmethod
     def send_maintenance(cls, asset_id: int, actor: User, reason: str) -> Asset:
         """
         Send a damaged asset for repair/maintenance.
