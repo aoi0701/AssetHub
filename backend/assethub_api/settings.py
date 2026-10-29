@@ -180,6 +180,13 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
+# Proxy SSL header when behind reverse proxy / Cloudflare Tunnel
+secure_proxy_ssl_header_env = os.environ.get('SECURE_PROXY_SSL_HEADER')
+if secure_proxy_ssl_header_env:
+    parts = [p.strip() for p in secure_proxy_ssl_header_env.split(',')]
+    if len(parts) == 2:
+        SECURE_PROXY_SSL_HEADER = (parts[0], parts[1])
+
 # CORS settings
 cors_origins_env = os.environ.get(
     'CORS_ALLOWED_ORIGINS',
@@ -188,4 +195,8 @@ cors_origins_env = os.environ.get(
 CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in cors_origins_env.split(',') if origin.strip()
 ]
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https:\/\/.*\.pages\.dev$",
+]
 CORS_ALLOW_CREDENTIALS = False
+

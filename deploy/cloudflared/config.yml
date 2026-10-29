@@ -1,0 +1,10 @@
+tunnel: ${TUNNEL_ID:-placeholder-tunnel-id}
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: ${API_HOSTNAME:-api.assethub.example.com}
+    service: http://backend:8000
+    originRequest:
+      noTLSVerify: false
+      httpHostHeader: ${API_HOSTNAME:-api.assethub.example.com}
+  - service: http_status:404

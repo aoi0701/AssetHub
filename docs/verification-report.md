@@ -653,6 +653,41 @@ npm --prefix frontend run build
 - **Exit code:** 0
 - **Kết quả:** Build sạch sẽ, 0 lỗi bundle.
 
+---
+
+### Task 12: Pages, Tunnel, domain và CORS (Hoàn thành: 2026-10-29)
+
+#### Lệnh 1: Kiểm thử Backend CORS bằng Pytest
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest tests/test_cors.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `5 passed in 0.13s`
+- **Nội dung kiểm thử chi tiết:**
+  - `test_cors_preflight_allowed_origin`: Preflight OPTIONS request từ origin hợp lệ (ví dụ `http://localhost:5173`) trả về HTTP 200 kèm header `Access-Control-Allow-Origin`.
+  - `test_cors_preflight_pages_dev_origin`: Preflight OPTIONS request từ subdomain Cloudflare Pages (`https://assethub.pages.dev`) khớp regex và được chấp thuận.
+  - `test_cors_preflight_disallowed_origin`: Preflight OPTIONS request từ origin lạ (`https://evil-site.com`) bị từ chối; không trả về `Access-Control-Allow-Origin: https://evil-site.com`.
+  - `test_cors_allow_credentials_disabled`: Đảm bảo `Access-Control-Allow-Credentials` không được bật (`CORS_ALLOW_CREDENTIALS = False` theo spec V1).
+  - `test_cors_preflight_allowed_headers`: Cho phép đầy đủ các header cần thiết: `authorization`, `content-type`.
+
+#### Lệnh 2: Kiểm tra cấu hình Production Docker Compose
+```bash
+docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml config --quiet
+```
+- **Exit code:** 0
+- **Kết quả:** Cấu hình production hợp lệ: chạy backend qua Gunicorn WSGI (3 workers, 2 threads), `DJANGO_DEBUG=False`, loại bỏ toàn bộ source code bind mounts, định tuyến Tunnel trỏ trực tiếp service `http://backend:8000` trên internal docker network mà không public cổng ra ngoài.
+
+#### Lệnh 3: Kiểm tra tệp cấu hình Cloudflare Pages
+```bash
+test -f frontend/dist/_headers && test -f frontend/dist/_redirects
+```
+- **Exit code:** 0
+- **Kết quả:** Các tệp `_headers` (bảo mật HSTS, nosniff, Frame-Options DENY, CSP) và `_redirects` (SPA client-side routing fallback `/* /index.html 200`) đã được copy tự động vào thư mục `frontend/dist/`.
+
+#### Lệnh 4: Tài liệu triển khai hoàn chỉnh
+- Đã soạn thảo chi tiết tại `docs/deployment-guide.md` gồm kiến trúc Hybrid, các điểm cần xác nhận với giảng viên (Spec §12: làm rõ thuật ngữ 'cf CLI', vai trò D1, mô hình hybrid demo), hạn mức gói Free Cloudflare và quy trình backup/restore dữ liệu PostgreSQL.
+
+
 
 
 

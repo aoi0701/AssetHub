@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+!*.example
+.env.demo
+deploy/.env.demo
+
 
 # Python
 __pycache__/
@@ -60,6 +64,8 @@ node_modules/
 
 # Cloudflare / Wrangler local state
 .wrangler/
+deploy/cloudflared/credentials.json
+
 
 # Postman / Newman local environments and reports
 tools/postman/environment.local.json

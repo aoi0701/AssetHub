@@ -1,0 +1,20 @@
+services:
+  backend:
+    restart: always
+    environment:
+      DJANGO_DEBUG: "False"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-api.assethub.example.com,localhost,127.0.0.1,backend}
+      SECURE_PROXY_SSL_HEADER: "HTTP_X_FORWARDED_PROTO,https"
+    volumes: []
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "2", "assethub_api.wsgi:application"]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./deploy/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./deploy/cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
+    depends_on:
+      backend:
+        condition: service_healthy
