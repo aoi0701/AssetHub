@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'apps.authentication.apps.AuthenticationConfig',
     'apps.assets.apps.AssetsConfig',
     'apps.requests.apps.RequestsConfig',
+    'apps.reports.apps.ReportsConfig',
 ]
 
 MIDDLEWARE = [

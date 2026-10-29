@@ -83,6 +83,11 @@ class AssetService:
         Allocate AVAILABLE asset to an active user in the same department.
         Transitions: AVAILABLE -> IN_USE.
         """
+        # Support both (asset_id, actor, assigned_to_user_id, reason)
+        # and (asset_id, assigned_to_user_id, actor, reason)
+        if isinstance(actor, (int, str)) and isinstance(assigned_to_user_id, User):
+            actor, assigned_to_user_id = assigned_to_user_id, int(actor)
+
         if not assigned_to_user_id:
             raise ValidationError({"assigned_to_user_id": "Vui lòng chọn nhân viên nhận tài sản."})
         if not reason or not reason.strip():
@@ -137,9 +142,9 @@ class AssetService:
         cls,
         asset_id: int,
         actor: User,
-        received_confirmed: bool,
-        condition: str,
-        reason: str,
+        received_confirmed: bool = True,
+        condition: str = 'GOOD',
+        reason: str = "",
     ) -> Asset:
         """
         Revoke IN_USE asset back to stock or repair pending.
@@ -148,6 +153,17 @@ class AssetService:
         - condition == 'DAMAGED': IN_USE -> DAMAGED_PENDING_REPAIR
         Holder is cleared in both cases.
         """
+        # Support positional calling convention: revoke(asset_id, to_status_or_condition, actor, reason)
+        if isinstance(actor, str) and isinstance(received_confirmed, User):
+            status_or_cond = actor
+            actual_actor = received_confirmed
+            actual_reason = condition if isinstance(condition, str) else reason
+            actual_cond = 'GOOD' if status_or_cond in ('AVAILABLE', 'GOOD') else 'DAMAGED'
+            actor = actual_actor
+            condition = actual_cond
+            received_confirmed = True
+            reason = actual_reason
+
         if not received_confirmed:
             raise ValidationError(
                 {"received_confirmed": "Bắt buộc phải xác nhận đã nhận lại tài sản trước khi thu hồi."}

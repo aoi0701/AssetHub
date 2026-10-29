@@ -380,5 +380,42 @@ docker compose exec -T backend pytest -q
 - **Exit code:** 0
 - **Kết quả:** `130 passed in 36.67s` (100% passed, 0 failures, 0 regressions)
 
+---
+
+### Task 6: Lịch sử cá nhân và báo cáo đúng phạm vi (Hoàn thành: 2026-10-29)
+
+#### Lệnh 1: Kiểm thử TDD lịch sử cá nhân và báo cáo thống kê
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest tests/test_personal_history.py tests/test_reports.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `15 passed in 3.69s`
+- **Nội dung kiểm thử chi tiết:**
+  - **Lịch sử cá nhân (`test_personal_history.py` - 6 tests):**
+    - `test_personal_history_survives_return_and_transfer`: Tài sản cấp phát cho User A, A hoàn trả, Admin chuyển sang phòng ban khác và cấp cho User B. User A chỉ thấy đúng 2 sự kiện cá nhân của mình (`ALLOCATE` và `RETURN`), không thể thấy thông tin về User B hay các sự kiện sau đó. Serialization an toàn: chỉ chứa 9 trường (`id`, `asset_id`, `asset_code_snapshot`, `asset_name_snapshot`, `action_type`, `from_status`, `to_status`, `created_at`, `message`), hoàn toàn không chứa lý do nhạy cảm, actor hay tên người khác.
+    - `test_user_cannot_access_full_asset_history`: User truy cập timeline quản trị `/api/assets/{id}/history/` bị từ chối với HTTP 403 Forbidden.
+    - `test_user_cannot_query_personal_history_of_other_users`: User gửi query param `user` hoặc `user_id` để xem lịch sử người khác bị từ chối với HTTP 403 Forbidden.
+    - `test_personal_history_unauthenticated`: Người dùng chưa xác thực truy cập nhận HTTP 401 Unauthorized.
+    - `test_personal_history_pagination`: Phân trang chuẩn `PageNumberPagination` (20 mục/trang), kiểm tra chính xác `count`, `next`, `results`.
+    - `test_personal_history_survives_asset_disposal`: Lịch sử cá nhân tồn tại bền vững ngay cả sau khi tài sản đã bị thanh lý (`DISPOSED`).
+  - **Báo cáo và thống kê (`test_reports.py` - 9 tests):**
+    - `test_reports_user_forbidden`: User thông thường bị chặn truy cập `/api/reports/kpis/` và `/api/reports/charts/` với HTTP 403.
+    - `test_manager_scoping_and_forbidden_on_other_department`: Manager bị khóa chặt trong phòng ban của mình; truy vấn phòng ban khác hoặc `unallocated` nhận HTTP 403.
+    - `test_manager_department_distribution_is_empty`: Manager nhận mảng rỗng `[]` đối với biểu đồ phân bố toàn công ty `department_distribution`.
+    - `test_kpi_counts_and_exclusion_of_disposed`: 6 chỉ số KPI (`total_active`, `available`, `in_use`, `damaged_under_maintenance`, `pending_disposal`, `pending_requests`), loại trừ hoàn toàn tài sản đã thanh lý (`DISPOSED`), mỗi tài sản chỉ được đếm một lần theo ID.
+    - `test_admin_reports_department_filter_and_unallocated`: Admin có thể lọc theo từng phòng ban hoặc nhóm tài sản chưa phân bổ `unallocated` (kho công ty có `pending_requests = 0`).
+    - `test_reports_category_filter`: Bộ lọc danh mục áp dụng chuẩn xác cho tài sản và các loại phiếu yêu cầu (`ALLOCATE` theo `requested_category_id`, `RETURN`/`DAMAGE_REPORT` theo `asset__category_id`).
+    - `test_admin_charts_distributions`: Kiểm tra đúng cấu trúc phân bố trạng thái (loại trừ `DISPOSED`), phân bố danh mục, và phân bố phòng ban gồm cả nhóm `Chưa phân bổ`.
+    - `test_monthly_trend_zero_padding_and_validation`: Biểu đồ biến động 12 tháng tự động bù 0 cho các tháng không phát sinh; chặn các khoảng thời gian > 12 tháng hoặc sai định dạng với HTTP 400.
+    - `test_monthly_trend_asia_bangkok_boundary_and_snapshots`: Thống kê tháng theo múi giờ `Asia/Bangkok` (+07:00), kiểm tra ranh giới UTC/BKK; số liệu nhập mới (`CREATE`) và thanh lý (`DISPOSAL_CONFIRM`) căn cứ theo snapshot `to_department` trong log lịch sử chứ không phụ thuộc vào phòng ban hiện tại của tài sản.
+
+#### Lệnh 2: Chạy toàn bộ test suite dự án (Hồi quy toàn diện)
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest
+```
+- **Exit code:** 0
+- **Kết quả:** `145 passed in 40.39s` (100% passed, 0 failures, 0 regressions)
+
+
 
 

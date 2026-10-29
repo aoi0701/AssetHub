@@ -250,20 +250,42 @@ class AssetAllocateActionSerializer(serializers.Serializer):
 
 
 class AssetRevokeActionSerializer(serializers.Serializer):
-    received_confirmed = serializers.BooleanField(required=True)
-    condition = serializers.ChoiceField(choices=['GOOD', 'DAMAGED'], required=True)
+    received_confirmed = serializers.BooleanField(required=False, default=None)
+    condition = serializers.ChoiceField(choices=['GOOD', 'DAMAGED'], required=False, default=None)
+    to_status = serializers.ChoiceField(choices=['AVAILABLE', 'DAMAGED_PENDING_REPAIR'], required=False, default=None)
     reason = serializers.CharField(required=True, allow_blank=False)
-
-    def validate_received_confirmed(self, value):
-        if not value:
-            raise serializers.ValidationError("Bắt buộc phải xác nhận đã nhận lại tài sản trước khi thu hồi.")
-        return value
 
     def validate_reason(self, value):
         val = value.strip()
         if not val:
             raise serializers.ValidationError("Lý do không được để trống.")
         return val
+
+    def validate(self, attrs):
+        to_status = attrs.get('to_status')
+        condition = attrs.get('condition')
+        received_confirmed = attrs.get('received_confirmed')
+
+        if to_status is not None and condition is None:
+            if to_status == 'AVAILABLE':
+                condition = 'GOOD'
+            else:
+                condition = 'DAMAGED'
+            attrs['condition'] = condition
+            if received_confirmed is None:
+                attrs['received_confirmed'] = True
+
+        if attrs.get('received_confirmed') is None:
+            raise serializers.ValidationError({"received_confirmed": "This field is required."})
+        if not attrs.get('received_confirmed'):
+            raise serializers.ValidationError(
+                {"received_confirmed": "Bắt buộc phải xác nhận đã nhận lại tài sản trước khi thu hồi."}
+            )
+
+        if not attrs.get('condition'):
+            raise serializers.ValidationError({"condition": "This field is required."})
+
+        return attrs
 
 
 class AssetMarkDamagedActionSerializer(serializers.Serializer):
@@ -298,7 +320,8 @@ class AssetCompleteMaintenanceActionSerializer(serializers.Serializer):
 
 
 class AssetTransferActionSerializer(serializers.Serializer):
-    to_department_id = serializers.IntegerField(required=True, allow_null=True)
+    to_department_id = serializers.IntegerField(required=False, allow_null=True, default=None)
+    target_department_id = serializers.IntegerField(required=False, allow_null=True, default=None)
     reason = serializers.CharField(required=True, allow_blank=False)
 
     def validate_reason(self, value):
@@ -306,6 +329,13 @@ class AssetTransferActionSerializer(serializers.Serializer):
         if not val:
             raise serializers.ValidationError("Lý do không được để trống.")
         return val
+
+    def validate(self, attrs):
+        if 'target_department_id' in self.initial_data and 'to_department_id' not in self.initial_data:
+            attrs['to_department_id'] = attrs.get('target_department_id')
+        if 'to_department_id' not in attrs and 'target_department_id' not in attrs:
+            raise serializers.ValidationError({"to_department_id": "This field is required."})
+        return attrs
 
 
 class AssetProposeDisposalActionSerializer(serializers.Serializer):
