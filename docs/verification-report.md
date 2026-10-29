@@ -597,6 +597,63 @@ npm --prefix frontend run build
 - **Exit code:** 0
 - **Kết quả:** Build sạch sẽ, 0 lỗi bundle.
 
+---
+
+### Task 11: AI Worker/D1 và proxy có xác thực (Hoàn thành: 2026-10-29)
+
+#### Lệnh 1: Kiểm thử Cloudflare Worker & D1 Logging bằng Vitest
+```bash
+npm --prefix cloudflare-worker test
+```
+- **Exit code:** 0
+- **Kết quả:** `6 passed in 306ms` (1 test suite, 6 tests passed, 0 failures)
+- **Nội dung kiểm thử chi tiết (`worker.test.js` - 6 tests):**
+  - `returns 404 on invalid path`: Chặn mọi route khác `/api/suggest-category` với HTTP 404.
+  - `returns 405 on invalid method`: Chặn các phương thức HTTP khác POST với HTTP 405.
+  - `returns 401 when Authorization header is missing or invalid`: Bắt buộc Bearer service token, không gọi AI hay D1 nếu token thiếu hoặc sai.
+  - `returns 200 with suggestion and saves log to D1`: Gọi Workers AI (`@cf/meta/llama-3-8b-instruct`), phân tích cấu trúc gợi ý, lưu log vào D1 `ai_suggestion_logs` (`log_saved: true`).
+  - `returns suggestion with log_saved: false when D1 fails`: Khả năng chịu lỗi mềm; khi D1 gặp lỗi kết nối, Worker vẫn trả về danh mục gợi ý thành công cho người dùng với `log_saved: false`, không để lỗi ghi log cản trở nghiệp vụ.
+  - `returns 503 when AI service fails`: Khi dịch vụ AI gặp lỗi, trả về HTTP 503 kèm mã lỗi rõ ràng.
+
+#### Lệnh 2: Kiểm thử Django AI Proxy bằng Pytest
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest tests/test_ai_proxy.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `6 passed in 1.38s`
+- **Nội dung kiểm thử chi tiết:**
+  - `test_admin_calls_proxy_success`: Admin gọi gợi ý danh mục thành công, proxy thêm Bearer token gửi Worker và validate danh mục trả về.
+  - `test_non_admin_calls_proxy_forbidden`: User và Manager gọi proxy bị chặn với HTTP 403 Forbidden.
+  - `test_validation_empty_or_oversized`: Giới hạn độ dài tên (<= 200 ký tự) và mô tả (<= 2000 ký tự), trả về HTTP 400 nếu vi phạm.
+  - `test_worker_returns_401_maps_to_503`: Khi Worker trả về 401 (sai token giữa server-to-server), proxy ánh xạ thành HTTP 503 cho client.
+  - `test_worker_timeout_maps_to_504`: Khi Worker timeout vượt quá 6s, proxy trả về HTTP 504 Gateway Timeout.
+  - `test_worker_500_and_circuit_breaker`: Circuit breaker bảo vệ backend: sau 3 lần lỗi 5xx liên tiếp, kích hoạt trạng thái ngắt mạch (fast-fail) trả về HTTP 503 trong 30s mà không gửi thêm request làm nghẽn upstream.
+
+#### Lệnh 3: Kiểm thử hồi quy toàn bộ Backend
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest -q
+```
+- **Exit code:** 0
+- **Kết quả:** `166 passed in 44.15s` (100% passed, 0 failures, 0 regressions)
+
+#### Lệnh 4: Kiểm thử tự động Frontend bằng Vitest
+```bash
+npm --prefix frontend test
+```
+- **Exit code:** 0
+- **Kết quả:** `35 passed in 3.16s` (8 test suites, 35 tests passed, 0 failures)
+- **Nội dung kiểm thử chi tiết (`AssetCreateModal.test.jsx` - 2 tests):**
+  - `calls /api/ai/suggest-category/ when clicking AI button and applies suggestion`: Bấm nút gợi ý hiển thị spinner, nhận gợi ý từ AI, chỉ cập nhật trường danh mục khi người dùng bấm "Áp dụng".
+  - `handles AI failure gracefully with warning notice and allows manual submission`: Khi dịch vụ AI gặp sự cố (5xx/timeout), giao diện hiển thị cảnh báo màu vàng "Dịch vụ AI tạm thời không khả dụng, vui lòng chọn thủ công", form vẫn cho phép chọn tay và gửi bình thường.
+
+#### Lệnh 5: Build Production Frontend (Vite)
+```bash
+npm --prefix frontend run build
+```
+- **Exit code:** 0
+- **Kết quả:** Build sạch sẽ, 0 lỗi bundle.
+
+
 
 
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import axiosClient from '../api/axiosClient';
-import { X, AlertCircle } from 'lucide-react';
+import { X, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
 
 const AssetCreateModal = ({ isOpen, onClose, onSuccess, categories = [], departments = [] }) => {
   const [name, setName] = useState('');
@@ -11,7 +11,41 @@ const AssetCreateModal = ({ isOpen, onClose, onSuccess, categories = [], departm
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState(null);
+  const [aiNotice, setAiNotice] = useState('');
+
   if (!isOpen) return null;
+
+  const handleAiSuggest = async () => {
+    if (!name.trim()) {
+      setError('Vui lòng nhập tên tài sản trước khi yêu cầu gợi ý AI.');
+      return;
+    }
+    setAiLoading(true);
+    setAiNotice('');
+    setAiSuggestion(null);
+    setError('');
+
+    try {
+      const res = await axiosClient.post('/api/ai/suggest-category/', {
+        name: name.trim(),
+        description: specificationText.trim(),
+      });
+      setAiSuggestion(res.data);
+    } catch {
+      setAiNotice('Dịch vụ AI tạm thời không khả dụng, vui lòng chọn thủ công.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleApplySuggestion = () => {
+    if (aiSuggestion?.suggested_category_id) {
+      setCategoryId(String(aiSuggestion.suggested_category_id));
+      setAiSuggestion(null);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -128,12 +162,32 @@ const AssetCreateModal = ({ isOpen, onClose, onSuccess, categories = [], departm
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label
-                htmlFor="asset-category"
-                className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
-              >
-                Danh mục <span className="text-red-500">*</span>
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label
+                  htmlFor="asset-category"
+                  className="block text-xs font-semibold text-gray-700 uppercase tracking-wider"
+                >
+                  Danh mục <span className="text-red-500">*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleAiSuggest}
+                  disabled={aiLoading}
+                  className="inline-flex items-center space-x-1 text-xs text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50"
+                >
+                  {aiLoading ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Đang phân tích...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Gợi ý danh mục (AI)</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <select
                 id="asset-category"
                 value={categoryId}
@@ -148,6 +202,36 @@ const AssetCreateModal = ({ isOpen, onClose, onSuccess, categories = [], departm
                   </option>
                 ))}
               </select>
+
+              {aiNotice && (
+                <div
+                  role="status"
+                  className="mt-2 p-2 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 text-xs rounded-r-md"
+                >
+                  {aiNotice}
+                </div>
+              )}
+
+              {aiSuggestion && (
+                <div className="mt-2 p-2.5 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-900">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-purple-800">Gợi ý: </span>
+                      <span className="font-bold">{aiSuggestion.suggested_category_name}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleApplySuggestion}
+                      className="px-2 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded text-xs font-medium transition-colors"
+                    >
+                      Áp dụng
+                    </button>
+                  </div>
+                  {aiSuggestion.explanation && (
+                    <p className="mt-1 text-purple-700">{aiSuggestion.explanation}</p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div>

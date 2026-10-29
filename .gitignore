@@ -50,6 +50,7 @@ staticfiles/
 *.sqlite3
 *.db
 *.sql
+!cloudflare-worker/*.sql
 *.dump
 dumps/
 

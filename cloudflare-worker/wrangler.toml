@@ -1,0 +1,11 @@
+name = "assethub-ai-worker"
+main = "src/index.js"
+compatibility_date = "2024-04-01"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "assethub-d1"
+database_id = "local-d1-id"
