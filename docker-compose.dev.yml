@@ -10,6 +10,8 @@ services:
       - ./backend:/app
     environment:
       DJANGO_DEBUG: "True"
+      ALLOW_DEMO_SEED: "true"
+      DEMO_SEED_PASSWORD: "AdminPassword123!"
 
   frontend:
     build:
