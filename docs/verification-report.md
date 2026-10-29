@@ -213,3 +213,53 @@ docker compose exec -T backend pytest tests/test_rbac.py tests/test_user_admin.p
     - Service guard `check_can_modify_user_department_or_status` trả về HTTP 409 Conflict khi tài khoản đang giữ tài sản hoặc có phiếu chờ xử lý.
   - **Regression Auth (`test_auth.py` - 10 tests):**
     - Toàn bộ 10 tests của Task 1 đều PASS ổn định, không có hồi quy.
+
+---
+
+### Task 3: Hồ sơ tài sản, mã tự sinh, allowlist và seed data
+
+- **Ngày thực hiện:** 2026-10-29
+- **Trạng thái:** HOÀN THÀNH (Exit 0)
+
+#### Lệnh 1: Kiểm tra tính toàn vẹn migrations
+```bash
+docker compose exec -T backend python manage.py makemigrations --check --dry-run
+```
+- **Exit code:** 0
+- **Kết quả:** `No changes detected` (Schema DB khớp 100% với model Asset, IdentifierSequence, AssetHistoryLog).
+
+#### Lệnh 2: Xác thực OpenAPI Schema với drf-spectacular
+```bash
+docker compose exec -T backend python manage.py spectacular --validate --fail-on-warn
+```
+- **Exit code:** 0
+- **Kết quả:** Schema OpenAPI 3.0.3 tạo thành công cho các endpoints `/api/assets/` với 0 cảnh báo và 0 lỗi.
+
+#### Lệnh 3: Chạy kiểm thử tự động pytest cho Asset, Identifiers, Seed Data và Service Guard
+```bash
+docker compose exec -T backend pytest tests/test_assets.py tests/test_identifiers.py tests/test_seed_data.py tests/test_user_admin.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `47 passed in 18.52s`
+- **Danh sách kiểm thử chính:**
+  - **Asset CRUD & Permissions (`test_assets.py` - 24 tests):**
+    - Admin tạo tài sản mới: bắt buộc trạng thái `AVAILABLE`, `assigned_to_user=None`; tự động sinh mã định dạng `AST-YYYY-NNN`; tạo 1 bản ghi `CREATE` `AssetHistoryLog` có snapshot mã và tên.
+    - POST từ chối khi client gửi trường mã tài sản, trạng thái, hoặc người giữ (HTTP 400).
+    - Cấm thao tác DELETE trên Asset (HTTP 405 Method Not Allowed).
+    - PATCH chỉ cho phép các trường allowlist: `name`, `category_id`, `serial_number`, `specification`, `purchase_date`. Gửi các trường trạng thái, phòng ban, người giữ, mã tài sản trả về HTTP 400 kèm thông báo lỗi rõ ràng.
+    - Phân quyền theo phạm vi: Admin xem toàn bộ tài sản và lọc theo phòng ban (kể cả nhóm chưa phân bổ `unallocated`); Manager chỉ xem tài sản thuộc phòng ban mình; User chỉ xem tài sản được cấp cho chính mình.
+    - Manager và User bị cấm tạo hoặc sửa tài sản (HTTP 403).
+    - Model check constraints: chặn tài sản ở trạng thái AVAILABLE, PENDING_DISPOSAL, DISPOSED có người giữ; chặn tài sản kho công ty (`department=null`) có người giữ.
+    - Bảng `AssetHistoryLog` là append-only: chặn thao tác sửa hoặc xóa trên bản ghi đã lưu.
+  - **Mã tự sinh (`test_identifiers.py` - 5 tests):**
+    - Kiểm tra định dạng `AST-YYYY-001`, `REQ-YYYY-001`, tự động reset/tách biệt theo từng năm.
+    - Hỗ trợ số thứ tự >= 1000 mà không bị lỗi độ dài (`AST-2026-1000`).
+    - Kiểm tra cạnh tranh tranh chấp (concurrency race condition) khi tạo dòng sequence đầu tiên trong năm bằng `select_for_update()` và retry logic.
+  - **Demo Seed Command (`test_seed_data.py` - 6 tests):**
+    - Bắt buộc cờ `--demo`, yêu cầu biến môi trường `ALLOW_DEMO_SEED=true` và `DEMO_SEED_PASSWORD`.
+    - Tạo chuẩn: 1 Admin, 2 Managers, 4 Users, 2 Phòng ban, 5 Danh mục, 15 Tài sản phân bổ đủ 6 trạng thái nghiệp vụ.
+    - Tính bất biến (idempotent): Chạy lệnh 2 lần liên tiếp không sinh trùng tài sản, không nhân bản người dùng, không reset mật khẩu.
+    - Không in mật khẩu hoặc secret ra console stdout.
+  - **Service Guard User Admin (`test_user_admin.py`):**
+    - Tích hợp bảo vệ: Không cho phép đổi phòng ban hoặc vô hiệu hóa tài khoản đang giữ tài sản (trả về HTTP 409 Conflict).
+
