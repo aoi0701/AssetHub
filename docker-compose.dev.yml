@@ -6,3 +6,16 @@ services:
       - ./backend:/app
     environment:
       DJANGO_DEBUG: "True"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_BASE_URL=http://127.0.0.1:8000
+

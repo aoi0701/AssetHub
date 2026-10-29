@@ -466,6 +466,47 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend p
 - **Exit code:** 0
 - **Kết quả:** `147 passed in 40.54s` (100% passed, 0 failures, 0 regressions)
 
+---
+
+### Task 8: React nền tảng, auth và quản trị (Hoàn thành: 2026-10-29)
+
+#### Lệnh 1: Kiểm thử tự động Frontend bằng Vitest
+```bash
+npm --prefix frontend test
+```
+- **Exit code:** 0
+- **Kết quả:** `12 passed in 2.04s` (2 test suites, 12 tests passed, 0 failures)
+- **Nội dung kiểm thử chi tiết:**
+  - **Auth & Kiến trúc Token in-memory (`Auth.test.jsx` - 7 tests):**
+    - `login success stores tokens in memory and strictly not in localStorage`: Đăng nhập thành công lưu token trong memory module, kiểm tra triệt để không ghi bất kỳ khóa token nào vào `localStorage` hay `sessionStorage`.
+    - `login failure with invalid credentials shows Vietnamese error alert`: Đăng nhập sai mật khẩu hiển thị thông báo lỗi tiếng Việt thân thiện.
+    - `register user shows pending approval message on 201 Created`: Đăng ký tài khoản thành công hiển thị banner tài khoản ở trạng thái chờ Admin kích hoạt trước khi có thể đăng nhập.
+    - `profile update and change password work as expected`: Cập nhật thông tin cá nhân (họ tên, email, sđt) và đổi mật khẩu thành công.
+    - `logout clears memory state and tokens`: Đăng xuất dọn sạch token trong bộ nhớ và xóa state user.
+    - `handles concurrent 401 requests with a single refresh call queue`: Khi có nhiều request đồng thời nhận 401 Unauthorized, cơ chế queueing trong `axiosClient.js` đảm bảo chỉ thực hiện duy nhất 1 request refresh token và retry lại toàn bộ các request đang chờ mà không gây vòng lặp 401.
+    - `ProtectedRoute guards roles correctly`: Bọc route theo vai trò (Admin vào được trang quản trị, User thường bị chặn với thông báo 403 Forbidden).
+  - **Trang Quản trị Admin/Manager (`AdminPages.test.jsx` - 5 tests):**
+    - `UserAdminPage renders users and allows Admin to toggle active and change department`: Admin hiển thị danh sách người dùng, kích hoạt tài khoản và điều chuyển phòng ban.
+    - `UserAdminPage shows friendly alert on 409 Conflict`: Khi Admin cố vô hiệu hóa nhân viên đang giữ tài sản hoặc có phiếu chờ xử lý, giao diện hiển thị alert tiếng Việt cảnh báo HTTP 409 Conflict rõ ràng.
+    - `UserAdminPage: Manager sees read-only view without edit/activate buttons`: Manager chỉ xem nhân viên trong phòng ban của mình ở chế độ đọc, không hiển thị các nút thao tác chỉnh sửa vai trò hay kích hoạt.
+    - `DepartmentPage: Admin can create and edit; verify absence of DELETE buttons`: Admin tạo mới và chỉnh sửa phòng ban; kiểm tra tuyệt đối không có bất kỳ nút xóa (DELETE) nào.
+    - `CategoryPage: Admin can create and edit; verify absence of DELETE buttons`: Admin tạo mới và chỉnh sửa danh mục tài sản; kiểm tra tuyệt đối không có nút xóa nào.
+
+#### Lệnh 2: Build Production Frontend (Vite)
+```bash
+npm --prefix frontend run build
+```
+- **Exit code:** 0
+- **Kết quả:** `dist/index.html` (0.47 kB), `dist/assets/index.css` (20.69 kB), `dist/assets/index.js` (291.30 kB). Build sạch sẽ trong 1.86s, không lỗi bundle.
+
+#### Lệnh 3: Kiểm tra cấu hình Docker Compose Dev Override
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+```
+- **Exit code:** 0
+- **Kết quả:** Cấu hình compose dev hợp lệ, service frontend được ánh xạ đúng cổng `127.0.0.1:5173:5173` và biến môi trường `VITE_API_BASE_URL=http://127.0.0.1:8000`.
+
+
 
 
 
