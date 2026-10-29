@@ -128,7 +128,7 @@ const DashboardPage = () => {
   };
 
   return (
-    <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <div className="w-full py-6 px-4 sm:px-6 lg:px-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-gray-200 gap-4">
         <div>
@@ -255,7 +255,7 @@ const DashboardPage = () => {
       </div>
 
       {/* 6 KPI Cards */}
-      <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="mt-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         {/* Card 1: total_active */}
         <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
           <div className="flex items-center justify-between text-gray-500 mb-2">
@@ -330,7 +330,7 @@ const DashboardPage = () => {
       </div>
 
       {/* Analytical Charts Grid */}
-      <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="mt-8 grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Chart 1: Status Distribution */}
         <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
           <h3 className="text-sm font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">
@@ -358,7 +358,7 @@ const DashboardPage = () => {
         )}
 
         {/* Chart 4: Monthly Trend */}
-        <div className={`bg-white p-6 rounded-xl border border-gray-200 shadow-sm ${!isAdmin ? 'lg:col-span-2' : ''}`}>
+        <div className={`bg-white p-6 rounded-xl border border-gray-200 shadow-sm ${!isAdmin ? 'xl:col-span-2' : ''}`}>
           <h3 className="text-sm font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">
             Xu hướng tài sản mới & thanh lý theo tháng
           </h3>

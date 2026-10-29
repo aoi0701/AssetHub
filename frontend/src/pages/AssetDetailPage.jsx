@@ -98,7 +98,7 @@ const AssetDetailPage = () => {
 
   if (loading) {
     return (
-      <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8 text-center text-gray-500">
+      <div className="w-full py-6 px-4 sm:px-6 lg:px-8 text-center text-gray-500">
         Đang tải thông tin tài sản...
       </div>
     );
@@ -106,7 +106,7 @@ const AssetDetailPage = () => {
 
   if (!asset && errorAlert) {
     return (
-      <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      <div className="w-full py-6 px-4 sm:px-6 lg:px-8">
         <div role="alert" className="p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg text-red-700 text-sm mb-4">
           {errorAlert}
         </div>
@@ -122,7 +122,7 @@ const AssetDetailPage = () => {
   const status = asset.status;
 
   return (
-    <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <div className="w-full py-6 px-4 sm:px-6 lg:px-8">
       {/* Top Breadcrumb & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-gray-200 gap-4">
         <div>

@@ -102,15 +102,16 @@ const ProfilePage = () => {
   if (!user) return null;
 
   return (
-    <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Hồ sơ cá nhân</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Quản lý thông tin tài khoản và bảo mật mật khẩu
-        </p>
-      </div>
+    <div className="w-full py-6 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-3xl mx-auto">
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">Hồ sơ cá nhân</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Quản lý thông tin tài khoản và bảo mật mật khẩu
+          </p>
+        </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         {/* Navigation Tabs */}
         <div className="flex border-b border-gray-200 bg-gray-50/50">
           <button
@@ -389,6 +390,7 @@ const ProfilePage = () => {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );
