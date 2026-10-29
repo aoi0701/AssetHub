@@ -181,11 +181,17 @@ class AssetRequestCreateSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         user = self.context['request'].user
+        request_type = validated_data['request_type']
+        requested_category = (
+            validated_data.get('requested_category')
+            if request_type == AssetRequest.RequestType.ALLOCATE
+            else None
+        )
         req = AssetRequest.objects.create(
-            request_type=validated_data['request_type'],
+            request_type=request_type,
             requester=user,
             department=user.department,
-            requested_category=validated_data.get('requested_category'),
+            requested_category=requested_category,
             asset=validated_data.get('asset'),
             reason=validated_data['reason'].strip(),
             status=AssetRequest.Status.PENDING,
