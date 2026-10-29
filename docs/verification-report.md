@@ -311,4 +311,74 @@ docker compose exec -T backend pytest tests/test_assets_state_machine.py tests/t
   - **Hồi quy CRUD Asset (`test_assets.py` - 16 tests):**
     - Toàn bộ 16 tests của Task 3 tiếp tục PASS ổn định.
 
+---
+
+### Task 5: Phiếu, transaction, rollback và cạnh tranh
+
+- **Ngày thực hiện:** 2026-10-29
+- **Trạng thái:** HOÀN THÀNH (Exit 0)
+
+#### Lệnh 1: Kiểm tra tính toàn vẹn migrations
+```bash
+docker compose exec -T backend python manage.py makemigrations --check --dry-run
+```
+- **Exit code:** 0
+- **Kết quả:** `No changes detected`
+
+#### Lệnh 2: Xác thực OpenAPI Schema với drf-spectacular
+```bash
+docker compose exec -T backend python manage.py spectacular --validate --fail-on-warn
+```
+- **Exit code:** 0
+- **Kết quả:** Schema OpenAPI 3.0.3 tạo thành công cho các endpoints requests (List/Create, Detail, Approve, Reject) với 0 cảnh báo và 0 lỗi.
+
+#### Lệnh 3: Chạy kiểm thử tự động pytest cho Requests, Concurrency và User Admin
+```bash
+docker compose exec -T backend pytest tests/test_asset_requests.py tests/test_concurrency.py tests/test_user_admin.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `50 passed in 15.92s`
+- **Danh sách kiểm thử chính:**
+  - **Vòng đời phiếu yêu cầu (`test_asset_requests.py` - 26 tests):**
+    - `test_user_can_create_allocate_request_success`: User tạo phiếu ALLOCATE thành công với `requested_category_id` và lý do, mã sinh tự động dạng `REQ-YYYY-NNN`, trạng thái `PENDING`.
+    - `test_user_create_allocate_rejects_client_asset_id`: Chặn client gửi `asset_id` khi tạo ALLOCATE (HTTP 400).
+    - `test_user_create_request_requires_non_empty_reason`: Chặn lý do rỗng khi tạo phiếu (HTTP 400).
+    - `test_user_cannot_tamper_request_server_managed_fields`: Ngăn chặn giả mạo trạng thái, phòng ban, requester hoặc mã phiếu.
+    - `test_user_can_create_return_request_success`: User tạo phiếu RETURN thành công cho tài sản đang giữ (IN_USE), không thay đổi trạng thái tài sản lúc gửi.
+    - `test_user_cannot_create_return_for_available_asset`: Chặn tạo phiếu RETURN cho tài sản kho (HTTP 400).
+    - `test_user_cannot_create_return_for_asset_assigned_to_another_user`: Chặn tạo phiếu RETURN cho tài sản của người khác (HTTP 400).
+    - `test_user_cannot_create_duplicate_pending_return_request`: Chặn tạo trùng lặp phiếu RETURN đang chờ duyệt trên cùng tài sản (DB partial unique constraint & serializer validation).
+    - `test_user_can_create_damage_report_success`: User gửi báo hỏng tài sản đang giữ thành công.
+    - `test_user_cannot_create_duplicate_pending_damage_report`: Chặn tạo trùng lặp phiếu DAMAGE_REPORT đang chờ duyệt trên cùng tài sản.
+    - `test_request_scoping_for_user_manager_and_admin`: Phân quyền phạm vi: User chỉ thấy phiếu cá nhân; Manager chỉ thấy phiếu trong phòng ban; Admin thấy toàn bộ công ty; xem chi tiết ngoài phạm vi trả về HTTP 404.
+    - `test_manager_can_approve_allocate_request_success`: Manager duyệt ALLOCATE với `selected_asset_id`, tài sản chuyển sang IN_USE giao cho requester, lưu asset vào phiếu, cập nhật trạng thái APPROVED, tạo 1 log ALLOCATE.
+    - `test_approve_allocate_requires_selected_asset_id`: Duyệt ALLOCATE bắt buộc chọn tài sản (HTTP 400).
+    - `test_approve_allocate_rejects_asset_with_mismatched_category`: Chặn cấp tài sản khác danh mục yêu cầu (HTTP 400).
+    - `test_approve_allocate_rejects_asset_not_available`: Tài sản không AVAILABLE trả về HTTP 409 Conflict, phiếu vẫn giữ nguyên PENDING.
+    - `test_approve_return_success_condition_good`: Duyệt trả tài sản với condition GOOD chuyển về AVAILABLE, xóa người giữ, tạo log RETURN.
+    - `test_approve_return_success_condition_damaged`: Duyệt trả tài sản với condition DAMAGED chuyển về DAMAGED_PENDING_REPAIR, xóa người giữ, tạo log RETURN.
+    - `test_approve_return_requires_received_confirmed_and_valid_condition`: Duyệt trả bắt buộc `received_confirmed=True` và `condition` hợp lệ (HTTP 400).
+    - `test_approve_damage_report_success_retains_holder`: Duyệt báo hỏng chuyển tài sản sang DAMAGED_PENDING_REPAIR và GIỮ NGUYÊN người chịu trách nhiệm, tạo log DAMAGE.
+    - `test_approve_damage_report_fails_if_asset_not_in_use`: Tài sản không còn IN_USE trả về HTTP 409, phiếu giữ nguyên PENDING.
+    - `test_manager_can_reject_request_with_reason`: Manager từ chối phiếu với lý do, cập nhật REJECTED, tài sản giữ nguyên trạng thái.
+    - `test_reject_request_requires_non_empty_rejection_reason`: Từ chối bắt buộc có lý do (HTTP 400).
+    - `test_user_cannot_approve_or_reject`: User gọi duyệt/từ chối nhận HTTP 403 Forbidden.
+    - `test_manager_cannot_approve_or_reject_other_department_request`: Manager phòng ban khác duyệt/từ chối nhận HTTP 404 Not Found.
+    - `test_repeated_approve_or_reject_returns_conflict`: Thao tác duyệt/từ chối lại phiếu đã xử lý trả về HTTP 409 Conflict.
+    - `test_fault_injection_log_creation_failure_rolls_back_asset_and_request`: Fault injection khi ghi log trong giao dịch duyệt đảm bảo rollback hoàn toàn cả tài sản và phiếu, không để xảy ra trạng thái APPROVED một phần.
+  - **Kiểm thử cạnh tranh dữ liệu trên PostgreSQL thật (`test_concurrency.py` - 3 tests):**
+    - `test_concurrent_allocate_one_winner`: Hai luồng đồng thời duyệt cấp cùng một tài sản AVAILABLE cho hai phiếu khác nhau -> chính xác một luồng thành công (200), một luồng nhận HTTP 409 Conflict, chính xác một log ALLOCATE được ghi.
+    - `test_concurrent_approve_same_request_once`: Hai luồng đồng thời duyệt cùng một phiếu -> một luồng thành công (200), một luồng nhận HTTP 409 Conflict, phiếu chỉ được duyệt đúng một lần.
+    - `test_concurrent_identifier_creation`: 8 luồng đồng thời sinh mã định danh khi counter trong DB chưa tồn tại -> toàn bộ 8 mã đều duy nhất, theo đúng chuẩn REQ-YYYY-NNN, không phát sinh lỗi duplicate key.
+  - **Kiểm thử Guard bảo vệ tài khoản User (`test_user_admin.py`):**
+    - `test_real_service_guard_with_pending_request_blocks_department_or_deactivation`: Tích hợp bảo vệ tài khoản khi User có phiếu đang PENDING -> Admin cố tình đổi phòng ban hoặc vô hiệu hóa tài khoản sẽ bị chặn với HTTP 409 Conflict; sau khi phiếu được giải quyết thì cho phép thay đổi bình thường.
+
+#### Lệnh 4: Chạy toàn bộ test suite dự án (Hồi quy toàn diện)
+```bash
+docker compose exec -T backend pytest -q
+```
+- **Exit code:** 0
+- **Kết quả:** `130 passed in 36.67s` (100% passed, 0 failures, 0 regressions)
+
+
 
