@@ -39,6 +39,34 @@ const roleBadgeColors = {
   USER: 'bg-green-100 text-green-800 border-green-200',
 };
 
+const ADMIN_NAV_ITEMS = [
+  { to: '/dashboard', label: 'Dashboard', icon: Home },
+  { to: '/assets', label: 'Tài sản', icon: Package },
+  { to: '/requests', label: 'Yêu cầu', icon: FileText },
+  { to: '/users', label: 'Người dùng', icon: Users },
+  { to: '/departments', label: 'Phòng ban', icon: Building2 },
+  { to: '/categories', label: 'Danh mục', icon: Layers },
+];
+
+const MANAGER_NAV_ITEMS = [
+  { to: '/dashboard', label: 'Dashboard', icon: Home },
+  { to: '/assets', label: 'Tài sản', icon: Package },
+  { to: '/requests', label: 'Yêu cầu', icon: FileText },
+  { to: '/users', label: 'Nhân viên', icon: Users },
+];
+
+const USER_NAV_ITEMS = [
+  { to: '/my-assets', label: 'Tài sản của tôi', icon: Package },
+  { to: '/my-history', label: 'Lịch sử', icon: History },
+  { to: '/my-requests', label: 'Yêu cầu', icon: FileText },
+];
+
+const NAV_ITEMS_BY_ROLE = {
+  ADMIN: ADMIN_NAV_ITEMS,
+  MANAGER: MANAGER_NAV_ITEMS,
+  USER: USER_NAV_ITEMS,
+};
+
 const Sidebar = () => {
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
@@ -64,36 +92,7 @@ const Sidebar = () => {
     navigate('/login');
   };
 
-  const adminNavItems = [
-    { to: '/dashboard', label: 'Dashboard', icon: Home },
-    { to: '/assets', label: 'Tài sản', icon: Package },
-    { to: '/requests', label: 'Yêu cầu', icon: FileText },
-    { to: '/users', label: 'Người dùng', icon: Users },
-    { to: '/departments', label: 'Phòng ban', icon: Building2 },
-    { to: '/categories', label: 'Danh mục', icon: Layers },
-  ];
-
-  const managerNavItems = [
-    { to: '/dashboard', label: 'Dashboard', icon: Home },
-    { to: '/assets', label: 'Tài sản', icon: Package },
-    { to: '/requests', label: 'Yêu cầu', icon: FileText },
-    { to: '/users', label: 'Nhân viên', icon: Users },
-  ];
-
-  const userNavItems = [
-    { to: '/my-assets', label: 'Tài sản của tôi', icon: Package },
-    { to: '/my-history', label: 'Lịch sử', icon: History },
-    { to: '/my-requests', label: 'Yêu cầu', icon: FileText },
-  ];
-
-  let navItems = [];
-  if (role === 'ADMIN') {
-    navItems = adminNavItems;
-  } else if (role === 'MANAGER') {
-    navItems = managerNavItems;
-  } else if (role === 'USER') {
-    navItems = userNavItems;
-  }
+  const navItems = NAV_ITEMS_BY_ROLE[role] || [];
 
   return (
     <aside
