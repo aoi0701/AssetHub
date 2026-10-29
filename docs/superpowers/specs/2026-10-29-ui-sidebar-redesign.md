@@ -2,29 +2,31 @@
 
 ## 1. Intent & Why
 - Người dùng yêu cầu chuyển thanh điều hướng từ trên cùng (top navbar) sang bên trái (left sidebar).
-- Loại bỏ khoảng trắng thừa hai bên (`max-w-7xl`), mở rộng nội dung tràn toàn màn hình (full-width) để tận dụng tối đa không gian hiển thị trên màn hình lớn (1366px, 1920px+).
+- Loại bỏ khoảng trắng thừa hai bên (`max-w-7xl`), mở rộng nội dung tràn toàn màn hình (full-width) để tận dụng tối đa không gian hiển thị trên màn hình lớn (1024px, 1366px, 1920px+).
 
 ## 2. Goals, Non-Goals, Anti-Goals
 - **Goals:**
-  - Thay thế top `Navbar` bằng `Sidebar` đặt ở cạnh trái trong flex layout (`shrink-0`) cho người dùng đã đăng nhập.
-  - Vùng nội dung chính `main` dùng `flex-1 min-w-0`, có thanh cuộn dọc độc lập, không bị sidebar che khuất.
-  - Sidebar hỗ trợ thu gọn/mở rộng (`w-64` khi mở, `w-20` khi thu gọn icon). Lưu duy nhất tùy chọn này vào `localStorage` có bọc try/catch guard.
-  - Vùng menu điều hướng bên trong sidebar có thanh cuộn riêng (`overflow-y-auto`) khi chiều cao màn hình hạn chế.
+  - Thay thế top `Navbar` bằng `Sidebar` đặt ở cạnh trái trong flex layout (`shrink-0`) cho các trang được bảo vệ sau khi xác thực.
+  - Trang `/login` và `/register` hiển thị theo Guest Layout (header tối giản hoặc không sidebar, form căn giữa màn hình, giữ nguyên quy tắc không hiển thị sidebar cho khách).
+  - Vùng nội dung chính `main` dùng `flex-1 min-w-0`, có thanh cuộn dọc độc lập, không bị sidebar che khuất (sidebar không bao giờ đè lên `main`).
+  - Sidebar hỗ trợ thu gọn/mở rộng (`w-64` khi mở, `w-20` khi thu gọn icon). Lưu duy nhất tùy chọn này vào `localStorage` có bọc try/catch guard. Khôi phục chính xác trạng thái sau khi unmount/remount.
+  - Vùng menu điều hướng bên trong sidebar có thanh cuộn riêng (`overflow-y-auto`) khi chiều cao màn hình hạn chế (ví dụ viewport chiều cao 480px), đảm bảo header và footer của sidebar vẫn luôn hiển thị và tương tác được.
   - Đảm bảo trọn vẹn Accessibility: Khi thu gọn, link và button vẫn giữ accessible name bằng `aria-label` hoặc `sr-only`, tooltip `title`, hỗ trợ focus bàn phím rõ nét (`focus:ring-2`). Nút toggle thu gọn có `aria-expanded` và nhãn rõ ràng.
   - Mở rộng vùng container các trang toàn màn hình (`w-full px-4 sm:px-6 lg:px-8 py-6`), bảng dữ liệu có `overflow-x-auto` nội bộ không tràn trang.
   - Giữ nguyên giới hạn bề rộng hợp lý cho Form (Profile `max-w-3xl`, Login/Register `max-w-md`, Modals `max-w-lg` / `max-w-2xl`).
-  - Kiểm tra bố cục đáp ứng chuẩn ở các mốc phân giải 1024px, 1366px và 1920px (cả mở rộng và thu gọn).
+  - Kiểm tra bố cục đáp ứng chuẩn ở các mốc phân giải 1024px, 1366px và 1920px (cả mở rộng và thu gọn), cộng với viewport chiều cao thấp (1280x480px). Bảng cuộn ngang trong vùng bảng, chụp và lưu screenshot tại các độ phân giải để review.
   - Tối ưu Dashboard: KPI card co giãn linh hoạt (`grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4`), tự xuống dòng khi thiếu chỗ, không ép 6 cột trên màn hẹp gây cắt chữ/số.
-  - Giữ nguyên 100% route, quyền hạn RBAC và các quy tắc bảo mật (tuyệt đối không lưu JWT vào localStorage).
-  - Bổ sung bộ test cho `Sidebar.jsx`, đảm bảo toàn bộ unit test (Vitest) và E2E test (Playwright - 1 test suite gồm 8 bước) pass 100%.
+  - Giữ nguyên 100% route, quyền hạn RBAC và các quy tắc bảo mật (tuyệt đối không lưu JWT vào localStorage; JWT lưu hoàn toàn trong bộ nhớ in-memory).
+  - Bổ sung bộ test cho `Sidebar.jsx`, tạo file Playwright layout `frontend/e2e/layout.spec.js`, đảm bảo toàn bộ unit test (Vitest) và E2E test pass 100%. Báo cáo chính xác số lượng test thực tế đã chạy, không cố định số 40.
 
 - **Non-Goals:**
   - Không thay đổi nghiệp vụ backend, API endpoints hay schema database.
-  - Không thay đổi bố cục màn hình đăng nhập / đăng ký (`/login`, `/register`).
+  - Không thay đổi form đăng nhập / đăng ký (`/login`, `/register`).
 - **Anti-Goals:**
   - Không dùng `position: fixed` tuyệt đối che đè nội dung `main`.
   - Không để crash giao diện nếu trình duyệt chặn hoặc lỗi `localStorage`.
   - Không để tràn ngang toàn màn hình do bảng dữ liệu lớn.
+  - Không lưu JWT tokens hay thông tin nhạy cảm vào `localStorage`.
 
 ## 3. Constraints
 - Framework: React 18, Tailwind CSS, Lucide React, React Router v6.
@@ -32,7 +34,7 @@
   - ADMIN: Dashboard, Tài sản, Yêu cầu, Người dùng, Phòng ban, Danh mục (6 tabs).
   - MANAGER: Dashboard, Tài sản, Yêu cầu, Nhân viên (4 tabs).
   - USER: Tài sản của tôi, Lịch sử, Yêu cầu (3 tabs).
-- Storage Constraint: Chỉ lưu key `assethub_sidebar_collapsed` (giá trị `'true'` / `'false'`). Không lưu token hay user data vào `localStorage`.
+- Storage Constraint: Chỉ lưu duy nhất key `assethub_sidebar_collapsed` (`'true'` / `'false'`). Tuyệt đối không lưu token hay user data vào `localStorage`.
 
 ## 4. Approaches & Selection
 - **Phương án 1 (Đã chọn): Collapsible Left Sidebar + Full-width fluid content.**
@@ -65,9 +67,9 @@
   - Hàm an toàn `getInitialCollapsed()` và `setCollapsedStorage(val)` bọc `try...catch`. Nếu `localStorage` bị vô hiệu hóa hoặc ném SecurityError thì fallback mượt mà vào state bộ nhớ (`false`).
 
 ### 5.2 Bố cục tổng thể `App.jsx`
-- Guest Layout (chưa đăng nhập hoặc đường dẫn `/login`, `/register`):
-  - Hiển thị Navbar tối giản trên cùng (`Navbar.jsx` giản lược hoặc header tối giản) và nội dung đăng nhập/đăng ký căn giữa trang.
-- Authenticated Layout (đã đăng nhập):
+- **Guest Layout** (chưa đăng nhập hoặc đường dẫn `/login`, `/register`):
+  - Hiển thị Navbar tối giản trên cùng (`Navbar.jsx` giản lược hoặc header tối giản) và nội dung đăng nhập/đăng ký căn giữa trang. Không hiển thị Sidebar.
+- **Authenticated Layout** (đã xác thực, các route được bảo vệ):
   - Wrapper: `<div className="flex h-screen w-screen overflow-hidden bg-gray-50 text-gray-900">`
   - Cột 1: `<Sidebar />` (`shrink-0`).
   - Cột 2: `<main className="flex-1 min-w-0 h-screen overflow-y-auto">` chứa `<Routes>`.
@@ -86,9 +88,17 @@
 1. Tạo file test `frontend/src/tests/Sidebar.test.jsx`:
    - Kiểm tra render đúng menu theo vai trò (Admin 6, Manager 4, User 3).
    - Kiểm tra toggle thu gọn/mở rộng, kiểm tra thuộc tính `aria-expanded`.
-   - Kiểm tra khôi phục trạng thái từ `localStorage` và xử lý an toàn khi `localStorage` bị lỗi.
+   - Kiểm tra khôi phục trạng thái từ `localStorage` sau khi unmount và remount component.
+   - Kiểm tra xử lý an toàn khi `localStorage` bị lỗi/SecurityError.
    - Kiểm tra điều hướng `/profile` và sự kiện click nút `Đăng xuất`.
-2. Kiểm tra tương thích các unit test hiện có: Chạy `npm --prefix frontend test -- --run` (35 test cũ + bộ test Sidebar mới).
-3. Build kiểm tra: `npm --prefix frontend run build`.
-4. Chạy Playwright E2E: `npm --prefix frontend run test:e2e` (1 test suite bao gồm 8 bước kiểm thử vòng đời).
-5. Báo cáo chính xác số lượng test thực tế đã chạy.
+2. Tạo file Playwright layout test `frontend/e2e/layout.spec.js`:
+   - Kiểm tra đăng nhập Admin, Manager, User.
+   - Kiểm tra các viewport: `1024x768`, `1366x768`, `1920x1080` (ở cả 2 trạng thái: mở rộng `w-64` và thu gọn `w-20`).
+   - Kiểm tra viewport chiều cao hạn chế `1280x480`: kiểm tra menu bên trong sidebar cuộn được (`scrollHeight > clientHeight`), header toggle và footer logout vẫn hiển thị trong viewport và click được bình thường.
+   - Bounding box check: `sidebarRect.x + sidebarRect.width <= mainRect.x + 1` (đảm bảo sidebar không đè lên vùng main).
+   - Bảng dữ liệu có scrollbar nội bộ (`scrollWidth >= clientWidth` trong wrapper, document body không có scroll ngang ngoài ý muốn).
+   - Chụp và lưu ảnh screenshot vào `frontend/e2e-screenshots/` cho các mốc để phục vụ kiểm tra visual.
+3. Chạy toàn bộ test suites và báo cáo số lượng thực chạy:
+   - `npm --prefix frontend test -- --run` (báo cáo số file và số test thực chạy).
+   - `npm --prefix frontend run build` (kiểm tra build production).
+   - `npm --prefix frontend run test:e2e` (chạy cả suite nghiệp vụ `assethub.spec.js` và suite bố cục `layout.spec.js`).
