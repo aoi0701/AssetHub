@@ -108,15 +108,15 @@ The React frontend is accessible at `http://127.0.0.1:5173`.
 
 ## 👤 Default Demonstration Accounts
 
-All demonstration accounts are pre-configured with the default seed password (`DemoPassword123!`):
+All demonstration accounts are configured with password (`aoi0701@`):
 
 | Role | Username | Password | Access Scope |
 |---|---|---|---|
-| **System Admin** | `admin` | `DemoPassword123!` | Full system administration, user management, global reports |
-| **IT Manager** | `manager_it` | `DemoPassword123!` | IT Department asset inventory & request approval inbox |
-| **HR Manager** | `manager_hr` | `DemoPassword123!` | HR Department asset inventory & request approval inbox |
-| **IT Staff (User)** | `user_it_1` | `DemoPassword123!` | Self-service equipment portal & personal asset history |
-| **HR Staff (User)** | `user_hr_1` | `DemoPassword123!` | Self-service equipment portal & personal asset history |
+| **System Admin** | `admin` | `aoi0701@` | Full system administration, user management, global reports |
+| **IT Manager** | `manager_it` | `aoi0701@` | IT Department asset inventory & request approval inbox |
+| **HR Manager** | `manager_hr` | `aoi0701@` | HR Department asset inventory & request approval inbox |
+| **IT Staff (User)** | `user_it_1` (hoặc `user_it`) | `aoi0701@` | Self-service equipment portal & personal asset history |
+| **HR Staff (User)** | `user_hr_1` | `aoi0701@` | Self-service equipment portal & personal asset history |
 
 *(Note: In automated seed tests, users can also be customized with any secure passphrase via the `DEMO_SEED_PASSWORD` environment variable).*
 

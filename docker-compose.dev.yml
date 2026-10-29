@@ -11,7 +11,7 @@ services:
     environment:
       DJANGO_DEBUG: "True"
       ALLOW_DEMO_SEED: "true"
-      DEMO_SEED_PASSWORD: "AdminPassword123!"
+      DEMO_SEED_PASSWORD: "aoi0701@"
 
   frontend:
     build:
