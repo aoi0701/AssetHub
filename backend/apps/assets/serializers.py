@@ -236,3 +236,95 @@ class AssetHistoryLogSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = fields
+
+
+class AssetAllocateActionSerializer(serializers.Serializer):
+    assigned_to_user_id = serializers.IntegerField(required=True)
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+    def validate_reason(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Lý do không được để trống.")
+        return val
+
+
+class AssetRevokeActionSerializer(serializers.Serializer):
+    received_confirmed = serializers.BooleanField(required=True)
+    condition = serializers.ChoiceField(choices=['GOOD', 'DAMAGED'], required=True)
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+    def validate_received_confirmed(self, value):
+        if not value:
+            raise serializers.ValidationError("Bắt buộc phải xác nhận đã nhận lại tài sản trước khi thu hồi.")
+        return value
+
+    def validate_reason(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Lý do không được để trống.")
+        return val
+
+
+class AssetMarkDamagedActionSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+    def validate_reason(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Lý do không được để trống.")
+        return val
+
+
+class AssetSendMaintenanceActionSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+    def validate_reason(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Lý do không được để trống.")
+        return val
+
+
+class AssetCompleteMaintenanceActionSerializer(serializers.Serializer):
+    result = serializers.ChoiceField(choices=['RETURN_TO_USER', 'RETURN_TO_STOCK'], required=True)
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+    def validate_reason(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Lý do không được để trống.")
+        return val
+
+
+class AssetTransferActionSerializer(serializers.Serializer):
+    to_department_id = serializers.IntegerField(required=True, allow_null=True)
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+    def validate_reason(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Lý do không được để trống.")
+        return val
+
+
+class AssetProposeDisposalActionSerializer(serializers.Serializer):
+    received_confirmed = serializers.BooleanField(required=False, default=False)
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+    def validate_reason(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Lý do không được để trống.")
+        return val
+
+
+class AssetConfirmDisposalActionSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+    def validate_reason(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Lý do không được để trống.")
+        return val
+
