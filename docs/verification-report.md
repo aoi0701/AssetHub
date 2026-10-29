@@ -120,3 +120,49 @@ curl -i http://127.0.0.1:8000/api/health/
 #### Lệnh 8: Xác nhận review fix
 - Đã cập nhật `CORS_ALLOW_CREDENTIALS = False` trong `settings.py` theo đúng Spec §10.
 - Đã thêm ràng buộc `email = models.EmailField(unique=True, blank=False)` trên User model theo đúng Spec §4.
+
+---
+
+### Task 1: Đăng ký, JWT, hồ sơ và thu hồi phiên
+
+- **Ngày thực hiện:** 2026-10-29
+- **Trạng thái:** HOÀN THÀNH (Exit 0)
+
+#### Lệnh 1: Kiểm tra tính toàn vẹn migrations
+```bash
+docker compose exec -T backend python manage.py makemigrations --check --dry-run
+```
+- **Exit code:** 0
+- **Kết quả:** `No changes detected`
+
+#### Lệnh 2: Xác thực OpenAPI Schema với drf-spectacular
+```bash
+docker compose exec -T backend python manage.py spectacular --validate --fail-on-warn
+```
+- **Exit code:** 0
+- **Kết quả:** Schema OpenAPI 3.0.3 tạo thành công không có cảnh báo hoặc lỗi (`Warnings: 0, Errors: 0`). Đã đăng ký `CustomJWTScheme` OpenAPI extension cho `CustomJWTAuthentication`.
+
+#### Lệnh 3: Chạy kiểm thử tự động pytest cho authentication và hồi quy
+```bash
+docker compose exec -T backend pytest tests/test_auth.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `10 passed in 6.73s`
+- **Danh sách tests:**
+  - `test_register_pending_user`: Kiểm tra POST `/api/auth/register/` tạo user `is_active=False`, `role=USER`, `department=None`, trả về HTTP 201 kèm thông báo, không cấp JWT.
+  - `test_register_rejects_privileged_fields`: Kiểm tra POST `/api/auth/register/` từ chối các trường đặc quyền (`role`, `is_active`, `department`) và trường ngoài allowlist với HTTP 400.
+  - `test_register_validation_errors`: Kiểm tra validation email/username trùng lặp và mật khẩu yếu theo Django password validators.
+  - `test_inactive_cannot_login`: Kiểm tra tài khoản chưa kích hoạt hoặc sai credentials bị từ chối với HTTP 401.
+  - `test_login_refresh_and_expiry`: Kiểm tra POST `/api/auth/login/` trả về access (10 phút), refresh (1 ngày) và thông tin user; POST `/api/auth/refresh/` kiểm tra DB user và `auth_version`, trả access token mới hợp lệ; refresh token giả/hết hạn bị từ chối với HTTP 401.
+  - `test_profile_rejects_role_and_department`: Kiểm tra GET `/api/auth/profile/` và PATCH `/api/auth/profile/` chỉ cho phép cập nhật `full_name`, `email`, `phone`; từ chối các trường `role`, `department`, `is_active`, trường lạ với HTTP 400.
+  - `test_change_password_revokes_old_access_and_refresh`: Kiểm tra POST `/api/auth/change-password/` xác minh mật khẩu cũ, validate mật khẩu mới, tăng `auth_version`, trả về HTTP 204. Thu hồi ngay lập tức access token cũ và refresh token cũ (HTTP 401), từ chối đăng nhập mật khẩu cũ (HTTP 401), cho phép đăng nhập mật khẩu mới (HTTP 200).
+  - `test_logout_revokes_all_sessions`: Kiểm tra POST `/api/auth/logout/` tăng `auth_version`, thu hồi toàn bộ token trên mọi phiên đăng nhập (Session A và Session B đều nhận HTTP 401 trên access và refresh).
+  - `test_deactivated_user_token_rejected_immediately`: Kiểm tra người dùng bị vô hiệu hóa trong DB (`is_active=False`) bị từ chối ngay lập tức khi dùng token cũ (HTTP 401) hoặc refresh (HTTP 401).
+  - `test_throttle_login_and_register`: Kiểm tra rate limiting theo IP cho login và register (10 requests/phút), vượt quá giới hạn nhận HTTP 429 Too Many Requests.
+
+#### Lệnh 4: Chạy toàn bộ test suite
+```bash
+docker compose exec -T backend pytest -v
+```
+- **Exit code:** 0
+- **Kết quả:** `17 passed in 7.42s` (toàn bộ 17 tests của Task 0 và Task 1 đều pass).
