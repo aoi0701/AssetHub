@@ -441,3 +441,59 @@ def test_service_guard_blocks_user_department_or_status_change_when_holding_asse
         assert resp3.status_code == 200
         regular_user.refresh_from_db()
         assert regular_user.full_name == "Safe Name Update"
+
+
+@pytest.mark.django_db
+def test_real_service_guard_with_assigned_asset_blocks_department_or_deactivation(admin_user, regular_user, dept_it, dept_hr):
+    """
+    Real integration test (unmocked):
+    If user holds an active asset (IN_USE or DAMAGED_PENDING_REPAIR),
+    admin PATCH department or is_active returns 409 Conflict.
+    Once asset is DISPOSED, modification succeeds.
+    """
+    from apps.assets.models import Asset
+    from apps.departments.models import Category
+
+    client = auth_client_for(admin_user)
+    cat = Category.objects.create(name="Guard Test Category")
+
+    asset = Asset.objects.create(
+        asset_code="AST-GUARD-001",
+        name="Guard Test Asset",
+        category=cat,
+        department=dept_it,
+        assigned_to_user=regular_user,
+        status=Asset.Status.IN_USE,
+    )
+
+    # 1. Department change blocked by real guard -> 409 Conflict
+    resp1 = client.patch(
+        f"/api/users/{regular_user.id}/",
+        data={"department_id": dept_hr.id},
+        format="json",
+    )
+    assert resp1.status_code == 409
+
+    # 2. Deactivation blocked by real guard -> 409 Conflict
+    resp2 = client.patch(
+        f"/api/users/{regular_user.id}/",
+        data={"is_active": False},
+        format="json",
+    )
+    assert resp2.status_code == 409
+
+    # 3. Release user from asset: asset disposed
+    asset.status = Asset.Status.DISPOSED
+    asset.assigned_to_user = None
+    asset.save()
+
+    # 4. Now department change succeeds -> 200 OK
+    resp3 = client.patch(
+        f"/api/users/{regular_user.id}/",
+        data={"department_id": dept_hr.id},
+        format="json",
+    )
+    assert resp3.status_code == 200
+    regular_user.refresh_from_db()
+    assert regular_user.department == dept_hr
+

@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     # Local apps
     'apps.departments.apps.DepartmentsConfig',
     'apps.authentication.apps.AuthenticationConfig',
+    'apps.assets.apps.AssetsConfig',
 ]
 
 MIDDLEWARE = [
