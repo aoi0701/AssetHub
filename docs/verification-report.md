@@ -263,3 +263,52 @@ docker compose exec -T backend pytest tests/test_assets.py tests/test_identifier
   - **Service Guard User Admin (`test_user_admin.py`):**
     - Tích hợp bảo vệ: Không cho phép đổi phòng ban hoặc vô hiệu hóa tài khoản đang giữ tài sản (trả về HTTP 409 Conflict).
 
+---
+
+### Task 4: State machine, quyền action và audit service
+
+- **Ngày thực hiện:** 2026-10-29
+- **Trạng thái:** HOÀN THÀNH (Exit 0)
+
+#### Lệnh 1: Kiểm tra tính toàn vẹn migrations
+```bash
+docker compose exec -T backend python manage.py makemigrations --check --dry-run
+```
+- **Exit code:** 0
+- **Kết quả:** `No changes detected`
+
+#### Lệnh 2: Xác thực OpenAPI Schema với drf-spectacular
+```bash
+docker compose exec -T backend python manage.py spectacular --validate --fail-on-warn
+```
+- **Exit code:** 0
+- **Kết quả:** Schema OpenAPI 3.0.3 tạo thành công cho 8 detail actions và endpoint lịch sử với 0 cảnh báo và 0 lỗi.
+
+#### Lệnh 3: Chạy kiểm thử tự động pytest cho State Machine, Permissions và Assets
+```bash
+docker compose exec -T backend pytest tests/test_assets_state_machine.py tests/test_asset_permissions.py tests/test_assets.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `31 passed in 9.30s`
+- **Danh sách kiểm thử chính:**
+  - **Vòng đời toàn diện máy trạng thái (`test_assets_state_machine.py` - 10 tests):**
+    - `test_full_asset_lifecycle_transitions_and_history_logs`: Mô phỏng chuỗi 8 bước hoàn chỉnh: CREATE AVAILABLE -> allocate IN_USE -> revoke GOOD AVAILABLE -> transfer AVAILABLE -> mark-damaged DAMAGED_PENDING_REPAIR -> send-maintenance UNDER_MAINTENANCE -> propose-disposal PENDING_DISPOSAL -> confirm-disposal DISPOSED. Xác nhận đúng mã HTTP từng bước và chính xác 8 bản ghi `AssetHistoryLog` với đầy đủ snapshot và trạng thái trước/sau.
+    - `test_available_cannot_skip_damage_confirmation`: AVAILABLE gọi send-maintenance nhận HTTP 409 Conflict, không thay đổi DB/log.
+    - `test_invalid_state_transitions_return_409`: Cố gắng chuyển trạng thái trái quy tắc máy trạng thái đều trả HTTP 409.
+    - `test_disposed_asset_is_strictly_terminal`: Tài sản DISPOSED chặn toàn bộ các action và PATCH với HTTP 409.
+    - `test_complete_maintenance_return_to_stock`: Hoàn tất bảo trì về kho chuyển sang AVAILABLE và xóa người giữ.
+    - `test_complete_maintenance_return_to_user_success`: Hoàn tất bảo trì trả người cũ chuyển sang IN_USE khi người cũ còn hoạt động và cùng phòng.
+    - `test_complete_maintenance_return_to_user_rejects_missing_or_invalid_holder`: Trả về HTTP 409 nếu người cũ bị vô hiệu hóa hoặc chuyển phòng.
+    - `test_propose_disposal_with_holder_requires_received_confirmation`: Đề xuất thanh lý tài sản có người giữ bắt buộc `received_confirmed=True`, xóa người giữ có lưu log.
+    - `test_revoke_damaged_transitions_to_damaged_pending_repair`: Thu hồi đánh giá DAMAGED chuyển sang DAMAGED_PENDING_REPAIR.
+    - `test_actions_require_non_empty_reason_and_valid_inputs`: Kiểm tra mọi action đều bắt buộc trường `reason` không rỗng (HTTP 400).
+  - **Phân quyền và Phạm vi Action (`test_asset_permissions.py` - 5 tests):**
+    - `test_user_cannot_call_any_action_or_view_history`: User gọi bất kỳ action nào hoặc xem full history đều nhận HTTP 403.
+    - `test_manager_cannot_transfer_or_confirm_disposal`: Manager cố gọi transfer hoặc confirm-disposal nhận HTTP 403 Forbidden.
+    - `test_manager_accessing_other_department_asset_returns_404_for_all_actions_and_history`: Manager thao tác trên tài sản phòng ban khác trả về HTTP 404 Not Found.
+    - `test_company_pool_assets_admin_access_manager_404`: Tài sản kho công ty (`department=None`) do Admin quản lý; Manager truy cập nhận HTTP 404.
+    - `test_manager_can_perform_permitted_actions_in_own_department`: Manager thực hiện thành công các action được phép trong phạm vi phòng mình.
+  - **Hồi quy CRUD Asset (`test_assets.py` - 16 tests):**
+    - Toàn bộ 16 tests của Task 3 tiếp tục PASS ổn định.
+
+

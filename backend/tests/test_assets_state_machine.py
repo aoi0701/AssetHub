@@ -304,7 +304,7 @@ def test_disposed_asset_is_strictly_terminal(admin_user, dept_it, cat_laptop):
 
     # PATCH also blocked on DISPOSED
     patch_res = client.patch(f"/api/assets/{asset.id}/", data={"name": "New Name"}, format="json")
-    assert patch_res.status_code in (400, 409)
+    assert patch_res.status_code == 409
 
 
 # ===========================================================================
