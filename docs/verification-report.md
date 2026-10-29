@@ -100,9 +100,10 @@ docker compose exec -T backend python manage.py makemigrations --check --dry-run
 docker compose exec -T backend pytest tests/test_bootstrap.py -q
 ```
 - **Exit code:** 0
-- **Kết quả:** `6 passed in 1.18s`
+- **Kết quả:** `7 passed in 0.86s`
 - **Danh sách tests:**
   - `test_health_check_endpoint`: Kiểm tra GET `/api/health/` trả về HTTP 200, json `{"status": "ok", "db": "ok"}`, không để lộ thông tin cấu hình nhạy cảm.
+  - `test_health_check_database_failure`: Kiểm tra GET `/api/health/` trả về HTTP 503 khi mất kết nối database.
   - `test_custom_user_model_configured`: Xác nhận `AUTH_USER_MODEL` trỏ đúng vào `authentication.User`.
   - `test_user_model_defaults`: Xác nhận các giá trị mặc định của User model (`role=USER`, `auth_version=1`, `department=None`).
   - `test_user_roles_and_department_fixtures`: Xác nhận fixture hai phòng ban và 3 vai trò (Admin, Manager, User), quan hệ khóa ngoại hai chiều.
@@ -115,3 +116,7 @@ curl -i http://127.0.0.1:8000/api/health/
 ```
 - **Exit code:** 0
 - **Kết quả:** HTTP 200 OK với body `{"status":"ok","db":"ok"}`.
+
+#### Lệnh 8: Xác nhận review fix
+- Đã cập nhật `CORS_ALLOW_CREDENTIALS = False` trong `settings.py` theo đúng Spec §10.
+- Đã thêm ràng buộc `email = models.EmailField(unique=True, blank=False)` trên User model theo đúng Spec §4.
