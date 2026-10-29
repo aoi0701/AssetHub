@@ -49,6 +49,8 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ('username', 'email', 'password', 'full_name', 'phone')
 
     def to_internal_value(self, data):
+        if not isinstance(data, dict):
+            return super().to_internal_value(data)
         # Strict allowlist check: reject any unexpected or privileged fields
         extra_fields = set(data.keys()) - self.ALLOWED_FIELDS
         if extra_fields:
@@ -57,7 +59,13 @@ class RegisterSerializer(serializers.ModelSerializer):
         return super().to_internal_value(data)
 
     def validate_password(self, value):
-        validate_password(value)
+        temp_user = None
+        if isinstance(self.initial_data, dict):
+            temp_user = User(
+                username=self.initial_data.get('username', ''),
+                email=self.initial_data.get('email', ''),
+            )
+        validate_password(value, user=temp_user)
         return value
 
     def create(self, validated_data):
@@ -122,6 +130,8 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         fields = ('full_name', 'email', 'phone')
 
     def to_internal_value(self, data):
+        if not isinstance(data, dict):
+            return super().to_internal_value(data)
         extra_fields = set(data.keys()) - self.ALLOWED_FIELDS
         if extra_fields:
             errors = {field: ['Không được phép chỉnh sửa trường này trong hồ sơ cá nhân.'] for field in extra_fields}
@@ -129,7 +139,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         return super().to_internal_value(data)
 
     def validate_email(self, value):
-        if User.objects.exclude(pk=self.instance.pk).filter(email=value).exists():
+        if User.objects.exclude(pk=self.instance.pk).filter(email__iexact=value).exists():
             raise serializers.ValidationError('Email này đã được sử dụng bởi tài khoản khác.')
         return value
 
