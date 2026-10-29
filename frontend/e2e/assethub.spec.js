@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('AssetHub End-to-End Lifecycle', () => {
   const timestamp = Date.now();
+  const seedPassword = process.env.E2E_SEED_PASSWORD || 'aoi0701@';
   const testUser = {
     username: `e2e_user_${timestamp}`,
     email: `e2e_${timestamp}@example.com`,
@@ -37,7 +38,7 @@ test.describe('AssetHub End-to-End Lifecycle', () => {
     // -------------------------------------------------------------------------
     await page.goto('/login');
     await page.fill('#username', 'admin');
-    await page.fill('#password', 'DemoPassword123!');
+    await page.fill('#password', seedPassword);
     await page.click('button[type="submit"]');
 
     await expect(page).toHaveURL(/\/dashboard/);
@@ -106,7 +107,7 @@ test.describe('AssetHub End-to-End Lifecycle', () => {
     // 4. Manager Review & Approval (ALLOCATE)
     // -------------------------------------------------------------------------
     await page.fill('#username', 'manager_it');
-    await page.fill('#password', 'DemoPassword123!');
+    await page.fill('#password', seedPassword);
     await page.click('button[type="submit"]');
 
     await expect(page).toHaveURL(/\/dashboard/);
@@ -166,7 +167,7 @@ test.describe('AssetHub End-to-End Lifecycle', () => {
     // 6. Manager Return Approval
     // -------------------------------------------------------------------------
     await page.fill('#username', 'manager_it');
-    await page.fill('#password', 'DemoPassword123!');
+    await page.fill('#password', seedPassword);
     await page.click('button[type="submit"]');
 
     await expect(page).toHaveURL(/\/dashboard/);
