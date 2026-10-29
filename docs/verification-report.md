@@ -166,3 +166,50 @@ docker compose exec -T backend pytest -v
 ```
 - **Exit code:** 0
 - **Kết quả:** `17 passed in 7.42s` (toàn bộ 17 tests của Task 0 và Task 1 đều pass).
+
+---
+
+### Task 2: Quản trị tài khoản, phòng ban, danh mục và RBAC
+
+- **Ngày thực hiện:** 2026-10-29
+- **Trạng thái:** HOÀN THÀNH (Exit 0)
+
+#### Lệnh 1: Kiểm tra tính toàn vẹn migrations
+```bash
+docker compose exec -T backend python manage.py makemigrations --check --dry-run
+```
+- **Exit code:** 0
+- **Kết quả:** `No changes detected` (Schema DB khớp 100% với models hiện hành).
+
+#### Lệnh 2: Xác thực OpenAPI Schema với drf-spectacular
+```bash
+docker compose exec -T backend python manage.py spectacular --validate --fail-on-warn
+```
+- **Exit code:** 0
+- **Kết quả:** Tạo schema OpenAPI 3.0.3 thành công cho các endpoints mới `/api/users/`, `/api/departments/`, `/api/categories/` với 0 cảnh báo và 0 lỗi.
+
+#### Lệnh 3: Chạy kiểm thử tự động pytest cho RBAC, User Admin và hồi quy Auth
+```bash
+docker compose exec -T backend pytest tests/test_rbac.py tests/test_user_admin.py tests/test_auth.py -v
+```
+- **Exit code:** 0
+- **Kết quả:** `50 passed in 16.30s`
+- **Danh sách kiểm thử chính:**
+  - **RBAC Departments & Categories (`test_rbac.py` - 21 tests):**
+    - Admin toàn quyền CRUD trên danh mục và phòng ban.
+    - Cấm thao tác DELETE và PUT trên Departments và Categories (trả về HTTP 405 Method Not Allowed).
+    - Manager và User chỉ được đọc thông tin phòng ban của chính mình (`get_queryset` lọc theo `department_id`); truy cập phòng ban khác trả về HTTP 404.
+    - Manager và User chỉ có quyền đọc danh mục (`GET /api/categories/`), không được tạo/sửa (nhận HTTP 403).
+    - Người dùng chưa đăng nhập bị chặn toàn bộ (HTTP 401).
+  - **User Admin (`test_user_admin.py` - 19 tests):**
+    - Admin liệt kê toàn bộ tài khoản, hỗ trợ tìm kiếm và lọc theo `is_active`, `role`, `department_id`.
+    - Admin tạo tài khoản có gán vai trò và phòng ban; bắt buộc phải có phòng ban nếu `role` là USER hoặc MANAGER khi `is_active=True`.
+    - Admin kích hoạt pending user và chỉ định phòng ban. Chặn kích hoạt nếu thiếu phòng ban (HTTP 400).
+    - Cấm vô hiệu hóa hoặc hạ quyền tài khoản Admin hoạt động cuối cùng trong hệ thống (HTTP 400).
+    - Đổi `role`, `department`, hoặc `is_active` thực hiện tăng `auth_version` trong transaction atomic, làm mất hiệu lực token ngay lập tức (token cũ nhận HTTP 401).
+    - Các endpoints quản trị người dùng không bao giờ trả về trường `password`, `password_hash` hay `auth_version`.
+    - Manager chỉ xem được danh sách và chi tiết nhân viên trong phòng ban của mình; không được xem nhân viên phòng khác (HTTP 404); không được tạo, sửa, xóa tài khoản (HTTP 403/405).
+    - User bị chặn hoàn toàn khỏi `/api/users/` (HTTP 403).
+    - Service guard `check_can_modify_user_department_or_status` trả về HTTP 409 Conflict khi tài khoản đang giữ tài sản hoặc có phiếu chờ xử lý.
+  - **Regression Auth (`test_auth.py` - 10 tests):**
+    - Toàn bộ 10 tests của Task 1 đều PASS ổn định, không có hồi quy.
