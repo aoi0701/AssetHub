@@ -41,6 +41,8 @@ ENV/
 .coverage.*
 htmlcov/
 test-results/
+e2e-screenshots/
+frontend/e2e-screenshots/
 .tox/
 .nox/
 

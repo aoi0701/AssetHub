@@ -782,6 +782,86 @@ npm --prefix frontend run test:e2e
 
 **Tổng kết:** Toàn bộ 14 nhiệm vụ đã được thẩm định độc lập và nghiệm thu thực tế, 0 lỗi biên dịch, 0 cảnh báo schema, 0 hồi quy. Hệ thống đã sẵn sàng bàn giao và đưa vào vận hành.
 
+---
+
+## 4. UI Redesign: Left Sidebar & Full-Width Layout (2026-10-29)
+
+### 4.1 Hạng mục triển khai & phạm vi
+- **Task 1: Accessible collapsible Sidebar component** (`Sidebar.jsx`, `Sidebar.test.jsx`):
+  - Phân quyền động 3 vai trò (Admin: 6 tabs, Manager: 4 tabs, User: 3 tabs).
+  - Thu gọn `w-20` và mở rộng `w-64`, toggle accessible với `aria-expanded`, tooltip `title`, nhãn `sr-only`.
+  - Lưu trạng thái vào `localStorage` có bọc try/catch guard, khôi phục khi khởi tạo và remount.
+- **Task 2: Layout shell integration** (`App.jsx`):
+  - Phân tách Guest Layout (`/login`, `/register`) và Authenticated Layout (Sidebar + Main flex layout).
+  - Vùng `main` cấu hình `flex-1 min-w-0 h-screen overflow-y-auto` đảm bảo sidebar không che khuất nội dung.
+- **Task 3: Full-width page refactoring & bounded tables**:
+  - Loại bỏ `max-w-7xl` tại các trang, chuyển sang container tràn viền `w-full px-4 sm:px-6 lg:px-8 py-6`.
+  - KPI cards bố cục co giãn thích ứng `grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4`.
+  - Form/modal giữ độ rộng hợp lý (`max-w-3xl`, `max-w-lg`).
+  - Toàn bộ bảng dữ liệu bọc trong thẻ `overflow-x-auto` chống tràn ngang.
+- **Task 4: Layout E2E Suite, Viewport Tests, Screenshots & Final Verification**:
+  - Suite E2E chuyên sâu `frontend/e2e/layout.spec.js` kiểm tra responsive layout, bounding box, scroll độc lập, persistence.
+
+### 4.2 Kết quả kiểm chứng thực tế
+
+#### Lệnh 1: Frontend Production Build (Vite)
+```bash
+npm --prefix frontend run build
+```
+- **Exit code:** 0
+- **Kết quả:** Build sạch sẽ trong 3.25s, không phát sinh lỗi cú pháp hay CSS bundle:
+  - `dist/index.html` (0.47 kB)
+  - `dist/assets/index-wxnXl1po.css` (29.58 kB)
+  - `dist/assets/index-BhS5ukui.js` (800.93 kB)
+
+#### Lệnh 2: Frontend Unit Tests (Vitest)
+```bash
+npm --prefix frontend test -- --run
+```
+- **Exit code:** 0
+- **Thời gian chạy:** 3.19s
+- **Số lượng:** **9 test files, 45 passed (100%)**
+  - `src/tests/Sidebar.test.jsx`: 10 passed (RBAC items, toggle, localStorage persistence, try/catch resilience, logout)
+  - `src/tests/AdminPages.test.jsx`: 5 passed
+  - `src/tests/AssetCreateModal.test.jsx`: 2 passed
+  - `src/tests/AssetFlows.test.jsx`: 5 passed
+  - `src/tests/Attachments.test.jsx`: 5 passed
+  - `src/tests/Auth.test.jsx`: 7 passed
+  - `src/tests/Dashboard.test.jsx`: 5 passed
+  - `src/tests/PersonalHistory.test.jsx`: 2 passed
+  - `src/tests/RequestFlows.test.jsx`: 4 passed
+
+#### Lệnh 3: Playwright E2E Test Suites
+```bash
+npm --prefix frontend run test:e2e
+```
+- **Exit code:** 0
+- **Thời gian chạy:** 12.7s
+- **Số lượng:** **2 test files, 7 passed (100%)**
+  - `frontend/e2e/assethub.spec.js`: 1 passed (Chu trình nghiệp vụ toàn diện từ đăng ký đến thanh lý)
+  - `frontend/e2e/layout.spec.js`: 6 passed:
+    1. `renders sidebar & main layout correctly at 1024x768 (expanded & collapsed)`: PASS (1.4s)
+    2. `renders sidebar & main layout correctly at 1366x768 (expanded & collapsed)`: PASS (1.4s)
+    3. `renders sidebar & main layout correctly at 1920x1080 (expanded & collapsed)`: PASS (1.5s)
+    4. `short viewport (1280x480): sidebar menu scrolls independently with sticky header and footer`: PASS (1.1s)
+    5. `table containment: asset list table is wrapped in overflow-x-auto and does not overflow viewport`: PASS (790ms)
+    6. `localStorage state persistence across in-app navigation`: PASS (1.3s)
+
+### 4.3 Kiểm tra Bounding Box, Responsive Viewports & Screenshots
+
+| Viewport | Trạng thái Sidebar | Chiều rộng Sidebar | Bounding Box (`sidebar.x + width <= main.x + 1`) | Ghi chú / Đường dẫn Screenshot |
+|:---:|:---:|:---:|:---:|---|
+| **1024x768** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1024x768-expanded.png` |
+| **1024x768** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1024x768-collapsed.png` |
+| **1366x768** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1366x768-expanded.png` |
+| **1366x768** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1366x768-collapsed.png` |
+| **1920x1080** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1920x1080-expanded.png` |
+| **1920x1080** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1920x1080-collapsed.png` |
+| **1280x480** (Short) | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (`nav` có thanh cuộn riêng `overflow-y-auto`, header/footer sticky trong `0..480px`) | `frontend/e2e-screenshots/layout-1280x480-expanded.png` |
+| **1280x480** (Short) | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (Header toggle & logout footer tương tác tốt) | `frontend/e2e-screenshots/layout-1280x480-collapsed.png` |
+| **1024x768** (Table) | Bảng tài sản (`/assets`) | 256px (`w-64`) | Bảng bọc trong `.overflow-x-auto`, không tràn ngang trang (`scrollWidth <= innerWidth + 2`) | `frontend/e2e-screenshots/layout-1024x768-table.png` |
+
+
 
 
 
