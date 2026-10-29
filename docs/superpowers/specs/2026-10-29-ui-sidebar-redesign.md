@@ -2,72 +2,93 @@
 
 ## 1. Intent & Why
 - Người dùng yêu cầu chuyển thanh điều hướng từ trên cùng (top navbar) sang bên trái (left sidebar).
-- Loại bỏ khoảng trắng thừa hai bên (`max-w-7xl`), mở rộng nội dung tràn toàn màn hình (full-width) để tận dụng tối đa không gian hiển thị trên màn hình lớn.
+- Loại bỏ khoảng trắng thừa hai bên (`max-w-7xl`), mở rộng nội dung tràn toàn màn hình (full-width) để tận dụng tối đa không gian hiển thị trên màn hình lớn (1366px, 1920px+).
 
 ## 2. Goals, Non-Goals, Anti-Goals
 - **Goals:**
-  - Thay thế top `Navbar` bằng `Sidebar` đặt ở cạnh trái cho người dùng đã đăng nhập.
-  - Hỗ trợ thu gọn/mở rộng sidebar (`w-64` khi mở, `w-20` khi thu gọn icon). Lưu trạng thái thu gọn vào `localStorage`.
-  - Mở rộng vùng nội dung chính `main` toàn màn hình (`w-full`), loại bỏ giới hạn `max-w-7xl` tại tất cả các trang.
-  - Tối ưu Dashboard: Grid KPI dàn 6 cột trên màn hình rộng (`xl:grid-cols-6`), grid đồ thị 2 cột (`xl:grid-cols-2`).
-  - Giữ tương thích 100% với 35 frontend unit tests và Playwright E2E suite (8 kịch bản).
+  - Thay thế top `Navbar` bằng `Sidebar` đặt ở cạnh trái trong flex layout (`shrink-0`) cho người dùng đã đăng nhập.
+  - Vùng nội dung chính `main` dùng `flex-1 min-w-0`, có thanh cuộn dọc độc lập, không bị sidebar che khuất.
+  - Sidebar hỗ trợ thu gọn/mở rộng (`w-64` khi mở, `w-20` khi thu gọn icon). Lưu duy nhất tùy chọn này vào `localStorage` có bọc try/catch guard.
+  - Vùng menu điều hướng bên trong sidebar có thanh cuộn riêng (`overflow-y-auto`) khi chiều cao màn hình hạn chế.
+  - Đảm bảo trọn vẹn Accessibility: Khi thu gọn, link và button vẫn giữ accessible name bằng `aria-label` hoặc `sr-only`, tooltip `title`, hỗ trợ focus bàn phím rõ nét (`focus:ring-2`). Nút toggle thu gọn có `aria-expanded` và nhãn rõ ràng.
+  - Mở rộng vùng container các trang toàn màn hình (`w-full px-4 sm:px-6 lg:px-8 py-6`), bảng dữ liệu có `overflow-x-auto` nội bộ không tràn trang.
+  - Giữ nguyên giới hạn bề rộng hợp lý cho Form (Profile `max-w-3xl`, Login/Register `max-w-md`, Modals `max-w-lg` / `max-w-2xl`).
+  - Kiểm tra bố cục đáp ứng chuẩn ở các mốc phân giải 1024px, 1366px và 1920px (cả mở rộng và thu gọn).
+  - Tối ưu Dashboard: KPI card co giãn linh hoạt (`grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4`), tự xuống dòng khi thiếu chỗ, không ép 6 cột trên màn hẹp gây cắt chữ/số.
+  - Giữ nguyên 100% route, quyền hạn RBAC và các quy tắc bảo mật (tuyệt đối không lưu JWT vào localStorage).
+  - Bổ sung bộ test cho `Sidebar.jsx`, đảm bảo toàn bộ unit test (Vitest) và E2E test (Playwright - 1 test suite gồm 8 bước) pass 100%.
+
 - **Non-Goals:**
-  - Không thay đổi nghiệp vụ backend, API endpoints hay quyền hạn (RBAC).
-  - Không làm thay đổi giao diện trang Login/Register (giữ form ở giữa, top minimal header hoặc clean canvas).
+  - Không thay đổi nghiệp vụ backend, API endpoints hay schema database.
+  - Không thay đổi bố cục màn hình đăng nhập / đăng ký (`/login`, `/register`).
 - **Anti-Goals:**
-  - Không làm vỡ layout trên màn hình nhỏ/laptop standard (tối thiểu 1024px mượt mà).
-  - Không làm mất text accessibility khiến Playwright E2E không tìm thấy `getByRole('link', { name: ... })` hay button `Đăng xuất`.
+  - Không dùng `position: fixed` tuyệt đối che đè nội dung `main`.
+  - Không để crash giao diện nếu trình duyệt chặn hoặc lỗi `localStorage`.
+  - Không để tràn ngang toàn màn hình do bảng dữ liệu lớn.
 
 ## 3. Constraints
-- Framework: React 18 + Tailwind CSS + Lucide React + React Router v6.
-- Giữ nguyên trạng thái phân quyền: ADMIN (6 tabs), MANAGER (4 tabs), USER (3 tabs).
-- Không thêm dependency bên ngoài (dùng CSS Tailwind và Lucide icons có sẵn).
+- Framework: React 18, Tailwind CSS, Lucide React, React Router v6.
+- RBAC Menu:
+  - ADMIN: Dashboard, Tài sản, Yêu cầu, Người dùng, Phòng ban, Danh mục (6 tabs).
+  - MANAGER: Dashboard, Tài sản, Yêu cầu, Nhân viên (4 tabs).
+  - USER: Tài sản của tôi, Lịch sử, Yêu cầu (3 tabs).
+- Storage Constraint: Chỉ lưu key `assethub_sidebar_collapsed` (giá trị `'true'` / `'false'`). Không lưu token hay user data vào `localStorage`.
 
 ## 4. Approaches & Selection
 - **Phương án 1 (Đã chọn): Collapsible Left Sidebar + Full-width fluid content.**
-  - Ưu điểm: Tối ưu không gian nhất; khi làm việc với bảng dữ liệu lớn (Asset list, Request inbox), người dùng có thể bấm thu gọn sidebar (`w-20`) để nội dung có không gian tối đa.
-  - Đánh đổi: Cần quản lý state đóng/mở sidebar và animation transition nhẹ nhàng.
-- **Phương án 2: Fixed Left Sidebar cố định (không co giãn, w-60).**
-  - Đánh đổi: Không tối ưu được không gian khi cần bảng dữ liệu siêu rộng.
-- **Phương án 3: Dual Sidebar (Sidebar nhóm + Sub-nav).**
-  - Đánh đổi: Quá cồng kềnh cho số lượng tab hiện tại (3-6 mục).
+  - Ưu điểm: Tối ưu không gian hiển thị cho bảng dữ liệu lớn; linh hoạt thu gọn `w-20` hoặc mở rộng `w-64`. Bố cục flex 2 cột liền mạch (`shrink-0` và `flex-1 min-w-0`), không lo chồng chéo vị trí.
+  - Đánh đổi: Cần quản lý state đóng/mở và xử lý tooltip/accessible name khi thu gọn.
+- **Phương án 2: Fixed Left Sidebar cố định (không co giãn).** Bị loại vì chiếm diện tích cố định 240px trên màn hình 1024px-1366px.
+- **Phương án 3: Dual Sidebar (Nhóm menu đa cấp).** Bị loại vì quá cồng kềnh với hệ thống có 3-6 tabs.
 
 ## 5. Kiến trúc & Chi tiết triển khai
 
-### 5.1 Component `Sidebar.jsx` (thay thế hoặc bổ sung cho Navbar)
-- Vị trí: Cố định bên trái (`fixed left-0 top-0 bottom-0` hoặc flex child `h-screen sticky top-0`).
-- Trạng thái: `isCollapsed` (mặc định `false`, toggle qua nút bấm `ChevronLeft` / `ChevronRight`, persist vào `localStorage.getItem('sidebar_collapsed')`).
-- Phần Header Sidebar:
-  - Logo Package icon + tên "AssetHub" (ẩn chữ khi thu gọn).
-  - Nút toggle thu gọn/mở rộng.
-- Phần Navigation:
-  - Hiển thị danh sách menu theo vai trò (ADMIN, MANAGER, USER) với Icon + Label.
-  - Tooltip khi sidebar ở trạng thái thu gọn (`title={item.name}`).
-- Phần Footer Sidebar:
-  - Role badge (ADMIN / MANAGER / USER).
-  - User profile link (`/profile`) hiển thị avatar/user icon + tên tài khoản.
-  - Nút đăng xuất (`Đăng xuất`) với icon `LogOut`.
+### 5.1 Component `Sidebar.jsx`
+- **Cấu trúc Shell:**
+  - Container: `<aside className={`h-screen shrink-0 bg-white border-r border-gray-200 flex flex-col transition-all duration-200 ease-in-out ${isCollapsed ? 'w-20' : 'w-64'}`} aria-label="Thanh điều hướng chính">`
+- **Header:**
+  - Logo Package icon + Text "AssetHub" (hiển thị khi mở, ẩn khi thu gọn nhưng có `sr-only`).
+  - Nút toggle thu gọn/mở rộng:
+    - Icon: `ChevronLeft` khi mở, `ChevronRight` khi thu gọn.
+    - Thuộc tính: `aria-expanded={!isCollapsed}`, `aria-label={isCollapsed ? "Mở rộng thanh điều hướng" : "Thu gọn thanh điều hướng"}`, `title={isCollapsed ? "Mở rộng thanh điều hướng" : "Thu gọn thanh điều hướng"}`.
+- **Menu Items (Scrollable Body):**
+  - Vùng chứa: `flex-1 overflow-y-auto px-3 py-4 space-y-1`.
+  - Item NavLink:
+    - Khi mở rộng: Hiển thị icon + label text tiếng Việt.
+    - Khi thu gọn: Căn giữa icon, thêm `title={item.label}`, `aria-label={item.label}` và span `sr-only` chứa nhãn để hỗ trợ screen readers và Playwright `getByRole('link', { name: item.label })`.
+    - Focus state: `focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg`.
+- **Footer:**
+  - Role badge: Badge vai trò (ADMIN / MANAGER / USER). Khi thu gọn chỉ hiển thị chữ viết tắt hoặc icon nhỏ kèm tooltip.
+  - User profile link (`/profile`): Hiển thị avatar/User icon + tên tài khoản. Khi thu gọn giữ tooltip tên tài khoản và `aria-label`.
+  - Nút đăng xuất (`Đăng xuất`): Icon `LogOut`, thuộc tính `aria-label="Đăng xuất"`, `title="Đăng xuất"`.
+- **LocalStorage Helper:**
+  - Hàm an toàn `getInitialCollapsed()` và `setCollapsedStorage(val)` bọc `try...catch`. Nếu `localStorage` bị vô hiệu hóa hoặc ném SecurityError thì fallback mượt mà vào state bộ nhớ (`false`).
 
 ### 5.2 Bố cục tổng thể `App.jsx`
-- Khi chưa đăng nhập (Guest: `/login`, `/register`):
-  - Giữ header đơn giản trên cùng (Logo AssetHub, Đăng nhập, Đăng ký) hoặc layout clean canvas.
-- Khi đã đăng nhập:
-  - Wrapper container: `flex h-screen w-screen overflow-hidden bg-gray-50`.
-  - Cột trái: `<Sidebar />` (`w-64` hoặc `w-20`, `transition-all duration-200`).
-  - Cột phải: `<main className="flex-1 min-w-0 h-screen overflow-y-auto">` chứa `<Routes>`.
+- Guest Layout (chưa đăng nhập hoặc đường dẫn `/login`, `/register`):
+  - Hiển thị Navbar tối giản trên cùng (`Navbar.jsx` giản lược hoặc header tối giản) và nội dung đăng nhập/đăng ký căn giữa trang.
+- Authenticated Layout (đã đăng nhập):
+  - Wrapper: `<div className="flex h-screen w-screen overflow-hidden bg-gray-50 text-gray-900">`
+  - Cột 1: `<Sidebar />` (`shrink-0`).
+  - Cột 2: `<main className="flex-1 min-w-0 h-screen overflow-y-auto">` chứa `<Routes>`.
 
-### 5.3 Thay đổi tại các trang (Full-Width)
-- Thay thế toàn bộ thẻ container `className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8"` thành `className="w-full py-6 px-4 sm:px-6 lg:px-8"` tại:
-  1. `DashboardPage.jsx`: Cập nhật KPI grid `grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4`.
-  2. `AssetListPage.jsx`: Bảng tài sản hiển thị rộng rãi, lọc và bảng dữ liệu tận dụng hết chiều ngang.
-  3. `AssetDetailPage.jsx`: Full-width 2 cột thông tin chi tiết và tabs.
-  4. `RequestInboxPage.jsx`: Bảng yêu cầu full-width.
-  5. `UserAdminPage.jsx`: Bảng quản lý người dùng full-width.
-  6. `DepartmentPage.jsx`, `CategoryPage.jsx`: Bảng danh mục full-width.
-  7. `UserPortalPage.jsx`, `PersonalHistoryPage.jsx`: Danh sách tài sản & timeline full-width.
-  8. `ProfilePage.jsx`: Form hồ sơ cá nhân.
+### 5.3 Cập nhật các trang (Full-Width & Containment)
+1. Bỏ `max-w-7xl mx-auto` tại tất cả trang: Thay bằng container `w-full px-4 sm:px-6 lg:px-8 py-6`.
+2. Bảo toàn độ rộng form/modal:
+   - `ProfilePage.jsx`: Thẻ cha `w-full`, nhưng khối form bên trong giữ `max-w-3xl`.
+   - Modals (`AssetActionModal`, `AssetCreateModal`, `CreateRequestModal`, `RequestReviewModal`): Giữ nguyên `max-w-md` đến `max-w-2xl` căn giữa modal.
+3. Bảng dữ liệu: Đảm bảo bọc thẻ table bằng `div className="overflow-x-auto"` để bảng nhiều cột cuộn ngang nội bộ, không phá vỡ chiều ngang màn hình.
+4. `DashboardPage.jsx`:
+   - KPI Grid: `grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4`. Đảm bảo ở độ phân giải 1024px hiển thị 3 cột x 2 hàng, 1366px và 1920px hiển thị 6 cột rộng rãi mà không bị cắt chữ.
+   - Charts Grid: `grid grid-cols-1 xl:grid-cols-2 gap-6`.
 
-### 5.4 Test Impact & Kế hoạch kiểm thử
-- `Sidebar.test.jsx`: Viết bộ unit test kiểm tra hiển thị menu theo vai trò, toggle thu gọn/mở rộng, nút đăng xuất.
-- Chạy `npm --prefix frontend test -- --run` (35 tests hiện tại phải tiếp tục pass).
-- Chạy `npm --prefix frontend run test:e2e` (Playwright E2E: 8 bước luồng đời thực nghiệm thu trơn tru).
+### 5.4 Test & Kiểm chứng
+1. Tạo file test `frontend/src/tests/Sidebar.test.jsx`:
+   - Kiểm tra render đúng menu theo vai trò (Admin 6, Manager 4, User 3).
+   - Kiểm tra toggle thu gọn/mở rộng, kiểm tra thuộc tính `aria-expanded`.
+   - Kiểm tra khôi phục trạng thái từ `localStorage` và xử lý an toàn khi `localStorage` bị lỗi.
+   - Kiểm tra điều hướng `/profile` và sự kiện click nút `Đăng xuất`.
+2. Kiểm tra tương thích các unit test hiện có: Chạy `npm --prefix frontend test -- --run` (35 test cũ + bộ test Sidebar mới).
+3. Build kiểm tra: `npm --prefix frontend run build`.
+4. Chạy Playwright E2E: `npm --prefix frontend run test:e2e` (1 test suite bao gồm 8 bước kiểm thử vòng đời).
+5. Báo cáo chính xác số lượng test thực tế đã chạy.
