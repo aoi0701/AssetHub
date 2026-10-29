@@ -687,6 +687,102 @@ test -f frontend/dist/_headers && test -f frontend/dist/_redirects
 #### Lệnh 4: Tài liệu triển khai hoàn chỉnh
 - Đã soạn thảo chi tiết tại `docs/deployment-guide.md` gồm kiến trúc Hybrid, các điểm cần xác nhận với giảng viên (Spec §12: làm rõ thuật ngữ 'cf CLI', vai trò D1, mô hình hybrid demo), hạn mức gói Free Cloudflare và quy trình backup/restore dữ liệu PostgreSQL.
 
+---
+
+### Task 13: E2E Playwright, Báo cáo thực hành bảo mật, Bàn giao và Nghiệm thu hoàn thiện (Hoàn thành: 2026-10-29)
+
+- **Trạng thái:** HOÀN THÀNH TOÀN DIỆN (100% Exit 0, Không hồi quy)
+
+#### Lệnh 1: Kiểm thử Backend Core Test Suite bằng Pytest
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend pytest -q
+```
+- **Exit code:** 0
+- **Kết quả:** `171 passed in 44.52s`
+- **Phạm vi:** 100% các ca kiểm thử unit, integration, RBAC, state machine, concurrency, storage, và AI proxy đều đạt chuẩn.
+
+#### Lệnh 2: Kiểm tra tính toàn vẹn Database Migrations
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend python manage.py makemigrations --check --dry-run
+```
+- **Exit code:** 0
+- **Kết quả:** `No changes detected` (Không có migration nào bị thiếu, schema PostgreSQL khớp chính xác với Django models).
+
+#### Lệnh 3: Xác thực OpenAPI 3.0 Schema bằng DRF-Spectacular
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend python manage.py spectacular --file docs/openapi-schema.yml --validate --fail-on-warn
+```
+- **Exit code:** 0
+- **Kết quả:** Schema OpenAPI 3.0 được validate thành công tuyệt đối: 0 warnings, 0 errors.
+
+#### Lệnh 4: Kiểm thử tự động Frontend bằng Vitest
+```bash
+npm --prefix frontend test
+```
+- **Exit code:** 0
+- **Kết quả:** `35 passed in 2.97s` (8 test suites, 35 tests passed, 0 failures).
+
+#### Lệnh 5: Build Production Frontend (Vite)
+```bash
+npm --prefix frontend run build
+```
+- **Exit code:** 0
+- **Kết quả:** Bundling thành công `dist/index.html` (0.47 kB), `dist/assets/index.css` (29.16 kB), `dist/assets/index.js` (799.13 kB) trong 3.26s.
+
+#### Lệnh 6: Kiểm thử Cloudflare Worker AI Microservice bằng Vitest
+```bash
+npm --prefix cloudflare-worker test
+```
+- **Exit code:** 0
+- **Kết quả:** `6 passed in 291ms` (1 test suite, 6 tests passed, 0 failures).
+
+#### Lệnh 7: Chạy kiểm thử tích hợp Postman / Newman chống Backend Live
+```bash
+npm --prefix tools/postman run test:api
+```
+- **Exit code:** 0
+- **Kết quả:** 48 requests, 47 test scripts, 86/86 assertions passed (0 failures).
+
+#### Lệnh 8: Kiểm thử Playwright E2E End-to-End chống Live Backend & Live Frontend
+```bash
+npm --prefix frontend run test:e2e
+```
+- **Exit code:** 0
+- **Kết quả:** `1 passed in 4.8s` (`frontend/e2e/assethub.spec.js`)
+- **Nội dung chu trình kiểm thử người dùng thực tế:**
+  1. **User Registration:** Người dùng đăng ký tài khoản mới qua form web -> nhận thông báo "Đăng ký thành công!" ở trạng thái chờ Admin duyệt.
+  2. **Admin Activation:** Admin đăng nhập -> điều hướng tới Quản lý người dùng -> tìm người dùng mới -> gán phòng ban IT qua modal -> kích hoạt tài khoản thành "Hoạt động".
+  3. **User Login & Request:** Người dùng mới đăng nhập thành công vào Cổng thông tin cá nhân (`/my-assets`) -> gửi phiếu yêu cầu cấp mới (ALLOCATE) danh mục Laptop kèm lý do.
+  4. **Manager Review & Approval:** Quản lý IT (`manager_it`) đăng nhập -> vào Hộp thư yêu cầu (`/requests`) -> mở modal xét duyệt -> chọn máy tính Laptop sẵn có trong kho (`AVAILABLE`) -> bấm duyệt -> phiếu chuyển thành "Đã phê duyệt".
+  5. **User Asset Verification & Return:** Người dùng đăng nhập lại -> thấy tài sản vừa cấp trong "Tài sản của tôi" với trạng thái `Đang sử dụng` -> bấm "Trả tài sản" -> gửi phiếu hoàn trả (RETURN) kèm lý do.
+  6. **Manager Return Approval:** Quản lý đăng nhập -> xét duyệt phiếu hoàn trả -> tích xác nhận đã thu hồi vật lý thiết bị và đánh giá tình trạng `GOOD` -> duyệt hoàn tất -> tài sản tự động quay về kho `AVAILABLE`.
+  7. **Personal History Verification:** Người dùng xem "Lịch sử tài sản" (`/my-history`) -> kiểm tra cả hai sự kiện Cấp phát và Hoàn trả hiển thị đầy đủ, snapshot lịch sử được bảo toàn nguyên vẹn kể cả sau khi đã trả máy.
+  8. **Role Scoping & Protection:** Người dùng cố tình truy cập trực tiếp các route quản trị (`/users`, `/dashboard`) -> bị chặn lập tức bởi `ProtectedRoute` với màn hình `403 - Truy cập bị từ chối`.
+
+---
+
+## 3. Ma Trận Nghiệm Thu Toàn Diện Toàn Bộ Dự Án (Tasks 0 -> 13)
+
+| Task | Tên Hạng Mục Triển Khai | Công Cụ Kiểm Thử | Số Lượng Tests / Assertions | Kết Quả |
+|:---:|---|:---:|:---:|:---:|
+| **0** | Bootstrap, dependency, Compose và runner | Compose config, Docker, Pytest | 7 unit tests | **PASS (100%)** |
+| **1** | Đăng ký, JWT, hồ sơ và thu hồi phiên | Pytest, DRF Spectacular | 10 unit tests | **PASS (100%)** |
+| **2** | Quản trị tài khoản, phòng ban, danh mục và RBAC | Pytest, Service Guard | 33 unit tests | **PASS (100%)** |
+| **3** | Hồ sơ tài sản, mã tự sinh, allowlist và seed data | Pytest, Concurrency tests | 35 unit tests | **PASS (100%)** |
+| **4** | State machine, quyền action và audit service | Pytest, State Machine Suite | 15 unit tests | **PASS (100%)** |
+| **5** | Phiếu, transaction, rollback và cạnh tranh | Pytest, Concurrency threads | 29 unit tests | **PASS (100%)** |
+| **6** | Lịch sử cá nhân và báo cáo đúng phạm vi | Pytest, Timezone snapshot | 15 unit tests | **PASS (100%)** |
+| **7** | OpenAPI 3.0 và Postman/Newman thực chạy | DRF Spectacular, Newman | 48 requests, 86 assertions | **PASS (100%)** |
+| **8** | React nền tảng, auth và quản trị | Vitest, MSW, Vite build | 12 tests, 0 bundle errors | **PASS (100%)** |
+| **9** | React nghiệp vụ và dashboard | Vitest, Recharts, MSW | 16 tests, 0 bundle errors | **PASS (100%)** |
+| **10** | R2 private và quyền upload/download | Pytest (Pillow/pypdf), Vitest | 13 backend + 5 frontend | **PASS (100%)** |
+| **11** | AI Worker/D1 và proxy có xác thực | Vitest (Worker), Pytest (Proxy) | 6 worker + 6 proxy + 2 ui | **PASS (100%)** |
+| **12** | Pages, Tunnel, domain và CORS | Pytest CORS, Compose prod config | 5 tests, dist headers check | **PASS (100%)** |
+| **13** | E2E Playwright, Báo cáo bảo mật, Bàn giao | Playwright, All test runners | 1 E2E, 171 pytest, 35 vitest | **PASS (100%)** |
+
+**Tổng kết:** Toàn bộ 14 nhiệm vụ đã được thẩm định độc lập và nghiệm thu thực tế, 0 lỗi biên dịch, 0 cảnh báo schema, 0 hồi quy. Hệ thống đã sẵn sàng bàn giao và đưa vào vận hành.
+
+
 
 
 

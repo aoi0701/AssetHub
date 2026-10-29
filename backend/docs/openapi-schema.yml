@@ -4,6 +4,70 @@ info:
   version: 1.0.0
   description: AssetHub physical asset management REST API
 paths:
+  /api/ai/suggest-category/:
+    post:
+      operationId: ai_suggest_category_create
+      description: Gợi ý danh mục phù hợp dựa trên tên và mô tả tài sản thông qua
+        Cloudflare AI Worker. Chỉ Quản trị viên (ADMIN) mới có quyền truy cập.
+      summary: AI gợi ý danh mục tài sản
+      tags:
+      - ai
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiCategorySuggestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AiCategorySuggestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AiCategorySuggestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiCategorySuggestResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '504':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
   /api/assets/:
     get:
       operationId: assets_list
@@ -191,6 +255,78 @@ paths:
               schema:
                 $ref: '#/components/schemas/Asset'
           description: ''
+  /api/assets/{id}/attachments/:
+    post:
+      operationId: assets_attachments_create
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Tải lên tệp đính kèm tài sản (Chỉ Admin)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      tags:
+      - assets
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                  - image
+                  - document
+                file:
+                  type: string
+                  format: binary
+              required:
+              - kind
+              - file
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: Tải tệp lên thành công
+  /api/assets/{id}/attachments/{kind}/download/:
+    get:
+      operationId: assets_attachments_download_retrieve
+      description: |-
+        Asset management API:
+        - Admin: Full CRUD (GET list, POST create, GET detail, PATCH update) and full action permissions. Strictly no DELETE or PUT.
+        - Manager: Department-scoped read access and operational lifecycle actions.
+        - User: Read-only access scoped to currently held assets.
+      summary: Lấy URL tải xuống tệp đính kèm với chữ ký bảo mật 60s
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this Asset.
+        required: true
+      - in: path
+        name: kind
+        schema:
+          type: string
+          enum:
+          - document
+          - image
+        description: Loại tệp ('image' hoặc 'document')
+        required: true
+      tags:
+      - assets
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: Presigned download URL thành công
   /api/assets/{id}/complete-maintenance/:
     post:
       operationId: assets_complete_maintenance_create
@@ -987,6 +1123,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/PaginatedPersonalAssetHistoryList'
           description: ''
+  /api/media/download/:
+    get:
+      operationId: media_download_retrieve
+      description: |-
+        Public signed download endpoint for LocalDevAttachmentStorage.
+        Validates HMAC signature and timestamp expiry (60s).
+      summary: Tải xuống tệp đính kèm với liên kết có chữ ký
+      tags:
+      - media
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          description: Nội dung tệp nhị phân
+        '403':
+          description: Liên kết hết hạn hoặc chữ ký không hợp lệ
+        '404':
+          description: Tệp không tồn tại
   /api/reports/charts/:
     get:
       operationId: reports_charts_retrieve
@@ -1363,6 +1518,37 @@ components:
         * `TRANSFER` - Transfer
         * `DISPOSAL_PROPOSE` - Disposal Propose
         * `DISPOSAL_CONFIRM` - Disposal Confirm
+    AiCategorySuggestRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+          default: ''
+          maxLength: 2000
+      required:
+      - name
+    AiCategorySuggestResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+        suggested_category_id:
+          type: integer
+        suggested_category_name:
+          type: string
+        explanation:
+          type: string
+        log_saved:
+          type: boolean
+      required:
+      - explanation
+      - log_saved
+      - request_id
+      - suggested_category_id
+      - suggested_category_name
     Asset:
       type: object
       description: |-

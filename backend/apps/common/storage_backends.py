@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.core.files.storage import FileSystemStorage, Storage
 from django.http import FileResponse, Http404
+from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -163,6 +164,15 @@ class MediaDownloadView(APIView):
     """
     permission_classes = [permissions.AllowAny]
 
+    @extend_schema(
+        summary="Tải xuống tệp đính kèm với liên kết có chữ ký",
+        tags=["media"],
+        responses={
+            200: OpenApiResponse(description="Nội dung tệp nhị phân"),
+            403: OpenApiResponse(description="Liên kết hết hạn hoặc chữ ký không hợp lệ"),
+            404: OpenApiResponse(description="Tệp không tồn tại"),
+        },
+    )
     def get(self, request, *args, **kwargs):
         path = request.query_params.get('path')
         expires = request.query_params.get('expires')
