@@ -97,4 +97,47 @@ describe('PersonalHistory Integration Tests', () => {
     expect(await screen.findByText('Bạn đã hoàn trả tài sản')).toBeInTheDocument();
     expect(screen.getByText('Màn hình Dell 27 4K')).toBeInTheDocument();
   });
+
+  it('Renders DAMAGE and MAINTENANCE_END action badges correctly', async () => {
+    mockPersonalHistory = [
+      {
+        id: 103,
+        asset_id: 3,
+        asset_code_snapshot: 'AST-202610-0003',
+        asset_name_snapshot: 'Bàn phím cơ Keychron',
+        action_type: 'DAMAGE',
+        from_status: 'IN_USE',
+        to_status: 'DAMAGED_PENDING_REPAIR',
+        created_at: '2026-10-25T11:00:00Z',
+        message: 'Tài sản được ghi nhận báo hỏng',
+      },
+      {
+        id: 104,
+        asset_id: 4,
+        asset_code_snapshot: 'AST-202610-0004',
+        asset_name_snapshot: 'Tai nghe Sony WH-1000XM5',
+        action_type: 'MAINTENANCE_END',
+        from_status: 'UNDER_MAINTENANCE',
+        to_status: 'AVAILABLE',
+        created_at: '2026-10-26T16:00:00Z',
+        message: 'Tài sản đã hoàn tất bảo trì',
+      },
+    ];
+
+    render(
+      <MemoryRouter>
+        <AuthProvider
+          initialUser={{ id: 3, username: 'user_b', role: 'USER' }}
+          initialToken="token-user"
+        >
+          <PersonalHistoryPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Bàn phím cơ Keychron')).toBeInTheDocument();
+    expect(screen.getByText('Báo hỏng')).toBeInTheDocument();
+    expect(screen.getByText('Tai nghe Sony WH-1000XM5')).toBeInTheDocument();
+    expect(screen.getByText('Hoàn tất bảo trì')).toBeInTheDocument();
+  });
 });

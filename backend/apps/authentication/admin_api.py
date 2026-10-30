@@ -4,21 +4,14 @@ from django.db import transaction
 from django.db.models import Q
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import permissions, serializers, status, viewsets
-from rest_framework.exceptions import APIException
 from rest_framework.response import Response
 
 from apps.authentication.models import User
 from apps.authentication import services
+from apps.common.exceptions import ConflictError
 from apps.common.pagination import StandardPagination
 from apps.common.permissions import IsAdminOrManagerReadOnly
 from apps.departments.models import Department
-
-
-class ConflictError(APIException):
-    """HTTP 409 Conflict exception when operation violates asset/request state."""
-    status_code = status.HTTP_409_CONFLICT
-    default_detail = "Tài khoản đang giữ tài sản hoặc có phiếu chờ xử lý, không thể đổi phòng ban hoặc vô hiệu hóa."
-    default_code = "conflict"
 
 
 class UserAdminSerializer(serializers.ModelSerializer):
@@ -172,7 +165,7 @@ class UserAdminUpdateSerializer(serializers.Serializer):
 
         if department_changed or deactivated:
             if not services.check_can_modify_user_department_or_status(user):
-                raise ConflictError()
+                raise ConflictError("Tài khoản đang giữ tài sản hoặc có phiếu chờ xử lý, không thể đổi phòng ban hoặc vô hiệu hóa.")
 
         return attrs
 

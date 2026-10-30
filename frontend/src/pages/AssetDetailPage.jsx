@@ -7,7 +7,6 @@ import AssetEditModal from '../components/AssetEditModal';
 import AssetActionModal from '../components/AssetActionModal';
 import AssetAttachments from '../components/AssetAttachments';
 import {
-  Package,
   ArrowLeft,
   Edit,
   History,

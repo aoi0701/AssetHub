@@ -27,11 +27,9 @@ const PersonalHistoryPage = () => {
   const actionLabels = {
     ALLOCATE: 'Cấp phát',
     RETURN: 'Hoàn trả',
-    REVOKE: 'Thu hồi',
-    MARK_DAMAGED: 'Báo hỏng',
-    DAMAGE_REPORT: 'Báo hỏng',
+    DAMAGE: 'Báo hỏng',
     MAINTENANCE_START: 'Bảo trì',
-    MAINTENANCE_COMPLETE: 'Hoàn tất bảo trì',
+    MAINTENANCE_END: 'Hoàn tất bảo trì',
     TRANSFER: 'Điều chuyển',
     DISPOSAL_PROPOSE: 'Đề xuất thanh lý',
     DISPOSAL_CONFIRM: 'Đã thanh lý',

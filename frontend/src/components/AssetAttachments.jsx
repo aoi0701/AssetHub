@@ -9,6 +9,7 @@ import {
   AlertCircle,
   CheckCircle,
   Loader2,
+  Paperclip,
 } from 'lucide-react';
 
 const AssetAttachments = ({ asset, onUploadSuccess }) => {
@@ -143,7 +144,7 @@ const AssetAttachments = ({ asset, onUploadSuccess }) => {
     <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm space-y-6">
       <div className="flex items-center justify-between pb-3 border-b border-gray-100">
         <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
-          <PaperclipIcon className="w-5 h-5 text-blue-600" />
+          <Paperclip className="w-5 h-5 text-blue-600" />
           Tệp đính kèm & Tài liệu
         </h2>
       </div>
@@ -399,21 +400,5 @@ const AssetAttachments = ({ asset, onUploadSuccess }) => {
     </div>
   );
 };
-
-// Helper Paperclip icon in case not exported by lucide
-const PaperclipIcon = ({ className }) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className={className}
-  >
-    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-  </svg>
-);
 
 export default AssetAttachments;

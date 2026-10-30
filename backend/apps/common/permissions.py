@@ -2,28 +2,6 @@ from rest_framework import permissions
 from apps.authentication.models import User
 
 
-class IsAdminRole(permissions.BasePermission):
-    """Allows access only to authenticated users with the ADMIN role."""
-
-    def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and request.user.role == User.Role.ADMIN
-        )
-
-
-class IsManagerRole(permissions.BasePermission):
-    """Allows access only to authenticated users with the MANAGER role."""
-
-    def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and request.user.role == User.Role.MANAGER
-        )
-
-
 class IsAdminOrReadOnly(permissions.BasePermission):
     """
     Allows read-only access to any authenticated user,
