@@ -1,6 +1,8 @@
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import viewsets
 from apps.authentication.models import User
+from apps.common.pagination import StandardPagination
 from apps.common.permissions import DepartmentScopedPermission, IsAdminOrReadOnly
 from apps.departments.models import Category, Department
 from apps.departments.serializers import CategorySerializer, DepartmentSerializer
@@ -20,6 +22,8 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     """
     serializer_class = DepartmentSerializer
     permission_classes = [DepartmentScopedPermission]
+    pagination_class = StandardPagination
+    optional_pagination = True
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_queryset(self):
@@ -27,10 +31,21 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         if not user or not user.is_authenticated:
             return Department.objects.none()
         if user.role == User.Role.ADMIN:
-            return Department.objects.all()
-        if user.department_id:
-            return Department.objects.filter(id=user.department_id)
-        return Department.objects.none()
+            qs = Department.objects.all()
+        elif user.department_id:
+            qs = Department.objects.filter(id=user.department_id)
+        else:
+            return Department.objects.none()
+
+        search = self.request.query_params.get('search') or self.request.query_params.get('q')
+        if search:
+            search_str = search.strip()
+            qs = qs.filter(
+                Q(name__icontains=search_str)
+                | Q(code__icontains=search_str)
+                | Q(description__icontains=search_str)
+            )
+        return qs.order_by('id')
 
 
 @extend_schema_view(
@@ -46,7 +61,20 @@ class CategoryViewSet(viewsets.ModelViewSet):
     - Manager and User: read-only list and detail.
     - DELETE and PUT are strictly disabled.
     """
-    queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [IsAdminOrReadOnly]
+    pagination_class = StandardPagination
+    optional_pagination = True
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
+
+    def get_queryset(self):
+        qs = Category.objects.all()
+        search = self.request.query_params.get('search') or self.request.query_params.get('q')
+        if search:
+            search_str = search.strip()
+            qs = qs.filter(
+                Q(name__icontains=search_str)
+                | Q(description__icontains=search_str)
+            )
+        return qs.order_by('id')
+

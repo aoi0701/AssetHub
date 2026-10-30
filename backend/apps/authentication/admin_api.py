@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from apps.authentication.models import User
 from apps.authentication import services
+from apps.common.pagination import StandardPagination
 from apps.common.permissions import IsAdminOrManagerReadOnly
 from apps.departments.models import Department
 
@@ -242,6 +243,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
     - User: Completely blocked (403 Forbidden).
     """
     permission_classes = [permissions.IsAuthenticated, IsAdminOrManagerReadOnly]
+    pagination_class = StandardPagination
+    optional_pagination = True
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_queryset(self):

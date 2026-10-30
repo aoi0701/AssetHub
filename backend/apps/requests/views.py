@@ -1,3 +1,4 @@
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.exceptions import NotFound, PermissionDenied
@@ -6,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authentication.models import User
+from apps.common.pagination import StandardPagination
 from apps.requests.models import AssetRequest
 from apps.requests.serializers import (
     AssetRequestCreateSerializer,
@@ -24,6 +26,7 @@ class RequestListCreateView(generics.ListCreateAPIView):
     - Admin views all requests across the company.
     """
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
 
     def get_serializer_class(self):
         if self.request.method == 'POST':
@@ -56,9 +59,22 @@ class RequestListCreateView(generics.ListCreateAPIView):
         if department_id and user.role == User.Role.ADMIN:
             qs = qs.filter(department_id=department_id)
 
+        search = self.request.query_params.get('search') or self.request.query_params.get('q')
+        if search:
+            search_str = search.strip()
+            qs = qs.filter(
+                Q(request_code__icontains=search_str)
+                | Q(reason__icontains=search_str)
+                | Q(requester__full_name__icontains=search_str)
+                | Q(requester__username__icontains=search_str)
+                | Q(asset__name__icontains=search_str)
+                | Q(asset__asset_code__icontains=search_str)
+            )
+
         return qs.select_related(
             'requester', 'department', 'requested_category', 'asset', 'reviewed_by'
         ).order_by('-created_at')
+
 
     @extend_schema(
         request=AssetRequestCreateSerializer,

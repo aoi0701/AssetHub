@@ -31,13 +31,12 @@ from apps.assets.serializers import (
 from apps.assets.services import AssetService
 from apps.authentication.models import User
 from apps.common.exceptions import ConflictError
+from apps.common.pagination import StandardPagination
 from apps.common.storage_backends import AttachmentStorage
 
 
-class AssetPagination(PageNumberPagination):
-    page_size = 20
-    page_size_query_param = 'page_size'
-    max_page_size = 100
+class AssetPagination(StandardPagination):
+    pass
 
 
 class AssetPermission(permissions.BasePermission):
