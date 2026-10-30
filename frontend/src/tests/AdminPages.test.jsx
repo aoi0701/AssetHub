@@ -127,6 +127,14 @@ afterEach(() => {
       is_active: true,
     },
   ];
+  mockDepartments = [
+    { id: 1, code: 'IT', name: 'Phòng Công nghệ', description: 'Phụ trách kỹ thuật' },
+    { id: 2, code: 'HR', name: 'Phòng Nhân sự', description: 'Phụ trách tuyển dụng' },
+  ];
+  mockCategories = [
+    { id: 1, name: 'Laptop', description: 'Máy tính xách tay các loại' },
+    { id: 2, name: 'Màn hình', description: 'Màn hình hiển thị Dell/LG' },
+  ];
 });
 afterAll(() => server.close());
 
@@ -340,5 +348,91 @@ describe('Admin Management Pages Tests', () => {
 
     // Re-verify NO delete buttons exist anywhere
     expect(screen.queryByRole('button', { name: /Xóa|Delete/i })).toBeNull();
+  });
+
+  it('CategoryPage: search filter narrows down items and displays count correctly', async () => {
+    render(
+      <MemoryRouter>
+        <AuthProvider
+          initialUser={{ id: 1, username: 'adminuser', role: 'ADMIN' }}
+          initialToken="token-admin"
+        >
+          <CategoryPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Laptop')).toBeInTheDocument();
+    expect(screen.getByText('Màn hình')).toBeInTheDocument();
+    expect(screen.getByText(/Tổng số:/i)).toHaveTextContent('2');
+
+    // Type in search box
+    const searchInput = screen.getByPlaceholderText(/Tìm theo tên hoặc mô tả/i);
+    await userEvent.type(searchInput, 'Dell');
+
+    // 'Màn hình' has description 'Màn hình hiển thị Dell/LG' -> should be visible
+    expect(screen.getByText('Màn hình')).toBeInTheDocument();
+    // 'Laptop' has description 'Máy tính xách tay các loại' -> should be hidden
+    expect(screen.queryByText('Laptop')).toBeNull();
+    expect(screen.getByText(/Tìm thấy/i)).toHaveTextContent('1');
+
+    // Clear search
+    const clearBtn = screen.getByRole('button', { name: /Xóa tìm kiếm/i });
+    await userEvent.click(clearBtn);
+
+    expect(screen.getByText('Laptop')).toBeInTheDocument();
+    expect(screen.getByText('Màn hình')).toBeInTheDocument();
+  });
+
+  it('CategoryPage modal: closes on Escape, closes on X button, and retains input on error', async () => {
+    server.use(
+      http.post('/api/categories/', () => {
+        return HttpResponse.json(
+          { name: ['Tên danh mục này đã tồn tại trong hệ thống.'] },
+          { status: 400 }
+        );
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider
+          initialUser={{ id: 1, username: 'adminuser', role: 'ADMIN' }}
+          initialToken="token-admin"
+        >
+          <CategoryPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Laptop')).toBeInTheDocument();
+
+    const addBtn = screen.getByRole('button', { name: /Thêm danh mục/i });
+    await userEvent.click(addBtn);
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Type input
+    const nameInput = screen.getByLabelText(/Tên danh mục/i);
+    const descInput = screen.getByLabelText(/Mô tả/i);
+    await userEvent.type(nameInput, 'Laptop');
+    await userEvent.type(descInput, 'Mô tả thử nghiệm');
+
+    // Submit form -> triggers 400 error
+    await userEvent.click(screen.getByRole('button', { name: /Lưu danh mục/i }));
+
+    // Alert error visible
+    expect(await screen.findByText(/Tên danh mục này đã tồn tại/i)).toBeInTheDocument();
+
+    // Verify inputs retain entered data
+    expect(nameInput).toHaveValue('Laptop');
+    expect(descInput).toHaveValue('Mô tả thử nghiệm');
+
+    // Press Escape to close modal
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
   });
 });

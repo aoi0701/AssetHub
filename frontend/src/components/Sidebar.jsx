@@ -34,9 +34,9 @@ const setCollapsedStorage = (value) => {
 };
 
 const roleBadgeColors = {
-  ADMIN: 'bg-purple-950/60 text-purple-300 border-purple-800',
-  MANAGER: 'bg-blue-950/60 text-blue-300 border-blue-800',
-  USER: 'bg-emerald-950/60 text-emerald-300 border-emerald-800',
+  ADMIN: 'bg-purple-50 text-purple-700 border-purple-200',
+  MANAGER: 'bg-blue-50 text-blue-700 border-blue-200',
+  USER: 'bg-emerald-50 text-emerald-700 border-emerald-200',
 };
 
 const ADMIN_NAV_ITEMS = [
@@ -96,14 +96,14 @@ const Sidebar = () => {
 
   return (
     <aside
-      className={`h-screen shrink-0 bg-slate-900 border-r border-slate-800 text-slate-300 flex flex-col transition-all duration-200 ease-in-out ${
+      className={`h-screen shrink-0 bg-slate-50 border-r border-slate-200/90 text-slate-700 flex flex-col transition-all duration-200 ease-in-out ${
         isCollapsed ? 'w-20' : 'w-64'
       }`}
       aria-label="Thanh điều hướng chính"
     >
       {/* Sidebar Header */}
       <div
-        className={`border-b border-slate-800 flex transition-all duration-200 ${
+        className={`border-b border-slate-200/90 flex transition-all duration-200 ${
           isCollapsed
             ? 'flex-col items-center justify-center py-3 gap-2'
             : 'h-16 items-center justify-between px-3 gap-2'
@@ -117,9 +117,9 @@ const Sidebar = () => {
           title="AssetHub"
           aria-label="AssetHub"
         >
-          <Package className="h-7 w-7 text-blue-500 shrink-0" />
+          <Package className="h-7 w-7 text-blue-600 shrink-0" />
           {!isCollapsed ? (
-            <span className="font-bold text-xl text-white tracking-tight truncate">
+            <span className="font-bold text-xl text-slate-900 tracking-tight truncate">
               AssetHub
             </span>
           ) : (
@@ -130,7 +130,7 @@ const Sidebar = () => {
         <button
           type="button"
           onClick={handleToggleCollapse}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors shrink-0"
+          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors shrink-0"
           aria-expanded={!isCollapsed}
           aria-label={isCollapsed ? 'Mở rộng thanh điều hướng' : 'Thu gọn thanh điều hướng'}
           title={isCollapsed ? 'Mở rộng thanh điều hướng' : 'Thu gọn thanh điều hướng'}
@@ -158,8 +158,8 @@ const Sidebar = () => {
                   isCollapsed ? 'justify-center' : 'space-x-3'
                 } ${
                   isActive
-                    ? 'text-white bg-blue-600 font-semibold shadow-sm'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+                    ? 'text-blue-700 bg-blue-50 font-semibold border border-blue-200/80 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
                 }`
               }
             >
@@ -175,12 +175,12 @@ const Sidebar = () => {
       </nav>
 
       {/* Sidebar Footer */}
-      <div className="border-t border-slate-800 p-3 space-y-2">
+      <div className="border-t border-slate-200/90 p-3 space-y-2">
         {/* Role Badge */}
         <div className="flex items-center justify-center">
           <span
             className={`text-xs px-2.5 py-0.5 rounded-full font-semibold border ${
-              roleBadgeColors[role] || 'bg-slate-800 text-slate-300 border-slate-700'
+              roleBadgeColors[role] || 'bg-slate-100 text-slate-700 border-slate-200'
             }`}
             title={`Vai trò: ${role}`}
             aria-label={`Vai trò: ${role}`}
@@ -204,8 +204,8 @@ const Sidebar = () => {
               isCollapsed ? 'justify-center' : 'space-x-2'
             } ${
               isActive
-                ? 'border-blue-500 bg-blue-600 text-white font-semibold'
-                : 'border-slate-800 text-slate-300 hover:bg-slate-800/80 hover:text-white'
+                ? 'border-blue-300 bg-blue-50 text-blue-700 font-semibold'
+                : 'border-slate-200/80 text-slate-700 hover:bg-slate-100/80 hover:text-slate-900'
             }`
           }
           title={displayName}
@@ -223,7 +223,7 @@ const Sidebar = () => {
         <button
           type="button"
           onClick={handleLogout}
-          className={`w-full flex items-center px-3 py-2 text-sm font-medium text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500 ${
+          className={`w-full flex items-center px-3 py-2 text-sm font-medium text-slate-600 hover:text-rose-600 hover:bg-rose-50/80 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500 ${
             isCollapsed ? 'justify-center' : 'space-x-2'
           }`}
           title="Đăng xuất"

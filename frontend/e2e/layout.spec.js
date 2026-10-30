@@ -27,7 +27,7 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
     throw new Error('Missing E2E_SEED_PASSWORD or DEMO_SEED_PASSWORD environment variable.');
   }
 
-  test.beforeAll(() => {
+  test.beforeEach(() => {
     try {
       execSync('docker compose exec -T backend python manage.py shell -c "from django.core.cache import cache; cache.clear()"', {
         stdio: 'ignore',

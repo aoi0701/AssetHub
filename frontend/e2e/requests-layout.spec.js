@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,6 +13,17 @@ test.describe('Requests Page Table Layout', () => {
   if (!seedPassword) {
     throw new Error('Missing E2E_SEED_PASSWORD or DEMO_SEED_PASSWORD environment variable.');
   }
+
+  test.beforeEach(() => {
+    try {
+      execSync('docker compose exec -T backend python manage.py shell -c "from django.core.cache import cache; cache.clear()"', {
+        stdio: 'ignore',
+        timeout: 10000,
+      });
+    } catch {
+      // ignore in environments without docker access
+    }
+  });
 
   test('requests table action column does not overflow and buttons do not clip', async ({ page }) => {
     await page.setViewportSize({ width: 1366, height: 768 });
