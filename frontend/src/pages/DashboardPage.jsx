@@ -179,16 +179,16 @@ const DashboardPage = () => {
       )}
 
       {/* Filters Bar */}
-      <div className="mt-6 bg-white p-4 rounded-xl border border-gray-200 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="mt-6 bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {/* Category Filter */}
         <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
+          <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
             Danh mục
           </label>
           <select
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo danh mục"
           >
             <option value="">Tất cả danh mục</option>
@@ -203,13 +203,13 @@ const DashboardPage = () => {
         {/* Department Filter (Admin only) */}
         {isAdmin && (
           <div>
-            <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
+            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
               Phòng ban
             </label>
             <select
               value={departmentId}
               onChange={(e) => setDepartmentId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
               aria-label="Lọc theo phòng ban"
             >
               <option value="">Toàn công ty</option>
@@ -225,7 +225,7 @@ const DashboardPage = () => {
 
         {/* Start Month */}
         <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
+          <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
             Từ tháng
           </label>
           <input
@@ -234,13 +234,13 @@ const DashboardPage = () => {
             onChange={(e) => handleStartMonthChange(e.target.value)}
             placeholder="YYYY-MM"
             aria-label="Tháng bắt đầu"
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
           />
         </div>
 
         {/* End Month */}
         <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
+          <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
             Đến tháng
           </label>
           <input
@@ -249,7 +249,7 @@ const DashboardPage = () => {
             onChange={(e) => handleEndMonthChange(e.target.value)}
             placeholder="YYYY-MM"
             aria-label="Tháng kết thúc"
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
           />
         </div>
       </div>
@@ -257,91 +257,133 @@ const DashboardPage = () => {
       {/* 6 KPI Cards */}
       <div className="mt-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         {/* Card 1: total_active */}
-        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between text-gray-500 mb-2">
-            <span className="text-xs font-semibold uppercase">Tổng tài sản</span>
-            <Boxes className="w-5 h-5 text-blue-600" />
+        <div className="bg-white p-5 rounded-xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-colors flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Tổng tài sản</span>
+            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-blue-600">
+              <Boxes className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-gray-900">
-            {kpis?.total_active ?? 0}
+          <div>
+            <div className="text-2xl font-bold text-slate-900">
+              {kpis?.total_active ?? 0}
+            </div>
+            <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+              Đang hoạt động
+            </div>
           </div>
-          <div className="text-[11px] text-gray-400 mt-1">Đang hoạt động</div>
         </div>
 
         {/* Card 2: available */}
-        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between text-gray-500 mb-2">
-            <span className="text-xs font-semibold uppercase">Sẵn sàng</span>
-            <CheckCircle className="w-5 h-5 text-emerald-600" />
+        <div className="bg-white p-5 rounded-xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-colors flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Sẵn sàng</span>
+            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-emerald-600">
+              <CheckCircle className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-emerald-600">
-            {kpis?.available ?? 0}
+          <div>
+            <div className="text-2xl font-bold text-slate-900">
+              {kpis?.available ?? 0}
+            </div>
+            <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              Trong kho sẵn dùng
+            </div>
           </div>
-          <div className="text-[11px] text-gray-400 mt-1">Trong kho sẵn dùng</div>
         </div>
 
         {/* Card 3: in_use */}
-        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between text-gray-500 mb-2">
-            <span className="text-xs font-semibold uppercase">Đang sử dụng</span>
-            <Clock className="w-5 h-5 text-blue-500" />
+        <div className="bg-white p-5 rounded-xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-colors flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Đang sử dụng</span>
+            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-sky-600">
+              <Clock className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-blue-600">
-            {kpis?.in_use ?? 0}
+          <div>
+            <div className="text-2xl font-bold text-slate-900">
+              {kpis?.in_use ?? 0}
+            </div>
+            <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+              Đã bàn giao
+            </div>
           </div>
-          <div className="text-[11px] text-gray-400 mt-1">Đã bàn giao</div>
         </div>
 
         {/* Card 4: damaged_under_maintenance */}
-        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between text-gray-500 mb-2">
-            <span className="text-xs font-semibold uppercase">Hỏng & Sửa chữa</span>
-            <AlertTriangle className="w-5 h-5 text-amber-500" />
+        <div className="bg-white p-5 rounded-xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-colors flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Hỏng & Sửa chữa</span>
+            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-amber-600">
+              <AlertTriangle className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-amber-600">
-            {kpis?.damaged_under_maintenance ?? 0}
+          <div>
+            <div className="text-2xl font-bold text-slate-900">
+              {kpis?.damaged_under_maintenance ?? 0}
+            </div>
+            <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              Cần khắc phục
+            </div>
           </div>
-          <div className="text-[11px] text-gray-400 mt-1">Cần khắc phục</div>
         </div>
 
         {/* Card 5: pending_disposal */}
-        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between text-gray-500 mb-2">
-            <span className="text-xs font-semibold uppercase">Chờ thanh lý</span>
-            <Trash2 className="w-5 h-5 text-purple-500" />
+        <div className="bg-white p-5 rounded-xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-colors flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Chờ thanh lý</span>
+            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-purple-600">
+              <Trash2 className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-purple-600">
-            {kpis?.pending_disposal ?? 0}
+          <div>
+            <div className="text-2xl font-bold text-slate-900">
+              {kpis?.pending_disposal ?? 0}
+            </div>
+            <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+              Chờ hội đồng duyệt
+            </div>
           </div>
-          <div className="text-[11px] text-gray-400 mt-1">Chờ hội đồng duyệt</div>
         </div>
 
         {/* Card 6: pending_requests */}
-        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between text-gray-500 mb-2">
-            <span className="text-xs font-semibold uppercase">Yêu cầu chờ</span>
-            <FileQuestion className="w-5 h-5 text-rose-500" />
+        <div className="bg-white p-5 rounded-xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-colors flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Yêu cầu chờ</span>
+            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-rose-600">
+              <FileQuestion className="w-4 h-4" />
+            </div>
           </div>
-          <div className="text-2xl font-bold text-rose-600">
-            {kpis?.pending_requests ?? 0}
+          <div>
+            <div className="text-2xl font-bold text-slate-900">
+              {kpis?.pending_requests ?? 0}
+            </div>
+            <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+              Cần phê duyệt
+            </div>
           </div>
-          <div className="text-[11px] text-gray-400 mt-1">Cần phê duyệt</div>
         </div>
       </div>
 
       {/* Analytical Charts Grid */}
       <div className="mt-8 grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Chart 1: Status Distribution */}
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-          <h3 className="text-sm font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">
+        <div className="bg-white p-6 rounded-xl border border-slate-200/90 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100">
             Phân bố theo trạng thái tài sản
           </h3>
           <StatusPieChart data={charts?.status_distribution} />
         </div>
 
         {/* Chart 2: Category Distribution */}
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-          <h3 className="text-sm font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">
+        <div className="bg-white p-6 rounded-xl border border-slate-200/90 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100">
             Phân bố theo danh mục
           </h3>
           <CategoryBarChart data={charts?.category_distribution} />
@@ -349,8 +391,8 @@ const DashboardPage = () => {
 
         {/* Chart 3: Department Distribution (Admin only!) */}
         {isAdmin && (
-          <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-            <h3 className="text-sm font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">
+          <div className="bg-white p-6 rounded-xl border border-slate-200/90 shadow-sm">
+            <h3 className="text-sm font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100">
               Phân bố tài sản giữa các phòng ban
             </h3>
             <DepartmentBarChart data={charts?.department_distribution} />
@@ -358,8 +400,8 @@ const DashboardPage = () => {
         )}
 
         {/* Chart 4: Monthly Trend */}
-        <div className={`bg-white p-6 rounded-xl border border-gray-200 shadow-sm ${!isAdmin ? 'xl:col-span-2' : ''}`}>
-          <h3 className="text-sm font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">
+        <div className={`bg-white p-6 rounded-xl border border-slate-200/90 shadow-sm ${!isAdmin ? 'xl:col-span-2' : ''}`}>
+          <h3 className="text-sm font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100">
             Xu hướng tài sản mới & thanh lý theo tháng
           </h3>
           <MonthlyTrendChart data={charts?.monthly_trend} />

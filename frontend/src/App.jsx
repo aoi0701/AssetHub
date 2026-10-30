@@ -164,7 +164,7 @@ function App() {
 
   if (showSidebar) {
     return (
-      <div className="flex h-screen w-full overflow-hidden bg-gray-50 text-gray-900">
+      <div className="flex h-screen w-full overflow-hidden bg-slate-50 text-slate-900">
         <Sidebar />
         <main className="flex-1 min-w-0 h-screen overflow-y-auto">
           {routes}
@@ -174,7 +174,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50 text-gray-900">
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <Navbar />
       <main className="flex-1">
         {routes}

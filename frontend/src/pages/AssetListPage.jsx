@@ -81,13 +81,13 @@ const AssetListPage = () => {
   return (
     <div className="w-full py-6 px-4 sm:px-6 lg:px-8">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-gray-200 gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-slate-200/90 gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             <Package className="h-7 w-7 text-blue-600" />
             Quản lý tài sản
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-slate-500 mt-1">
             {isAdmin
               ? 'Toàn quyền theo dõi, khởi tạo, điều chuyển và quản lý vòng đời tài sản công ty.'
               : `Theo dõi và quản lý tài sản thuộc phạm vi ${user?.department_name || 'phòng ban'}.`}
@@ -97,7 +97,7 @@ const AssetListPage = () => {
         <div className="flex items-center space-x-3 self-start sm:self-auto">
           <button
             onClick={fetchAssets}
-            className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+            className="inline-flex items-center px-3 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 transition-colors shadow-sm"
           >
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
             Làm mới
@@ -133,10 +133,10 @@ const AssetListPage = () => {
       )}
 
       {/* Filters */}
-      <div className="mt-6 bg-white p-4 rounded-xl border border-gray-200 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="mt-6 bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {/* Search */}
         <div className="relative">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
             <Search size={16} />
           </div>
           <input
@@ -144,7 +144,7 @@ const AssetListPage = () => {
             placeholder="Tìm theo mã, tên, serial..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800"
           />
         </div>
 
@@ -153,7 +153,7 @@ const AssetListPage = () => {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo trạng thái"
           >
             <option value="">Tất cả trạng thái</option>
@@ -171,7 +171,7 @@ const AssetListPage = () => {
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo danh mục"
           >
             <option value="">Tất cả danh mục</option>
@@ -189,7 +189,7 @@ const AssetListPage = () => {
             <select
               value={departmentFilter}
               onChange={(e) => setDepartmentFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
               aria-label="Lọc theo phòng ban"
             >
               <option value="">Tất cả phòng ban</option>
@@ -205,24 +205,26 @@ const AssetListPage = () => {
       </div>
 
       {/* Asset Table */}
-      <div className="mt-6 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="mt-6 bg-white border border-slate-200/90 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
-            <thead className="bg-gray-50 text-gray-700 font-semibold">
+          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="bg-slate-50 text-slate-600 font-semibold">
               <tr>
-                <th className="px-6 py-3">Mã tài sản</th>
-                <th className="px-6 py-3">Tên tài sản</th>
-                <th className="px-6 py-3">Danh mục</th>
-                <th className="px-6 py-3">Phòng ban</th>
-                <th className="px-6 py-3">Người đang giữ</th>
-                <th className="px-6 py-3">Trạng thái</th>
-                <th className="px-6 py-3 text-right">Chi tiết</th>
+                <th className="px-4 py-3 whitespace-nowrap">Mã tài sản</th>
+                <th className="px-4 py-3 whitespace-nowrap">Tên tài sản</th>
+                <th className="px-4 py-3 whitespace-nowrap">Danh mục</th>
+                <th className="px-4 py-3 whitespace-nowrap">Phòng ban</th>
+                <th className="px-4 py-3 whitespace-nowrap">Người đang giữ</th>
+                <th className="px-4 py-3 whitespace-nowrap">Trạng thái</th>
+                <th className="sticky right-0 bg-slate-50 px-4 py-3 text-right whitespace-nowrap min-w-[100px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10">
+                  Chi tiết
+                </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
+            <tbody className="divide-y divide-slate-100 bg-white">
               {assets.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                  <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
                     {loading ? 'Đang tải dữ liệu...' : 'Không tìm thấy tài sản nào phù hợp.'}
                   </td>
                 </tr>
@@ -231,46 +233,46 @@ const AssetListPage = () => {
                   <tr
                     key={asset.id}
                     onClick={() => navigate(`/assets/${asset.id}`)}
-                    className="hover:bg-gray-50/80 cursor-pointer transition-colors"
+                    className="group hover:bg-slate-50/80 cursor-pointer transition-colors"
                   >
-                    <td className="px-6 py-4 whitespace-nowrap font-mono font-semibold text-blue-600">
+                    <td className="px-4 py-3.5 whitespace-nowrap font-mono font-semibold text-blue-600">
                       {asset.asset_code}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="font-medium text-gray-900">{asset.name}</div>
+                    <td className="px-4 py-3.5 whitespace-nowrap">
+                      <div className="font-medium text-slate-900">{asset.name}</div>
                       {asset.serial_number && (
-                        <div className="text-xs text-gray-400">SN: {asset.serial_number}</div>
+                        <div className="text-xs text-slate-400">SN: {asset.serial_number}</div>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-gray-700">
+                    <td className="px-4 py-3.5 whitespace-nowrap text-slate-600">
                       {asset.category_name || '-'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-gray-700">
+                    <td className="px-4 py-3.5 whitespace-nowrap text-slate-600">
                       {asset.department_name ? (
                         <span>
                           {asset.department_name}{' '}
-                          <span className="text-xs text-gray-400">({asset.department_code})</span>
+                          <span className="text-xs text-slate-400">({asset.department_code})</span>
                         </span>
                       ) : (
-                        <span className="text-xs italic text-gray-400">Kho công ty</span>
+                        <span className="text-xs italic text-slate-400">Kho công ty</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-gray-700">
+                    <td className="px-4 py-3.5 whitespace-nowrap text-slate-600">
                       {asset.assigned_to_user_name ? (
                         <div>
-                          <span className="font-medium">{asset.assigned_to_user_name}</span>
-                          <span className="text-xs text-gray-400 block">
+                          <span className="font-medium text-slate-800">{asset.assigned_to_user_name}</span>
+                          <span className="text-xs text-slate-400 block">
                             @{asset.assigned_to_user_username}
                           </span>
                         </div>
                       ) : (
-                        <span className="text-xs text-gray-400 italic">Chưa bàn giao</span>
+                        <span className="text-xs text-slate-400 italic">Chưa bàn giao</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-4 py-3.5 whitespace-nowrap">
                       <AssetStatusBadge status={asset.status} />
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
+                    <td className="sticky right-0 bg-white group-hover:bg-slate-50/90 px-4 py-3.5 whitespace-nowrap text-right min-w-[100px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10 transition-colors">
                       <Link
                         to={`/assets/${asset.id}`}
                         onClick={(e) => e.stopPropagation()}

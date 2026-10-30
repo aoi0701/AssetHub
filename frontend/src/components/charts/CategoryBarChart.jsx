@@ -19,7 +19,7 @@ const CategoryBarChart = ({ data = [] }) => {
     return (
       <div
         data-testid="category-bar-chart"
-        className="h-64 flex items-center justify-center text-sm text-gray-400 bg-gray-50/50 rounded-lg border border-dashed border-gray-200"
+        className="h-64 flex items-center justify-center text-sm text-slate-400 bg-slate-50/50 rounded-lg border border-dashed border-slate-200"
       >
         Chưa có dữ liệu danh mục
       </div>
@@ -29,21 +29,29 @@ const CategoryBarChart = ({ data = [] }) => {
   return (
     <div data-testid="category-bar-chart" className="w-full h-72">
       <ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={250}>
-        <BarChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+        <BarChart
+          layout="vertical"
+          data={chartData}
+          margin={{ top: 10, right: 30, left: 10, bottom: 10 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
           <XAxis
-            dataKey="name"
-            tick={{ fontSize: 12, fill: '#4b5563' }}
-            interval={0}
-            angle={-15}
-            textAnchor="end"
+            type="number"
+            allowDecimals={false}
+            tick={{ fontSize: 12, fill: '#64748b' }}
           />
-          <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#6b7280' }} />
+          <YAxis
+            type="category"
+            dataKey="name"
+            width={140}
+            tick={{ fontSize: 12, fill: '#334155' }}
+            tickLine={false}
+          />
           <Tooltip
             formatter={(value) => [`${value} tài sản`, 'Số lượng']}
-            contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb' }}
+            contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0' }}
           />
-          <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={48} />
+          <Bar dataKey="count" fill="#2563eb" radius={[0, 4, 4, 0]} maxBarSize={28} />
         </BarChart>
       </ResponsiveContainer>
     </div>

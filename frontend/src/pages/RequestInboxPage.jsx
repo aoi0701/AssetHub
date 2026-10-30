@@ -79,13 +79,13 @@ const RequestInboxPage = () => {
   return (
     <div className="w-full py-6 px-4 sm:px-6 lg:px-8">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-gray-200 gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-slate-200/90 gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             <FileText className="h-7 w-7 text-blue-600" />
             {isStaff ? 'Quản lý yêu cầu tài sản' : 'Yêu cầu của tôi'}
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-slate-500 mt-1">
             {isStaff
               ? 'Xem xét, phê duyệt hoặc từ chối các yêu cầu cấp phát, hoàn trả và báo hỏng.'
               : 'Theo dõi tiến độ và kết quả các phiếu yêu cầu bạn đã gửi.'}
@@ -95,7 +95,7 @@ const RequestInboxPage = () => {
         <div className="flex items-center space-x-3 self-start sm:self-auto">
           <button
             onClick={fetchRequests}
-            className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+            className="inline-flex items-center px-3 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 transition-colors shadow-sm"
           >
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
             Làm mới
@@ -147,12 +147,12 @@ const RequestInboxPage = () => {
       )}
 
       {/* Filters */}
-      <div className="mt-6 bg-white p-4 rounded-xl border border-gray-200 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="mt-6 bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo trạng thái yêu cầu"
           >
             <option value="">Tất cả trạng thái</option>
@@ -166,7 +166,7 @@ const RequestInboxPage = () => {
           <select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo loại yêu cầu"
           >
             <option value="">Tất cả loại yêu cầu</option>
@@ -178,10 +178,10 @@ const RequestInboxPage = () => {
       </div>
 
       {/* Table */}
-      <div className="mt-6 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="mt-6 bg-white border border-slate-200/90 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
-            <thead className="bg-gray-50 text-gray-700 font-semibold">
+          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="bg-slate-50 text-slate-600 font-semibold">
               <tr>
                 <th className="px-4 py-3 whitespace-nowrap">Mã phiếu</th>
                 <th className="px-4 py-3 whitespace-nowrap">Loại yêu cầu</th>
@@ -189,17 +189,17 @@ const RequestInboxPage = () => {
                 <th className="px-4 py-3">Mục tiêu yêu cầu</th>
                 <th className="px-4 py-3">Lý do</th>
                 <th className="px-4 py-3 whitespace-nowrap">Trạng thái</th>
-                <th className="sticky right-0 bg-gray-50 px-4 py-3 text-right whitespace-nowrap min-w-[195px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10">
+                <th className="sticky right-0 bg-slate-50 pl-4 pr-5 py-3 text-right whitespace-nowrap min-w-[200px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10">
                   Thao tác
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
+            <tbody className="divide-y divide-slate-100 bg-white">
               {requests.length === 0 ? (
                 <tr>
                   <td
                     colSpan={isStaff ? 7 : 6}
-                    className="px-4 py-12 text-center text-gray-500"
+                    className="px-4 py-12 text-center text-slate-400"
                   >
                     {loading ? 'Đang tải dữ liệu...' : 'Không có phiếu yêu cầu nào.'}
                   </td>
@@ -208,29 +208,29 @@ const RequestInboxPage = () => {
                 requests.map((req) => {
                   const badge = statusBadges[req.status] || {
                     label: req.status,
-                    color: 'bg-gray-100 text-gray-700 border-gray-200',
+                    color: 'bg-slate-100 text-slate-700 border-slate-200',
                   };
 
                   return (
-                    <tr key={req.id} className="group hover:bg-gray-50/75 transition-colors">
+                    <tr key={req.id} className="group hover:bg-slate-50/80 transition-colors">
                       <td className="px-4 py-3.5 whitespace-nowrap font-mono font-semibold text-blue-600">
                         {req.request_code}
                       </td>
                       <td className="px-4 py-3.5 whitespace-nowrap">
-                        <span className="font-medium text-gray-900">
+                        <span className="font-medium text-slate-900">
                           {requestTypeLabels[req.request_type] || req.request_type}
                         </span>
                       </td>
                       {isStaff && (
                         <td className="px-4 py-3.5">
                           <div
-                            className="font-medium text-gray-900 max-w-[170px] truncate"
+                            className="font-medium text-slate-900 max-w-[170px] truncate"
                             title={req.requester_name || req.requester_username}
                           >
                             {req.requester_name || req.requester_username}
                           </div>
                           <div
-                            className="text-xs text-gray-400 max-w-[170px] truncate"
+                            className="text-xs text-slate-400 max-w-[170px] truncate"
                             title={`${req.department_name} (${req.department_code})`}
                           >
                             {req.department_name} ({req.department_code})
@@ -240,7 +240,7 @@ const RequestInboxPage = () => {
                       <td className="px-4 py-3.5">
                         {req.request_type === 'ALLOCATE' ? (
                           <span
-                            className="font-medium text-gray-800 block max-w-[190px] truncate"
+                            className="font-medium text-slate-800 block max-w-[190px] truncate"
                             title={req.requested_category_name || '-'}
                           >
                             Danh mục: {req.requested_category_name || '-'}
@@ -248,20 +248,20 @@ const RequestInboxPage = () => {
                         ) : (
                           <div className="max-w-[190px]">
                             <span
-                              className="font-medium text-gray-800 block truncate"
+                              className="font-medium text-slate-800 block truncate"
                               title={req.asset_name || '-'}
                             >
                               {req.asset_name || '-'}
                             </span>
                             {req.asset_code && (
-                              <span className="text-xs text-gray-400 block font-mono">
+                              <span className="text-xs text-slate-400 block font-mono">
                                 ({req.asset_code})
                               </span>
                             )}
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-3.5 text-gray-600 max-w-[180px] truncate" title={req.reason}>
+                      <td className="px-4 py-3.5 text-slate-600 max-w-[180px] truncate" title={req.reason}>
                         {req.reason}
                       </td>
                       <td className="px-4 py-3.5 whitespace-nowrap">
@@ -279,7 +279,7 @@ const RequestInboxPage = () => {
                           </div>
                         )}
                       </td>
-                      <td className="sticky right-0 bg-white group-hover:bg-gray-50/90 px-4 py-3.5 whitespace-nowrap text-right min-w-[195px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10 transition-colors">
+                      <td className="sticky right-0 bg-white group-hover:bg-slate-50/90 pl-4 pr-5 py-3.5 whitespace-nowrap text-right min-w-[200px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10 transition-colors">
                         <div className="flex items-center justify-end gap-2">
                           {/* Manager/Admin review button if PENDING */}
                           {isStaff && req.status === 'PENDING' && (
@@ -293,7 +293,7 @@ const RequestInboxPage = () => {
 
                           <button
                             onClick={() => setViewingDetail(req)}
-                            className="inline-flex items-center px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100 transition-colors shrink-0"
+                            className="inline-flex items-center px-2 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 rounded hover:bg-slate-100 transition-colors shrink-0"
                             title="Xem chi tiết"
                           >
                             <Eye className="w-3.5 h-3.5 mr-1" />

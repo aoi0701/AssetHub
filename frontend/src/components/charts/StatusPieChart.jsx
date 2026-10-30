@@ -32,7 +32,7 @@ const StatusPieChart = ({ data = [] }) => {
     return (
       <div
         data-testid="status-pie-chart"
-        className="h-64 flex items-center justify-center text-sm text-gray-400 bg-gray-50/50 rounded-lg border border-dashed border-gray-200"
+        className="h-64 flex items-center justify-center text-sm text-slate-400 bg-slate-50/50 rounded-lg border border-dashed border-slate-200"
       >
         Chưa có dữ liệu trạng thái
       </div>
@@ -62,13 +62,13 @@ const StatusPieChart = ({ data = [] }) => {
           </Pie>
           <Tooltip
             formatter={(value, name) => [`${value} tài sản`, name]}
-            contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb' }}
+            contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0' }}
           />
           <Legend
             verticalAlign="bottom"
             height={36}
             iconType="circle"
-            formatter={(value) => <span className="text-xs text-gray-700 font-medium">{value}</span>}
+            formatter={(value) => <span className="text-xs text-slate-700 font-medium">{value}</span>}
           />
         </PieChart>
       </ResponsiveContainer>
