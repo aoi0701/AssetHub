@@ -59,6 +59,7 @@ staticfiles/
 !cloudflare-worker/*.sql
 *.dump
 dumps/
+backups/
 
 # Node & Frontend
 node_modules/

@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'corsheaders',
     # Local apps
+    'apps.common.apps.CommonConfig',
     'apps.departments.apps.DepartmentsConfig',
     'apps.authentication.apps.AuthenticationConfig',
     'apps.assets.apps.AssetsConfig',
