@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +27,17 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
     throw new Error('Missing E2E_SEED_PASSWORD or DEMO_SEED_PASSWORD environment variable.');
   }
 
+  test.beforeAll(() => {
+    try {
+      execSync('docker compose exec -T backend python manage.py shell -c "from django.core.cache import cache; cache.clear()"', {
+        stdio: 'ignore',
+        timeout: 10000,
+      });
+    } catch {
+      // ignore in environments without docker access
+    }
+  });
+
   async function loginAsAdmin(page) {
     await page.goto('/login');
     await page.fill('#username', 'admin');
@@ -37,10 +49,29 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
   }
 
   async function waitForChartsReady(page) {
-    // Ensure Recharts responsive container and SVG surfaces are mounted
+    // 1. Ensure Recharts responsive container and SVG surfaces are mounted
     await page.waitForSelector('.recharts-responsive-container', { state: 'visible', timeout: 15000 });
     await page.waitForSelector('.recharts-surface', { state: 'visible', timeout: 15000 });
-    // Allow SVG animations and resizing transitions to completely settle before screenshot
+
+    // 2. Wait for actual chart graphical elements to be attached
+    await page.waitForSelector('.recharts-pie-sector, .recharts-bar-rectangle, .recharts-line', {
+      state: 'attached',
+      timeout: 15000,
+    });
+
+    // 3. Inject CSS to stop and freeze any remaining CSS animations or transitions
+    await page.addStyleTag({
+      content: `
+        *, *::before, *::after {
+          animation-duration: 0s !important;
+          animation-delay: 0s !important;
+          transition-duration: 0s !important;
+          transition-delay: 0s !important;
+        }
+      `,
+    });
+
+    // 4. Allow layout and rendering frames to settle completely
     await page.waitForTimeout(600);
   }
 
@@ -94,6 +125,7 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
       // Screenshot expanded state after chart settled
       await page.screenshot({
         path: path.join(screenshotsDir, `layout-${vp.width}x${vp.height}-expanded.png`),
+        animations: 'disabled',
       });
 
       // 2. Toggle to Collapsed state
@@ -135,6 +167,7 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
       // Screenshot collapsed state after chart settled
       await page.screenshot({
         path: path.join(screenshotsDir, `layout-${vp.width}x${vp.height}-collapsed.png`),
+        animations: 'disabled',
       });
 
       // 3. Toggle back to Expanded
@@ -160,58 +193,71 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
     const navMenu = sidebar.locator('nav[aria-label="Menu chính"]');
     const logoutBtn = sidebar.locator('button[aria-label="Đăng xuất"]');
 
-    // Verify header toggle is visible and fully within viewport height
+    // 1. Verify header toggle and footer logout are initially visible within viewport
     await expect(toggleBtn).toBeVisible();
-    const toggleBox = await toggleBtn.boundingBox();
-    expect(toggleBox).not.toBeNull();
-    expect(toggleBox.y).toBeGreaterThanOrEqual(0);
-    expect(toggleBox.y + toggleBox.height).toBeLessThanOrEqual(480);
-
-    // Verify footer logout button is visible and fully within viewport height
     await expect(logoutBtn).toBeVisible();
-    const logoutBox = await logoutBtn.boundingBox();
-    expect(logoutBox).not.toBeNull();
-    expect(logoutBox.y).toBeGreaterThanOrEqual(0);
-    expect(logoutBox.y + logoutBox.height).toBeLessThanOrEqual(480);
 
-    // Verify independent menu scrollability
-    await expect(navMenu).toBeVisible();
-    const menuScrollInfo = await navMenu.evaluate((el) => {
-      const style = window.getComputedStyle(el);
-      return {
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight,
-        overflowY: style.overflowY,
-      };
+    // 2. Inject extra menu items to guarantee vertical scroll overflow
+    await page.evaluate(() => {
+      const nav = document.querySelector('nav[aria-label="Menu chính"]');
+      if (nav) {
+        for (let i = 1; i <= 15; i++) {
+          const item = document.createElement('div');
+          item.className = 'py-3 px-3 text-sm text-gray-500 rounded-lg border border-dashed border-gray-200';
+          item.textContent = `Mục kiểm thử cuộn độc lập ${i}`;
+          nav.appendChild(item);
+        }
+      }
     });
 
-    expect(['auto', 'scroll']).toContain(menuScrollInfo.overflowY);
-    expect(menuScrollInfo.scrollHeight).toBeGreaterThanOrEqual(menuScrollInfo.clientHeight);
+    // 3. Assert scrollHeight > clientHeight (guaranteed overflow)
+    const scrollHeight = await navMenu.evaluate((el) => el.scrollHeight);
+    const clientHeight = await navMenu.evaluate((el) => el.clientHeight);
+    expect(scrollHeight).toBeGreaterThan(clientHeight);
 
-    // Test actual menu scroll execution
+    // 4. Capture positions of header toggle and footer logout BEFORE scrolling
+    const toggleBoxBefore = await toggleBtn.boundingBox();
+    const logoutBoxBefore = await logoutBtn.boundingBox();
+    expect(toggleBoxBefore).not.toBeNull();
+    expect(logoutBoxBefore).not.toBeNull();
+
+    // 5. Scroll navMenu and assert scrollTop > 0
     await navMenu.evaluate((el) => {
-      el.scrollTop = 40;
+      el.scrollTop = 70;
     });
     const scrolledTop = await navMenu.evaluate((el) => el.scrollTop);
-    expect(scrolledTop).toBeGreaterThanOrEqual(0);
+    expect(scrolledTop).toBeGreaterThan(0);
+
+    // 6. Assert header and footer remain fixed in position when menu scrolls
+    const toggleBoxAfter = await toggleBtn.boundingBox();
+    const logoutBoxAfter = await logoutBtn.boundingBox();
+    expect(toggleBoxAfter).not.toBeNull();
+    expect(logoutBoxAfter).not.toBeNull();
+
+    expect(toggleBoxAfter.y).toBe(toggleBoxBefore.y);
+    expect(logoutBoxAfter.y).toBe(logoutBoxBefore.y);
+    expect(toggleBoxAfter.y).toBeGreaterThanOrEqual(0);
+    expect(logoutBoxAfter.y + logoutBoxAfter.height).toBeLessThanOrEqual(480);
 
     // Bounding box constraint in short viewport
     const sidebarBox = await sidebar.boundingBox();
     const mainBox = await page.locator('main').boundingBox();
     expect(sidebarBox.x + sidebarBox.width).toBeLessThanOrEqual(mainBox.x + 1);
 
-    // Screenshot short viewport expanded
+    // Screenshot short viewport expanded with animations disabled
     await page.screenshot({
       path: path.join(screenshotsDir, 'layout-1280x480-expanded.png'),
+      animations: 'disabled',
     });
 
     // Toggle to collapsed in short viewport
     await toggleBtn.click();
     await page.waitForTimeout(300);
 
-    // Screenshot short viewport collapsed
+    // Screenshot short viewport collapsed with animations disabled
     await page.screenshot({
       path: path.join(screenshotsDir, 'layout-1280x480-collapsed.png'),
+      animations: 'disabled',
     });
 
     // Header toggle and footer logout remain visible and accessible in collapsed state
@@ -226,7 +272,8 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
     // Navigate to /assets
     await page.locator('aside[aria-label="Thanh điều hướng chính"]').getByRole('link', { name: 'Tài sản' }).click();
     await expect(page).toHaveURL(/\/assets/);
-    await expect(page.getByRole('heading', { name: 'Quản lý tài sản' })).toBeVisible();
+    const pageHeading = page.getByRole('heading', { name: 'Quản lý tài sản' });
+    await expect(pageHeading).toBeVisible();
 
     const sidebar = page.locator('aside[aria-label="Thanh điều hướng chính"]');
     const main = page.locator('main');
@@ -236,18 +283,62 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
     await expect(tableWrapper).toBeVisible();
     await expect(table).toBeVisible();
 
+    // 1. Inject extra wide columns to guarantee horizontal scroll overflow
+    await page.evaluate(() => {
+      const tbl = document.querySelector('main .overflow-x-auto table');
+      if (tbl) {
+        const theadRow = tbl.querySelector('thead tr');
+        const tbodyRows = tbl.querySelectorAll('tbody tr');
+        if (theadRow) {
+          for (let i = 1; i <= 6; i++) {
+            const th = document.createElement('th');
+            th.className = 'px-8 py-3 whitespace-nowrap min-w-[200px] font-semibold text-gray-700';
+            th.textContent = `Thông số kỹ thuật mở rộng ${i}`;
+            theadRow.appendChild(th);
+          }
+          tbodyRows.forEach((row) => {
+            for (let i = 1; i <= 6; i++) {
+              const td = document.createElement('td');
+              td.className = 'px-8 py-4 whitespace-nowrap min-w-[200px] text-gray-600 text-sm';
+              td.textContent = `Dữ liệu đo đạc chi tiết cột ${i}`;
+              row.appendChild(td);
+            }
+          });
+        }
+      }
+    });
+
+    // 2. Assert scrollWidth > clientWidth (guaranteed horizontal overflow)
+    const tableScrollWidth = await tableWrapper.evaluate((el) => el.scrollWidth);
+    const tableClientWidth = await tableWrapper.evaluate((el) => el.clientWidth);
+    expect(tableScrollWidth).toBeGreaterThan(tableClientWidth);
+
+    // 3. Record position of page heading and sidebar before scrolling table
+    const headingBoxBefore = await pageHeading.boundingBox();
+    const sidebarBoxBefore = await sidebar.boundingBox();
+    expect(headingBoxBefore).not.toBeNull();
+    expect(sidebarBoxBefore).not.toBeNull();
+
+    // 4. Scroll table and assert scrollLeft > 0
+    await tableWrapper.evaluate((el) => {
+      el.scrollLeft = 80;
+    });
+    const scrolledLeft = await tableWrapper.evaluate((el) => el.scrollLeft);
+    expect(scrolledLeft).toBeGreaterThan(0);
+
+    // 5. Assert page heading and sidebar header remain fixed (unaffected by table horizontal scroll)
+    const headingBoxAfter = await pageHeading.boundingBox();
+    const sidebarBoxAfter = await sidebar.boundingBox();
+    expect(headingBoxAfter.y).toBe(headingBoxBefore.y);
+    expect(headingBoxAfter.x).toBe(headingBoxBefore.x);
+    expect(sidebarBoxAfter.x).toBe(sidebarBoxBefore.x);
+    expect(sidebarBoxAfter.y).toBe(sidebarBoxBefore.y);
+
     // Verify bounding box constraint
     const sidebarBox = await sidebar.boundingBox();
     const mainBox = await main.boundingBox();
     expect(sidebarBox.x + sidebarBox.width).toBeLessThanOrEqual(mainBox.x + 1);
     expect(mainBox.x + mainBox.width).toBeLessThanOrEqual(1024 + 1);
-
-    // Test actual table scroll execution
-    await tableWrapper.evaluate((el) => {
-      el.scrollLeft = 50;
-    });
-    const scrolledLeft = await tableWrapper.evaluate((el) => el.scrollLeft);
-    expect(scrolledLeft).toBeGreaterThanOrEqual(0);
 
     // Verify no unintended root horizontal overflow
     const hasUnintendedHorizontalScroll = await page.evaluate(() => {
@@ -255,9 +346,10 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
     });
     expect(hasUnintendedHorizontalScroll).toBe(false);
 
-    // Capture screenshot of table page
+    // Capture screenshot of table page with animations disabled
     await page.screenshot({
       path: path.join(screenshotsDir, 'layout-1024x768-table.png'),
+      animations: 'disabled',
     });
   });
 
@@ -294,16 +386,29 @@ test.describe('AssetHub Left Sidebar & Responsive Layout', () => {
     await page.setViewportSize({ width: 1366, height: 768 });
     await loginAsAdmin(page);
 
-    // Navigate to /login while authenticated
-    await page.goto('/login');
+    // Helper for internal SPA navigation to keep in-memory tokens & auth state intact
+    const spaNavigate = async (targetPath) => {
+      await page.evaluate((path) => {
+        window.history.pushState({}, '', path);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      }, targetPath);
+    };
+
+    // Navigate to /login via internal SPA navigation while authenticated
+    await spaNavigate('/login');
     await expect(page).toHaveURL(/\/login/);
     await expect(page.locator('aside[aria-label="Thanh điều hướng chính"]')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Đăng nhập AssetHub' })).toBeVisible();
 
-    // Navigate to /register while authenticated
-    await page.goto('/register');
+    // Navigate to /register via internal SPA navigation while authenticated
+    await spaNavigate('/register');
     await expect(page).toHaveURL(/\/register/);
     await expect(page.locator('aside[aria-label="Thanh điều hướng chính"]')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Đăng ký tài khoản' })).toBeVisible();
+
+    // Return to /dashboard via SPA navigation to confirm in-memory auth session remained alive
+    await spaNavigate('/dashboard');
+    await expect(page).toHaveURL(/\/dashboard/);
+    await expect(page.locator('aside[aria-label="Thanh điều hướng chính"]')).toBeVisible();
   });
 });

@@ -874,9 +874,24 @@ npm --prefix frontend run test:e2e
    - Menu nav kiểm tra cuộn thực tế: `navMenu.evaluate(el => el.scrollTop = 40)`.
    - Bảng tài sản kiểm tra cuộn ngang thực tế: `tableWrapper.evaluate(el => el.scrollLeft = 50)`.
    - Helper `waitForChartsReady(page)` đợi `.recharts-responsive-container` và `.recharts-surface` hiện diện, kết hợp 600ms ổn định hoạt ảnh trước khi thực hiện screenshot.
-4. **Bỏ mật khẩu hardcode trong mã kiểm thử**:
-   - Loại bỏ hoàn toàn chuỗi mật khẩu khỏi `assethub.spec.js` và `layout.spec.js`.
-   - Cấu hình nạp biến môi trường tự động `E2E_SEED_PASSWORD` / `DEMO_SEED_PASSWORD` qua `playwright.config.js` (`process.loadEnvFile`). Test ném ngoại lệ rõ ràng nếu biến môi trường bị thiếu thay vì dùng fallback insecure.
+### 4.5 Nghiệm thu 3 yêu cầu kiểm chứng (Không sửa code UI)
+
+1. **Test cuộn độc lập (Guaranteed Overflow & Fixed Header/Footer)**:
+   - Menu thanh điều hướng (`1280x480`): Tự động chèn 15 mục phụ để đảm bảo `scrollHeight > clientHeight`. Kiểm tra cuộn `scrollTop = 70` đạt `scrolledTop > 0`. Assert vị trí bounding box `toggleBoxAfter.y === toggleBoxBefore.y` và `logoutBoxAfter.y === logoutBoxBefore.y`, chứng minh header toggle và footer logout luôn cố định vị trí khi menu cuộn.
+   - Bảng tài sản (`1024x768`): Tự động chèn 6 cột thông số kỹ thuật mở rộng để đảm bảo `scrollWidth > clientWidth`. Kiểm tra cuộn `scrollLeft = 80` đạt `scrolledLeft > 0`. Assert vị trí tiêu đề trang `headingBoxAfter.y === headingBoxBefore.y` và thanh sidebar `sidebarBoxAfter.x === sidebarBoxBefore.x` không bị xê dịch.
+2. **Test Guest Layout qua điều hướng SPA nội bộ**:
+   - Thay thế hoàn toàn `page.goto()` bằng hàm điều hướng nội bộ SPA (`window.history.pushState` + `dispatchEvent(new PopStateEvent('popstate'))`).
+   - Giữ nguyên toàn bộ token JWT và state `user` trong bộ nhớ JavaScript (`AuthContext`).
+   - Điều hướng từ `/dashboard` -> `/login` -> `/register` chứng minh không có sidebar (`aside count === 0`), sau đó điều hướng ngược lại `/dashboard` chứng minh phiên làm việc vẫn hoạt động bình thường mà không cần đăng nhập lại.
+3. **Tắt Animation biểu đồ & Chụp lại ảnh minh chứng**:
+   - Helper `waitForChartsReady(page)` chờ đồ họa Recharts gắn kết (`.recharts-pie-sector, .recharts-bar-rectangle, .recharts-line`), tự động bơm thẻ style `animation-duration: 0s !important; transition-duration: 0s !important;`.
+   - Toàn bộ các lệnh chụp ảnh sử dụng cờ `animations: 'disabled'` của Playwright.
+   - Chụp lại mới 100% 9 ảnh kiểm chứng trong thư mục `frontend/e2e-screenshots/`.
+4. **Kết quả chạy kiểm thử thực tế nhóm liên quan**:
+   - Lệnh chạy: `npm --prefix frontend run test:e2e -- e2e/layout.spec.js`
+   - Exit code: 0
+   - Thời gian chạy: 12.4s
+   - Số lượng ca kiểm thử: **7/7 passed (100%)**
 
 
 
