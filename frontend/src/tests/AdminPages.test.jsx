@@ -1045,4 +1045,194 @@ describe('Admin Management Pages Tests', () => {
     expect(screen.getByText('Monitor Latest')).toBeInTheDocument();
     expect(screen.queryByText('Laptop Stale')).toBeNull();
   });
+
+  it('UserAdminPage recovers automatically from 404 Invalid page when records decrease', async () => {
+    let records = Array.from({ length: 16 }, (_, i) => ({
+      id: i + 1,
+      username: `user_${i + 1}`,
+      email: `user_${i + 1}@example.com`,
+      full_name: `User ${i + 1}`,
+      role: 'USER',
+      department_id: 1,
+      department_name: 'Phòng IT',
+      department_code: 'IT',
+      is_active: true,
+    }));
+
+    server.use(
+      http.get('/api/users/', ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('all') === 'true') {
+          return HttpResponse.json(records);
+        }
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const totalPages = Math.ceil(records.length / pageSize) || 1;
+
+        if (page > totalPages) {
+          return HttpResponse.json({ detail: 'Invalid page.' }, { status: 404 });
+        }
+
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: records.length,
+          total_pages: totalPages,
+          current_page: page,
+          page_size: pageSize,
+          results: records.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <UserAdminPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('User 1')).toBeInTheDocument();
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 16 bản ghi/i)).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    await userEvent.click(nextBtn);
+    expect(await screen.findByText('User 16')).toBeInTheDocument();
+    expect(screen.getByText(/Đang xem 16–16 trên tổng 16 bản ghi/i)).toBeInTheDocument();
+
+    // Data drops to 15 items
+    records = records.slice(0, 15);
+
+    const refreshBtn = screen.getByRole('button', { name: /Làm mới/i });
+    await userEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('User 1')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 15 bản ghi/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('DepartmentPage recovers automatically from 404 Invalid page when records decrease', async () => {
+    let records = Array.from({ length: 16 }, (_, i) => ({
+      id: i + 1,
+      code: `DP${i + 1}`,
+      name: `Phòng Ban ${i + 1}`,
+      description: `Mô tả ${i + 1}`,
+    }));
+
+    server.use(
+      http.get('/api/departments/', ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('all') === 'true') {
+          return HttpResponse.json(records);
+        }
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const totalPages = Math.ceil(records.length / pageSize) || 1;
+
+        if (page > totalPages) {
+          return HttpResponse.json({ detail: 'Invalid page.' }, { status: 404 });
+        }
+
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: records.length,
+          total_pages: totalPages,
+          current_page: page,
+          page_size: pageSize,
+          results: records.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <DepartmentPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Phòng Ban 1')).toBeInTheDocument();
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 16 bản ghi/i)).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    await userEvent.click(nextBtn);
+    expect(await screen.findByText('Phòng Ban 16')).toBeInTheDocument();
+    expect(screen.getByText(/Đang xem 16–16 trên tổng 16 bản ghi/i)).toBeInTheDocument();
+
+    // Data drops to 15 items
+    records = records.slice(0, 15);
+
+    const refreshBtn = screen.getByRole('button', { name: /Làm mới/i });
+    await userEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Phòng Ban 1')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 15 bản ghi/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('CategoryPage recovers automatically from 404 Invalid page when records decrease', async () => {
+    let records = Array.from({ length: 16 }, (_, i) => ({
+      id: i + 1,
+      name: `Category ${i + 1}`,
+      description: `Description ${i + 1}`,
+    }));
+
+    server.use(
+      http.get('/api/categories/', ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('all') === 'true') {
+          return HttpResponse.json(records);
+        }
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const totalPages = Math.ceil(records.length / pageSize) || 1;
+
+        if (page > totalPages) {
+          return HttpResponse.json({ detail: 'Invalid page.' }, { status: 404 });
+        }
+
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: records.length,
+          total_pages: totalPages,
+          current_page: page,
+          page_size: pageSize,
+          results: records.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <CategoryPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Category 1')).toBeInTheDocument();
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 16 bản ghi/i)).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    await userEvent.click(nextBtn);
+    expect(await screen.findByText('Category 16')).toBeInTheDocument();
+    expect(screen.getByText(/Đang xem 16–16 trên tổng 16 bản ghi/i)).toBeInTheDocument();
+
+    // Data drops to 15 items
+    records = records.slice(0, 15);
+
+    const refreshBtn = screen.getByRole('button', { name: /Làm mới/i });
+    await userEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Category 1')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 15 bản ghi/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });

@@ -41,17 +41,15 @@ const CreateRequestModal = ({
         setAvailableCategories(categories);
       }
 
-      if (heldAssets.length === 0) {
-        axiosClient
-          .get('/api/assets/', { params: { all: 'true' } })
-          .then((res) => {
-            const list = Array.isArray(res.data) ? res.data : res.data.results || [];
-            setUserAssets(list);
-          })
-          .catch(() => {});
-      } else {
-        setUserAssets(heldAssets);
-      }
+      axiosClient
+        .get('/api/assets/', { params: { all: 'true' } })
+        .then((res) => {
+          const list = Array.isArray(res.data) ? res.data : res.data.results || [];
+          setUserAssets(list);
+        })
+        .catch(() => {
+          setUserAssets(heldAssets);
+        });
     }
   }, [isOpen, initialType, initialAssetId, categories, heldAssets]);
 

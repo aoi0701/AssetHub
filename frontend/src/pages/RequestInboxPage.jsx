@@ -82,10 +82,13 @@ const RequestInboxPage = () => {
           setTotalCount(0);
           setTotalPages(1);
         }
-      } catch {
-        if (active) {
-          setErrorAlert('Không thể tải danh sách phiếu yêu cầu. Vui lòng thử lại.');
+      } catch (err) {
+        if (!active) return;
+        if (err.response?.status === 404 && currentPage > 1) {
+          setCurrentPage((prev) => (prev > 1 ? prev - 1 : 1));
+          return;
         }
+        setErrorAlert('Không thể tải danh sách phiếu yêu cầu. Vui lòng thử lại.');
       } finally {
         if (active) {
           setLoading(false);
@@ -256,10 +259,10 @@ const RequestInboxPage = () => {
                 <th className="px-4 py-3 whitespace-nowrap">Mã phiếu</th>
                 <th className="px-4 py-3 whitespace-nowrap">Loại yêu cầu</th>
                 {isStaff && <th className="px-4 py-3 whitespace-nowrap">Người yêu cầu</th>}
-                <th className="px-4 py-3 min-w-[160px]">Mục tiêu yêu cầu</th>
-                <th className="px-4 py-3 min-w-[180px]">Lý do</th>
+                <th className="px-4 py-3">Mục tiêu yêu cầu</th>
+                <th className="px-4 py-3">Lý do</th>
                 <th className="px-4 py-3 whitespace-nowrap">Trạng thái</th>
-                <th className="sticky right-0 bg-slate-50 px-4 py-3 text-right whitespace-nowrap min-w-[210px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10">
+                <th className="px-4 py-3 text-right whitespace-nowrap">
                   Thao tác
                 </th>
               </tr>
@@ -366,14 +369,14 @@ const RequestInboxPage = () => {
                           </div>
                         )}
                       </td>
-                      <td className="sticky right-0 bg-white group-hover:bg-slate-50/90 px-4 py-3.5 whitespace-nowrap text-right min-w-[210px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10 transition-colors">
-                        <div className="flex items-center justify-end gap-2">
+                      <td className="px-4 py-3.5 whitespace-nowrap text-right">
+                        <div className="flex items-center justify-end gap-1.5">
                           {/* Manager/Admin review button if PENDING */}
                           {isStaff && req.status === 'PENDING' && (
                             <button
                               type="button"
                               onClick={() => setReviewingRequest(req)}
-                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors shrink-0"
+                              className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors shrink-0"
                             >
                               Xét duyệt
                             </button>

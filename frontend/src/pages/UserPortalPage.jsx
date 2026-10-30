@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axiosClient from '../api/axiosClient';
 import AssetStatusBadge from '../components/AssetStatusBadge';
 import CreateRequestModal from '../components/CreateRequestModal';
+import Pagination from '../components/Pagination';
 import { Package, Plus, AlertCircle, CheckCircle, RefreshCw, AlertTriangle, CornerDownLeft } from 'lucide-react';
 
 const UserPortalPage = () => {
@@ -11,30 +12,76 @@ const UserPortalPage = () => {
   const [errorAlert, setErrorAlert] = useState('');
   const [successAlert, setSuccessAlert] = useState('');
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(15);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
   // Create Request Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalType, setModalType] = useState('ALLOCATE');
   const [modalAssetId, setModalAssetId] = useState('');
 
-  const fetchAssets = useCallback(async () => {
+  const fetchAssets = useCallback(async (isCancelled) => {
+    const isAborted = typeof isCancelled === 'function' ? isCancelled : () => false;
     setLoading(true);
     setErrorAlert('');
     try {
-      const res = await axiosClient.get('/api/assets/');
-      setAssets(Array.isArray(res.data) ? res.data : res.data.results || []);
-    } catch {
-      setErrorAlert('Không thể tải danh sách tài sản của bạn. Vui lòng thử lại.');
+      const res = await axiosClient.get('/api/assets/', {
+        params: { page: currentPage, page_size: pageSize },
+      });
+      if (isAborted()) return;
+
+      if (res.data && Array.isArray(res.data.results)) {
+        setAssets(res.data.results);
+        setTotalCount(res.data.count || 0);
+        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
+      } else if (Array.isArray(res.data)) {
+        setAssets(res.data);
+        setTotalCount(res.data.length);
+        setTotalPages(1);
+      } else {
+        setAssets([]);
+        setTotalCount(0);
+        setTotalPages(1);
+      }
+    } catch (err) {
+      if (isAborted()) return;
+      if (err.response?.status === 404 && currentPage > 1) {
+        setCurrentPage((prev) => (prev > 1 ? prev - 1 : 1));
+      } else {
+        setErrorAlert('Không thể tải danh sách tài sản của bạn. Vui lòng thử lại.');
+      }
     } finally {
-      setLoading(false);
+      if (!isAborted()) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [currentPage, pageSize]);
 
   useEffect(() => {
-    fetchAssets();
-    axiosClient.get('/api/categories/').then((res) => {
-      setCategories(Array.isArray(res.data) ? res.data : res.data.results || []);
-    }).catch(() => {});
+    let active = true;
+    fetchAssets(() => !active);
+    return () => {
+      active = false;
+    };
   }, [fetchAssets]);
+
+  useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  useEffect(() => {
+    axiosClient
+      .get('/api/categories/')
+      .then((res) => {
+        setCategories(Array.isArray(res.data) ? res.data : res.data.results || []);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleOpenAllocate = () => {
     setModalType('ALLOCATE');
@@ -70,7 +117,7 @@ const UserPortalPage = () => {
 
         <div className="flex items-center space-x-3 self-start sm:self-auto">
           <button
-            onClick={fetchAssets}
+            onClick={() => fetchAssets()}
             className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
           >
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
@@ -198,6 +245,15 @@ const UserPortalPage = () => {
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalCount={totalCount}
+          pageSize={pageSize}
+          onPageChange={(page) => setCurrentPage(page)}
+          loading={loading}
+        />
       </div>
 
       {/* Create Request Modal */}

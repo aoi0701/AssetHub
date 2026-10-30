@@ -108,10 +108,13 @@ const AssetListPage = () => {
           setTotalCount(0);
           setTotalPages(1);
         }
-      } catch {
-        if (active) {
-          setErrorAlert('Không thể tải danh sách tài sản. Vui lòng thử lại.');
+      } catch (err) {
+        if (!active) return;
+        if (err.response?.status === 404 && currentPage > 1) {
+          setCurrentPage((prev) => (prev > 1 ? prev - 1 : 1));
+          return;
         }
+        setErrorAlert('Không thể tải danh sách tài sản. Vui lòng thử lại.');
       } finally {
         if (active) {
           setLoading(false);
@@ -298,7 +301,7 @@ const AssetListPage = () => {
                 <th className="px-4 py-3 whitespace-nowrap">Phòng ban</th>
                 <th className="px-4 py-3 whitespace-nowrap">Người đang giữ</th>
                 <th className="px-4 py-3 whitespace-nowrap">Trạng thái</th>
-                <th className="sticky right-0 bg-slate-50 px-4 py-3 text-right whitespace-nowrap min-w-[100px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10">
+                <th className="px-4 py-3 text-right whitespace-nowrap min-w-[100px]">
                   Chi tiết
                 </th>
               </tr>
@@ -369,7 +372,7 @@ const AssetListPage = () => {
                     <td className="px-4 py-3.5 whitespace-nowrap">
                       <AssetStatusBadge status={asset.status} />
                     </td>
-                    <td className="sticky right-0 bg-white group-hover:bg-slate-50/90 px-4 py-3.5 whitespace-nowrap text-right min-w-[100px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10 transition-colors">
+                    <td className="px-4 py-3.5 whitespace-nowrap text-right min-w-[100px] transition-colors">
                       <Link
                         to={`/assets/${asset.id}`}
                         onClick={(e) => e.stopPropagation()}

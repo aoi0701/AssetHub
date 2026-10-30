@@ -79,8 +79,12 @@ const UserAdminPage = () => {
         setTotalCount(0);
         setTotalPages(1);
       }
-    } catch {
+    } catch (err) {
       if (isAborted() || currentReqId !== reqIdRef.current) return;
+      if (err.response?.status === 404 && currentPage > 1) {
+        setCurrentPage((prev) => (prev > 1 ? prev - 1 : 1));
+        return;
+      }
       setErrorAlert('Không thể tải danh sách người dùng. Vui lòng thử lại.');
     } finally {
       if (!isAborted() && currentReqId === reqIdRef.current) {

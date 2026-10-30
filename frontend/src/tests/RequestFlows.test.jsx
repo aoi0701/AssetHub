@@ -517,4 +517,72 @@ describe('RequestFlows Integration Tests', () => {
     });
     expect(screen.getByText(/Đang xem 1–5 trên tổng 5 bản ghi/i)).toBeInTheDocument();
   });
+
+  it('recovers automatically from 404 Invalid page when records decrease and currentPage no longer exists', async () => {
+    let records = Array.from({ length: 16 }, (_, i) => ({
+      id: i + 1,
+      request_code: `REQ-202610-${String(i + 1).padStart(4, '0')}`,
+      request_type: 'ALLOCATE',
+      requester_name: `Employee ${i + 1}`,
+      requester_username: `emp_${i + 1}`,
+      department_name: 'Phòng IT',
+      department_code: 'IT',
+      requested_category_name: 'Laptop',
+      reason: `Project work ${i + 1}`,
+      status: 'PENDING',
+      created_at: '2026-10-01T00:00:00Z',
+    }));
+
+    server.use(
+      http.get('/api/requests/', ({ request }) => {
+        const url = new URL(request.url);
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const totalPages = Math.ceil(records.length / pageSize) || 1;
+
+        if (page > totalPages) {
+          return HttpResponse.json({ detail: 'Invalid page.' }, { status: 404 });
+        }
+
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: records.length,
+          total_pages: totalPages,
+          current_page: page,
+          page_size: pageSize,
+          results: records.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <RequestInboxPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('REQ-202610-0001')).toBeInTheDocument();
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 16 bản ghi/i)).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    await userEvent.click(nextBtn);
+    expect(await screen.findByText('REQ-202610-0016')).toBeInTheDocument();
+    expect(screen.getByText(/Đang xem 16–16 trên tổng 16 bản ghi/i)).toBeInTheDocument();
+
+    // Data drops from 16 to 15 items (totalPages becomes 1)
+    records = records.slice(0, 15);
+
+    // Refresh triggers fetch with page=2, which returns 404
+    const refreshBtn = screen.getByRole('button', { name: /Làm mới/i });
+    await userEvent.click(refreshBtn);
+
+    // RequestInboxPage catches 404 and recovers back to page 1 without showing error alert
+    await waitFor(() => {
+      expect(screen.getByText('REQ-202610-0001')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 15 bản ghi/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });
