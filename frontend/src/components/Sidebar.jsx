@@ -19,7 +19,15 @@ const STORAGE_KEY = 'assethub_sidebar_collapsed';
 
 const getInitialCollapsed = () => {
   try {
-    return localStorage.getItem(STORAGE_KEY) === 'true';
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored !== null) {
+      return stored === 'true';
+    }
+    // Default collapsed on smaller screens (< 1024px) to preserve data table space
+    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }

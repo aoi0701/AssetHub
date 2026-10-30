@@ -111,6 +111,18 @@ const UserAdminPage = () => {
     }
   }, [currentPage, totalPages]);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && editingUser && !modalLoading) {
+        setEditingUser(null);
+      }
+    };
+    if (editingUser) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [editingUser, modalLoading]);
+
   const handleToggleActive = async (targetUser) => {
     if (!isAdmin) return;
     setErrorAlert('');
@@ -449,22 +461,40 @@ const UserAdminPage = () => {
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          aria-labelledby="user-modal-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !modalLoading) setEditingUser(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150"
         >
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100">
-            <h3 className="text-lg font-bold text-gray-900 mb-1">
-              Phân quyền & Phòng ban
-            </h3>
-            <p className="text-xs text-gray-500 mb-4">
-              Cập nhật vai trò và phòng ban cho người dùng: <strong>{editingUser.username}</strong>
-            </p>
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200/90">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 id="user-modal-title" className="text-lg font-bold text-slate-900">
+                  Phân quyền & Phòng ban
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Cập nhật vai trò và phòng ban cho người dùng: <strong>{editingUser.username}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingUser(null)}
+                disabled={modalLoading}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label="Đóng"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
             {modalError && (
               <div
                 role="alert"
-                className="mb-4 p-3 bg-red-50 border-l-4 border-red-500 rounded-r-lg text-xs text-red-700"
+                className="mb-4 p-3 bg-rose-50 border-l-4 border-rose-500 rounded-r-lg text-xs text-rose-700 flex items-start space-x-2"
               >
-                {modalError}
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-500" />
+                <div className="flex-1">{modalError}</div>
               </div>
             )}
 
@@ -472,7 +502,7 @@ const UserAdminPage = () => {
               <div>
                 <label
                   htmlFor="modal_role"
-                  className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+                  className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
                 >
                   Vai trò
                 </label>
@@ -480,7 +510,7 @@ const UserAdminPage = () => {
                   id="modal_role"
                   value={modalRole}
                   onChange={(e) => setModalRole(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                 >
                   <option value="ADMIN">ADMIN (Quản trị hệ thống)</option>
                   <option value="MANAGER">MANAGER (Quản lý phòng ban)</option>
@@ -491,7 +521,7 @@ const UserAdminPage = () => {
               <div>
                 <label
                   htmlFor="modal_department"
-                  className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+                  className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
                 >
                   Phòng ban
                 </label>
@@ -499,7 +529,7 @@ const UserAdminPage = () => {
                   id="modal_department"
                   value={modalDeptId}
                   onChange={(e) => setModalDeptId(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                 >
                   <option value="">-- Không chọn / Chưa gán --</option>
                   {departments.map((dept) => (
@@ -508,25 +538,33 @@ const UserAdminPage = () => {
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-slate-500 mt-1">
                   Nhân viên và Quản lý đang hoạt động bắt buộc phải thuộc một phòng ban.
                 </p>
               </div>
 
-              <div className="flex justify-end space-x-3 pt-3 border-t border-gray-100">
+              <div className="flex justify-end space-x-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setEditingUser(null)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+                  disabled={modalLoading}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:opacity-50"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
                   disabled={modalLoading}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                  className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
                 >
-                  {modalLoading ? 'Đang lưu...' : 'Lưu thay đổi'}
+                  {modalLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" />
+                      Đang lưu...
+                    </>
+                  ) : (
+                    'Lưu thay đổi'
+                  )}
                 </button>
               </div>
             </form>

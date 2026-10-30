@@ -65,7 +65,7 @@ test.describe('AssetHub End-to-End Lifecycle', () => {
 
     // Select IT department (Option with IT / Information Technology)
     const deptSelect = editModal.locator('#modal_department');
-    await deptSelect.selectOption({ label: 'Information Technology (IT)' });
+    await deptSelect.selectOption({ label: 'Phòng Công nghệ thông tin (CNTT)' });
     await editModal.getByRole('button', { name: 'Lưu thay đổi' }).click();
     await expect(editModal).toBeHidden();
 
@@ -109,7 +109,7 @@ test.describe('AssetHub End-to-End Lifecycle', () => {
     // -------------------------------------------------------------------------
     // 4. Manager Review & Approval (ALLOCATE)
     // -------------------------------------------------------------------------
-    await page.fill('#username', 'manager_it');
+    await page.fill('#username', 'tp.it');
     await page.fill('#password', seedPassword);
     await page.click('button[type="submit"]');
 
@@ -169,7 +169,7 @@ test.describe('AssetHub End-to-End Lifecycle', () => {
     // -------------------------------------------------------------------------
     // 6. Manager Return Approval
     // -------------------------------------------------------------------------
-    await page.fill('#username', 'manager_it');
+    await page.fill('#username', 'tp.it');
     await page.fill('#password', seedPassword);
     await page.click('button[type="submit"]');
 

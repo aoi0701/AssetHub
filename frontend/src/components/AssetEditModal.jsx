@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axiosClient from '../api/axiosClient';
-import { X, AlertCircle } from 'lucide-react';
+import { X, AlertCircle, RefreshCw } from 'lucide-react';
 import AssetStatusBadge from './AssetStatusBadge';
 
 const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) => {
@@ -24,6 +24,18 @@ const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) 
       setError('');
     }
   }, [asset]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isOpen && !loading) {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, loading, onClose]);
 
   if (!isOpen || !asset) return null;
 
@@ -91,20 +103,24 @@ const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) 
       role="dialog"
       aria-modal="true"
       aria-labelledby="edit-asset-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !loading) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150"
     >
-      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-gray-100 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+      <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 border border-slate-200/90 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
           <div>
-            <h2 id="edit-asset-title" className="text-lg font-bold text-gray-900">
+            <h2 id="edit-asset-title" className="text-lg font-bold text-slate-900">
               Chỉnh sửa thông tin tài sản
             </h2>
-            <p className="text-xs text-gray-500 font-mono mt-0.5">{asset.asset_code}</p>
+            <p className="text-xs text-slate-500 font-mono mt-0.5">{asset.asset_code}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+            disabled={loading}
+            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
             aria-label="Đóng"
           >
             <X className="w-5 h-5" />
@@ -114,32 +130,32 @@ const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) 
         {error && (
           <div
             role="alert"
-            className="my-4 p-3 bg-red-50 border-l-4 border-red-500 rounded-r-lg flex items-start space-x-2 text-xs text-red-700"
+            className="my-4 p-3 bg-rose-50 border-l-4 border-rose-500 rounded-r-lg flex items-start space-x-2 text-xs text-rose-700"
           >
-            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-500" />
             <div className="flex-1">{error}</div>
           </div>
         )}
 
         {/* Read-only system properties */}
-        <div className="my-4 p-3 bg-gray-50 rounded-lg border border-gray-200 grid grid-cols-2 gap-2 text-xs">
+        <div className="my-4 p-3 bg-slate-50 rounded-lg border border-slate-200/90 grid grid-cols-2 gap-2 text-xs">
           <div>
-            <span className="text-gray-500">Mã tài sản:</span>{' '}
-            <span className="font-semibold text-gray-800">{asset.asset_code}</span>
+            <span className="text-slate-500">Mã tài sản:</span>{' '}
+            <span className="font-semibold text-slate-800 font-mono">{asset.asset_code}</span>
           </div>
           <div>
-            <span className="text-gray-500">Trạng thái:</span>{' '}
+            <span className="text-slate-500">Trạng thái:</span>{' '}
             <AssetStatusBadge status={asset.status} />
           </div>
           <div>
-            <span className="text-gray-500">Phòng ban:</span>{' '}
-            <span className="font-medium text-gray-800">
+            <span className="text-slate-500">Phòng ban:</span>{' '}
+            <span className="font-medium text-slate-800">
               {asset.department_name || 'Kho công ty (Chưa gán)'}
             </span>
           </div>
           <div>
-            <span className="text-gray-500">Người giữ:</span>{' '}
-            <span className="font-medium text-gray-800">
+            <span className="text-slate-500">Người giữ:</span>{' '}
+            <span className="font-medium text-slate-800">
               {asset.assigned_to_user_name || 'Không có'}
             </span>
           </div>
@@ -149,16 +165,16 @@ const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) 
           <div>
             <label
               htmlFor="edit-asset-name"
-              className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+              className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
             >
-              Tên tài sản <span className="text-red-500">*</span>
+              Tên tài sản <span className="text-rose-500">*</span>
             </label>
             <input
               id="edit-asset-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
               required
             />
           </div>
@@ -166,15 +182,15 @@ const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) 
           <div>
             <label
               htmlFor="edit-asset-category"
-              className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+              className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
             >
-              Danh mục <span className="text-red-500">*</span>
+              Danh mục <span className="text-rose-500">*</span>
             </label>
             <select
               id="edit-asset-category"
               value={categoryId}
               onChange={(e) => setCategoryId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
               required
             >
               <option value="">-- Chọn danh mục --</option>
@@ -189,7 +205,7 @@ const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) 
           <div>
             <label
               htmlFor="edit-asset-serial"
-              className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+              className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
             >
               Số serial
             </label>
@@ -198,14 +214,14 @@ const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) 
               type="text"
               value={serialNumber}
               onChange={(e) => setSerialNumber(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors font-mono"
             />
           </div>
 
           <div>
             <label
               htmlFor="edit-asset-spec"
-              className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+              className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
             >
               Thông số kỹ thuật
             </label>
@@ -214,25 +230,32 @@ const AssetEditModal = ({ isOpen, onClose, onSuccess, asset, categories = [] }) 
               rows={3}
               value={specificationText}
               onChange={(e) => setSpecificationText(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors resize-none"
             />
           </div>
 
-          <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
+          <div className="flex justify-end space-x-3 pt-4 border-t border-slate-100">
             <button
               type="button"
               onClick={onClose}
               disabled={loading}
-              className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors focus:outline-none focus:ring-2 focus:ring-slate-400"
             >
               Hủy
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+              className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
-              {loading ? 'Đang lưu...' : 'Lưu thay đổi'}
+              {loading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" />
+                  Đang lưu...
+                </>
+              ) : (
+                'Lưu thay đổi'
+              )}
             </button>
           </div>
         </form>

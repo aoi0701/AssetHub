@@ -92,6 +92,18 @@ const DepartmentPage = () => {
     }
   }, [currentPage, totalPages]);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isModalOpen && !modalLoading) {
+        setIsModalOpen(false);
+      }
+    };
+    if (isModalOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isModalOpen, modalLoading]);
+
   const handleOpenCreateModal = () => {
     setEditingDept(null);
     setModalForm({
@@ -364,24 +376,42 @@ const DepartmentPage = () => {
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          aria-labelledby="dept-modal-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !modalLoading) setIsModalOpen(false);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150"
         >
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100">
-            <h3 className="text-lg font-bold text-gray-900 mb-1">
-              {editingDept ? 'Chỉnh sửa phòng ban' : 'Tạo phòng ban mới'}
-            </h3>
-            <p className="text-xs text-gray-500 mb-4">
-              {editingDept
-                ? `Cập nhật thông tin phòng ban ${editingDept.name}`
-                : 'Thêm phòng ban mới vào hệ thống AssetHub'}
-            </p>
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200/90">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 id="dept-modal-title" className="text-lg font-bold text-slate-900">
+                  {editingDept ? 'Chỉnh sửa phòng ban' : 'Tạo phòng ban mới'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {editingDept
+                    ? `Cập nhật thông tin phòng ban ${editingDept.name}`
+                    : 'Thêm phòng ban mới vào hệ thống AssetHub'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                disabled={modalLoading}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label="Đóng"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
             {modalError && (
               <div
                 role="alert"
-                className="mb-4 p-3 bg-red-50 border-l-4 border-red-500 rounded-r-lg text-xs text-red-700"
+                className="mb-4 p-3 bg-rose-50 border-l-4 border-rose-500 rounded-r-lg text-xs text-rose-700 flex items-start space-x-2"
               >
-                {modalError}
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-500" />
+                <div className="flex-1">{modalError}</div>
               </div>
             )}
 
@@ -389,9 +419,9 @@ const DepartmentPage = () => {
               <div>
                 <label
                   htmlFor="dept_code"
-                  className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+                  className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
                 >
-                  Mã phòng ban <span className="text-red-500">*</span>
+                  Mã phòng ban <span className="text-rose-500">*</span>
                 </label>
                 <input
                   id="dept_code"
@@ -402,16 +432,16 @@ const DepartmentPage = () => {
                     setModalForm((prev) => ({ ...prev, code: e.target.value.toUpperCase() }))
                   }
                   placeholder="vd: IT, HR, FIN"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono text-slate-800 uppercase focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                 />
               </div>
 
               <div>
                 <label
                   htmlFor="dept_name"
-                  className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+                  className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
                 >
-                  Tên phòng ban <span className="text-red-500">*</span>
+                  Tên phòng ban <span className="text-rose-500">*</span>
                 </label>
                 <input
                   id="dept_name"
@@ -422,14 +452,14 @@ const DepartmentPage = () => {
                     setModalForm((prev) => ({ ...prev, name: e.target.value }))
                   }
                   placeholder="vd: Phòng Công nghệ Thông tin"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                 />
               </div>
 
               <div>
                 <label
                   htmlFor="dept_description"
-                  className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1"
+                  className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1"
                 >
                   Mô tả
                 </label>
@@ -441,24 +471,32 @@ const DepartmentPage = () => {
                     setModalForm((prev) => ({ ...prev, description: e.target.value }))
                   }
                   placeholder="Mô tả chức năng nhiệm vụ của phòng ban..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors resize-none"
                 />
               </div>
 
-              <div className="flex justify-end space-x-3 pt-3 border-t border-gray-100">
+              <div className="flex justify-end space-x-3 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+                  disabled={modalLoading}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:opacity-50"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
                   disabled={modalLoading}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                  className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
                 >
-                  {modalLoading ? 'Đang lưu...' : 'Lưu phòng ban'}
+                  {modalLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" />
+                      Đang lưu...
+                    </>
+                  ) : (
+                    'Lưu phòng ban'
+                  )}
                 </button>
               </div>
             </form>

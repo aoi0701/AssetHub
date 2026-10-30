@@ -110,6 +110,18 @@ const RequestInboxPage = () => {
     }
   }, [currentPage, totalPages]);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && viewingDetail) {
+        setViewingDetail(null);
+      }
+    };
+    if (viewingDetail) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [viewingDetail]);
+
   const hasActiveFilters = Boolean(statusFilter || typeFilter);
 
   const handleClearFilters = () => {
@@ -441,44 +453,58 @@ const RequestInboxPage = () => {
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          aria-labelledby="request-detail-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setViewingDetail(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150"
         >
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-gray-100">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">
-              Phiếu yêu cầu #{viewingDetail.request_code}
-            </h3>
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200/90">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 mb-2">
+              <h3 id="request-detail-title" className="text-lg font-bold text-slate-900">
+                Phiếu yêu cầu #{viewingDetail.request_code}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setViewingDetail(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label="Đóng"
+              >
+                ×
+              </button>
+            </div>
 
-            <div className="space-y-2 text-xs py-2 text-gray-700 border-t border-b border-gray-100">
+            <div className="space-y-2 text-xs py-2 text-slate-700 border-b border-slate-100">
               <div className="flex justify-between">
-                <span className="text-gray-400">Loại:</span>
-                <span className="font-semibold">{requestTypeLabels[viewingDetail.request_type]}</span>
+                <span className="text-slate-500">Loại:</span>
+                <span className="font-semibold text-slate-900">{requestTypeLabels[viewingDetail.request_type]}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-400">Người gửi:</span>
-                <span className="font-medium">{viewingDetail.requester_name || viewingDetail.requester_username}</span>
+                <span className="text-slate-500">Người gửi:</span>
+                <span className="font-medium text-slate-900">{viewingDetail.requester_name || viewingDetail.requester_username}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-400">Phòng ban:</span>
-                <span>{viewingDetail.department_name}</span>
+                <span className="text-slate-500">Phòng ban:</span>
+                <span className="text-slate-800">{viewingDetail.department_name}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-400">Trạng thái:</span>
-                <span className="font-semibold">{viewingDetail.status}</span>
+                <span className="text-slate-500">Trạng thái:</span>
+                <span className="font-semibold text-slate-900">{viewingDetail.status}</span>
               </div>
               <div>
-                <span className="text-gray-400 block mb-0.5">Lý do:</span>
-                <p className="p-2 bg-gray-50 rounded text-gray-800">{viewingDetail.reason}</p>
+                <span className="text-slate-500 block mb-0.5">Lý do:</span>
+                <p className="p-2.5 bg-slate-50 border border-slate-100 rounded-lg text-slate-800 italic">"{viewingDetail.reason}"</p>
               </div>
 
               {viewingDetail.rejection_reason && (
                 <div>
-                  <span className="text-rose-500 font-semibold block mb-0.5">Lý do từ chối:</span>
-                  <p className="p-2 bg-rose-50 rounded text-rose-800">{viewingDetail.rejection_reason}</p>
+                  <span className="text-rose-600 font-semibold block mb-0.5">Lý do từ chối:</span>
+                  <p className="p-2.5 bg-rose-50 border border-rose-100 rounded-lg text-rose-800">{viewingDetail.rejection_reason}</p>
                 </div>
               )}
 
               {viewingDetail.reviewed_by_name && (
-                <div className="flex justify-between pt-1 text-[11px] text-gray-400">
+                <div className="flex justify-between pt-1 text-[11px] text-slate-400">
                   <span>Người duyệt: {viewingDetail.reviewed_by_name}</span>
                   <span>{new Date(viewingDetail.reviewed_at).toLocaleDateString('vi-VN')}</span>
                 </div>
@@ -489,7 +515,7 @@ const RequestInboxPage = () => {
               <button
                 type="button"
                 onClick={() => setViewingDetail(null)}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-400"
               >
                 Đóng
               </button>

@@ -168,32 +168,33 @@ const UserPortalPage = () => {
       )}
 
       {/* Assets List Table */}
-      <div className="mt-6 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="mt-6 bg-white border border-slate-200/90 rounded-xl shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
-            <thead className="bg-gray-50 text-gray-700 font-semibold">
+          <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="bg-slate-50 text-slate-600 font-semibold">
               <tr>
-                <th className="px-6 py-3">Mã tài sản</th>
-                <th className="px-6 py-3">Tên tài sản</th>
-                <th className="px-6 py-3">Danh mục</th>
-                <th className="px-6 py-3">Số Serial</th>
-                <th className="px-6 py-3">Trạng thái</th>
-                <th className="px-6 py-3 text-right">Thao tác</th>
+                <th className="px-5 py-3 whitespace-nowrap">Mã tài sản</th>
+                <th className="px-5 py-3 whitespace-nowrap">Tên tài sản</th>
+                <th className="px-5 py-3 whitespace-nowrap">Danh mục</th>
+                <th className="px-5 py-3 whitespace-nowrap">Số Serial</th>
+                <th className="px-5 py-3 whitespace-nowrap">Trạng thái</th>
+                <th className="px-5 py-3 text-right whitespace-nowrap min-w-[180px]">Thao tác</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
+            <tbody className="divide-y divide-slate-100 bg-white">
               {assets.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
                     {loading ? (
                       'Đang tải dữ liệu...'
                     ) : (
                       <div className="space-y-2">
-                        <p>Bạn hiện chưa được bàn giao tài sản nào.</p>
+                        <p className="text-slate-600">Bạn hiện chưa được bàn giao tài sản nào.</p>
                         <button
                           onClick={handleOpenAllocate}
-                          className="text-blue-600 font-medium hover:underline text-xs"
+                          className="text-blue-600 font-medium hover:underline text-xs inline-flex items-center"
                         >
+                          <Plus className="w-3.5 h-3.5 mr-1" />
                           Gửi yêu cầu cấp phát tài sản mới ngay
                         </button>
                       </div>
@@ -202,42 +203,44 @@ const UserPortalPage = () => {
                 </tr>
               ) : (
                 assets.map((asset) => (
-                  <tr key={asset.id} className="hover:bg-gray-50/80 transition-colors">
-                    <td className="px-6 py-4 whitespace-nowrap font-mono font-semibold text-blue-600">
+                  <tr key={asset.id} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="px-5 py-3.5 whitespace-nowrap font-mono font-semibold text-blue-600">
                       {asset.asset_code}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="font-medium text-gray-900">{asset.name}</div>
+                    <td className="px-5 py-3.5 whitespace-nowrap">
+                      <div className="font-medium text-slate-900">{asset.name}</div>
                       {asset.department_name && (
-                        <div className="text-xs text-gray-400">
+                        <div className="text-xs text-slate-400">
                           {asset.department_name} ({asset.department_code})
                         </div>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-gray-700">
+                    <td className="px-5 py-3.5 whitespace-nowrap text-slate-600">
                       {asset.category_name || '-'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap font-mono text-gray-600 text-xs">
+                    <td className="px-5 py-3.5 whitespace-nowrap font-mono text-slate-600 text-xs">
                       {asset.serial_number || 'N/A'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-5 py-3.5 whitespace-nowrap">
                       <AssetStatusBadge status={asset.status} />
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
-                      <button
-                        onClick={() => handleOpenDamageReport(asset.id)}
-                        className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 rounded border border-amber-200 transition-colors"
-                      >
-                        <AlertTriangle className="w-3.5 h-3.5 mr-1 text-amber-600" />
-                        Báo hỏng
-                      </button>
-                      <button
-                        onClick={() => handleOpenReturn(asset.id)}
-                        className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 transition-colors"
-                      >
-                        <CornerDownLeft className="w-3.5 h-3.5 mr-1 text-blue-600" />
-                        Trả tài sản
-                      </button>
+                    <td className="px-5 py-3.5 whitespace-nowrap text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => handleOpenDamageReport(asset.id)}
+                          className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100/80 rounded-lg border border-amber-200 transition-colors shadow-2xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        >
+                          <AlertTriangle className="w-3.5 h-3.5 mr-1 text-amber-600" />
+                          Báo hỏng
+                        </button>
+                        <button
+                          onClick={() => handleOpenReturn(asset.id)}
+                          className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white hover:text-blue-700 hover:bg-blue-50/70 rounded-lg border border-slate-200/90 transition-colors shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <CornerDownLeft className="w-3.5 h-3.5 mr-1 text-slate-500" />
+                          Trả tài sản
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
