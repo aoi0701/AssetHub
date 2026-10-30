@@ -188,17 +188,29 @@ def test_personal_history_unauthenticated(client):
 
 
 @pytest.mark.django_db
-def test_personal_history_pagination(regular_user, admin_user, dept_it, cat_laptop):
-    """Personal asset history supports PageNumberPagination (20 items per page)."""
-    # Create 25 logs for regular_user
+def test_personal_history_pagination_and_strict_scoping(
+    regular_user, user_hr, admin_user, dept_it, dept_hr, cat_laptop
+):
+    """
+    Verifies backend database-level scoping across pagination:
+    - 25 history events created for regular_user (User A)
+    - 10 history events created for user_hr (User B)
+    - regular_user querying page 1 gets 20 events, count == 25 (NOT 35)
+    - regular_user querying page 2 gets 5 events, count == 25
+    - NEITHER page 1 nor page 2 leaks any asset code or log from user_hr
+    - user_hr querying gets count == 10, zero events from regular_user
+    """
+    # 1. Create 25 logs for regular_user (User A)
+    user_a_codes = []
     for i in range(25):
         asset = Asset.objects.create(
-            asset_code=f"AST-2026-P{i:03d}",
-            name=f"Device {i}",
+            asset_code=f"AST-USER-A-{i:03d}",
+            name=f"Device User A {i}",
             category=cat_laptop,
             department=dept_it,
             status=Asset.Status.AVAILABLE,
         )
+        user_a_codes.append(asset.asset_code)
         AssetHistoryLog.objects.create(
             asset=asset,
             actor=admin_user,
@@ -208,21 +220,76 @@ def test_personal_history_pagination(regular_user, admin_user, dept_it, cat_lapt
             to_user=regular_user,
             from_department=dept_it,
             to_department=dept_it,
-            reason="Bulk testing allocation",
+            reason="Bulk testing allocation User A",
             asset_code_snapshot=asset.asset_code,
             asset_name_snapshot=asset.name,
         )
 
-    user_client = auth_client_for(regular_user)
-    resp_p1 = user_client.get("/api/me/asset-history/")
+    # 2. Create 10 logs for user_hr (User B)
+    user_b_codes = []
+    for j in range(10):
+        asset_b = Asset.objects.create(
+            asset_code=f"AST-SECRET-B-{j:03d}",
+            name=f"Device User B {j}",
+            category=cat_laptop,
+            department=dept_hr,
+            status=Asset.Status.AVAILABLE,
+        )
+        user_b_codes.append(asset_b.asset_code)
+        AssetHistoryLog.objects.create(
+            asset=asset_b,
+            actor=admin_user,
+            action_type=AssetHistoryLog.ActionType.ALLOCATE,
+            from_status=Asset.Status.AVAILABLE,
+            to_status=Asset.Status.IN_USE,
+            to_user=user_hr,
+            from_department=dept_hr,
+            to_department=dept_hr,
+            reason="Secret allocation User B",
+            asset_code_snapshot=asset_b.asset_code,
+            asset_name_snapshot=asset_b.name,
+        )
+
+    # 3. Query as User A - Page 1
+    client_a = auth_client_for(regular_user)
+    resp_p1 = client_a.get("/api/me/asset-history/?page=1")
     assert resp_p1.status_code == 200
-    assert resp_p1.data["count"] == 25
+    assert resp_p1.data["count"] == 25, f"Expected 25 events for User A, got {resp_p1.data['count']}"
     assert len(resp_p1.data["results"]) == 20
     assert resp_p1.data["next"] is not None
 
-    resp_p2 = user_client.get("/api/me/asset-history/?page=2")
+    page1_codes = [item["asset_code_snapshot"] for item in resp_p1.data["results"]]
+    for code in page1_codes:
+        assert code in user_a_codes
+        assert code not in user_b_codes
+
+    # 4. Query as User A - Page 2
+    resp_p2 = client_a.get("/api/me/asset-history/?page=2")
     assert resp_p2.status_code == 200
+    assert resp_p2.data["count"] == 25
     assert len(resp_p2.data["results"]) == 5
+    assert resp_p2.data["next"] is None
+
+    page2_codes = [item["asset_code_snapshot"] for item in resp_p2.data["results"]]
+    for code in page2_codes:
+        assert code in user_a_codes
+        assert code not in user_b_codes
+
+    # Ensure no duplicates across page 1 and page 2, and exact union is 25
+    combined_codes = set(page1_codes) | set(page2_codes)
+    assert len(combined_codes) == 25
+    assert combined_codes == set(user_a_codes)
+
+    # 5. Query as User B - Verify User B only sees their 10 events
+    client_b = auth_client_for(user_hr)
+    resp_b = client_b.get("/api/me/asset-history/")
+    assert resp_b.status_code == 200
+    assert resp_b.data["count"] == 10
+    assert len(resp_b.data["results"]) == 10
+    b_codes = [item["asset_code_snapshot"] for item in resp_b.data["results"]]
+    for code in b_codes:
+        assert code in user_b_codes
+        assert code not in user_a_codes
 
 
 @pytest.mark.django_db

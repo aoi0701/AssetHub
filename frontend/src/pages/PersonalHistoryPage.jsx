@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
+import Pagination from '../components/Pagination';
 import { History, RefreshCw, AlertCircle, Clock } from 'lucide-react';
 
 const PersonalHistoryPage = () => {
@@ -7,22 +8,106 @@ const PersonalHistoryPage = () => {
   const [loading, setLoading] = useState(false);
   const [errorAlert, setErrorAlert] = useState('');
 
-  const fetchHistory = useCallback(async () => {
-    setLoading(true);
-    setErrorAlert('');
-    try {
-      const res = await axiosClient.get('/api/me/asset-history/');
-      setHistoryItems(Array.isArray(res.data) ? res.data : res.data.results || []);
-    } catch {
-      setErrorAlert('Không thể tải nhật ký lịch sử tài sản cá nhân.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(20);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [failedTargetPage, setFailedTargetPage] = useState(null);
+
+  const reqIdRef = useRef(0);
+  const lastLoadedPageRef = useRef(1);
+  const skipFetchRef = useRef(false);
+
+  const fetchHistory = useCallback(
+    async (isCancelled = () => false) => {
+      if (skipFetchRef.current) {
+        skipFetchRef.current = false;
+        return;
+      }
+
+      const isAborted = typeof isCancelled === 'function' ? isCancelled : () => false;
+      const currentReqId = ++reqIdRef.current;
+      const targetPage = currentPage;
+      setLoading(true);
+      setErrorAlert('');
+      setFailedTargetPage(null);
+
+      try {
+        const res = await axiosClient.get('/api/me/asset-history/', {
+          params: { page: targetPage, page_size: pageSize },
+        });
+        if (isAborted() || currentReqId !== reqIdRef.current) return;
+
+        if (res.data && Array.isArray(res.data.results)) {
+          const count = res.data.count || 0;
+          const total = res.data.total_pages || Math.ceil(count / pageSize) || 1;
+          setHistoryItems(res.data.results);
+          setTotalCount(count);
+          setTotalPages(total);
+          lastLoadedPageRef.current = targetPage;
+          if (targetPage > total && total > 0) {
+            setCurrentPage(total);
+          }
+        } else if (Array.isArray(res.data)) {
+          setHistoryItems(res.data);
+          setTotalCount(res.data.length);
+          setTotalPages(1);
+          lastLoadedPageRef.current = 1;
+        } else {
+          setHistoryItems([]);
+          setTotalCount(0);
+          setTotalPages(1);
+          lastLoadedPageRef.current = 1;
+        }
+      } catch (err) {
+        if (isAborted() || currentReqId !== reqIdRef.current) return;
+        if (err.response?.status === 404 && targetPage > 1) {
+          // 404 recovery: targetPage is invalid, fall back to targetPage - 1
+          setCurrentPage((prev) => (prev > 1 ? prev - 1 : 1));
+          return;
+        }
+        // 500 / Network error:
+        // Roll back currentPage to lastLoadedPageRef without triggering a re-fetch.
+        // Data and page label remain completely consistent with the loaded page.
+        if (targetPage !== lastLoadedPageRef.current) {
+          skipFetchRef.current = true;
+          setCurrentPage(lastLoadedPageRef.current);
+        }
+        setFailedTargetPage(targetPage);
+        setErrorAlert(
+          targetPage > 1
+            ? `Không thể tải nhật ký lịch sử tài sản cá nhân (trang ${targetPage}). Vui lòng thử lại.`
+            : 'Không thể tải nhật ký lịch sử tài sản cá nhân.'
+        );
+      } finally {
+        if (!isAborted() && currentReqId === reqIdRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [currentPage, pageSize]
+  );
 
   useEffect(() => {
-    fetchHistory();
+    let active = true;
+    fetchHistory(() => !active);
+    return () => {
+      active = false;
+    };
   }, [fetchHistory]);
+
+  const handleRetry = () => {
+    if (failedTargetPage) {
+      if (failedTargetPage === currentPage) {
+        fetchHistory();
+      } else {
+        setCurrentPage(failedTargetPage);
+      }
+    } else {
+      fetchHistory();
+    }
+  };
 
   const actionLabels = {
     ALLOCATE: 'Cấp phát',
@@ -50,7 +135,7 @@ const PersonalHistoryPage = () => {
         </div>
 
         <button
-          onClick={fetchHistory}
+          onClick={() => fetchHistory()}
           className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors self-start sm:self-auto"
         >
           <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
@@ -62,13 +147,28 @@ const PersonalHistoryPage = () => {
       {errorAlert && (
         <div
           role="alert"
-          className="my-4 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg flex items-start space-x-3 text-red-700 text-sm"
+          className="my-4 p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg flex items-center justify-between text-red-700 text-sm gap-3"
         >
-          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">{errorAlert}</div>
+          <div className="flex items-center space-x-3 flex-1 min-w-0">
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <span className="truncate sm:overflow-visible sm:whitespace-normal">{errorAlert}</span>
+            {failedTargetPage && (
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="px-2.5 py-1 text-xs font-semibold bg-red-100 hover:bg-red-200 text-red-800 rounded border border-red-300 transition-colors shrink-0 ml-2"
+              >
+                Thử lại
+              </button>
+            )}
+          </div>
           <button
-            onClick={() => setErrorAlert('')}
-            className="text-red-500 hover:text-red-700 font-bold ml-2"
+            onClick={() => {
+              setErrorAlert('');
+              setFailedTargetPage(null);
+            }}
+            className="text-red-500 hover:text-red-700 font-bold ml-2 text-base leading-none"
+            aria-label="Đóng thông báo lỗi"
           >
             ×
           </button>
@@ -122,6 +222,14 @@ const PersonalHistoryPage = () => {
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalCount={totalCount}
+          pageSize={pageSize}
+          onPageChange={(page) => setCurrentPage(page)}
+        />
       </div>
     </div>
   );

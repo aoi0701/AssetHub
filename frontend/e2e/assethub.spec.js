@@ -216,6 +216,11 @@ test.describe('AssetHub End-to-End Lifecycle', () => {
     await expect(page.getByText('Cấp phát').first()).toBeVisible();
     await expect(page.getByText('Hoàn trả').first()).toBeVisible();
 
+    // Verify pagination controls are rendered on personal history page
+    const pagination = page.locator('nav[aria-label="Phân trang"]');
+    await expect(pagination).toBeVisible();
+    await expect(pagination).toContainText(/Đang xem \d+–\d+ trên tổng \d+ bản ghi/);
+
     // -------------------------------------------------------------------------
     // 8. Role Scoping & Protection
     // -------------------------------------------------------------------------

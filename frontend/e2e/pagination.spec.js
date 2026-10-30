@@ -111,4 +111,97 @@ test.describe('Management Pages Backend Pagination & Dropdown Verification', () 
     const options = await categorySelect.locator('option').count();
     expect(options).toBeGreaterThan(1); // placeholder + seeded categories
   });
+
+  async function loginAsUser(page) {
+    await page.goto('/login');
+    await page.fill('#username', 'truong');
+    await page.fill('#password', seedPassword);
+    await page.click('button[type="submit"]');
+    await expect(page).toHaveURL(/\/my-assets/);
+  }
+
+  test('personal asset history paginates 1 -> 2 -> 1 across 25 events using isolated fixture', async ({ page }) => {
+    // 25 isolated events in fixture
+    const fixtureEvents = Array.from({ length: 25 }, (_, i) => ({
+      id: 500 + i + 1,
+      asset_id: 100 + i + 1,
+      asset_code_snapshot: `AST-E2E-HIST-${String(i + 1).padStart(3, '0')}`,
+      asset_name_snapshot: `Thiết bị E2E #${i + 1}`,
+      action_type: i % 2 === 0 ? 'ALLOCATE' : 'RETURN',
+      from_status: i % 2 === 0 ? 'AVAILABLE' : 'IN_USE',
+      to_status: i % 2 === 0 ? 'IN_USE' : 'AVAILABLE',
+      created_at: `2026-10-${String(Math.min(28, (i % 28) + 1)).padStart(2, '0')}T10:00:00Z`,
+      message: i % 2 === 0 ? 'Tài sản được cấp phát cho bạn' : 'Bạn đã hoàn trả tài sản',
+    }));
+
+    // Intercept /api/me/asset-history/ to use the isolated 25-event fixture
+    await page.route('**/api/me/asset-history/**', async (route) => {
+      const url = new URL(route.request().url());
+      const pageNum = parseInt(url.searchParams.get('page') || '1', 10);
+      const pageSize = parseInt(url.searchParams.get('page_size') || '20', 10);
+
+      const start = (pageNum - 1) * pageSize;
+      const end = start + pageSize;
+      const slice = fixtureEvents.slice(start, end);
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          count: fixtureEvents.length,
+          total_pages: Math.ceil(fixtureEvents.length / pageSize),
+          current_page: pageNum,
+          results: slice,
+        }),
+      });
+    });
+
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await loginAsUser(page);
+
+    await page.locator('aside[aria-label="Thanh điều hướng chính"]').getByRole('link', { name: 'Lịch sử' }).click();
+    await expect(page).toHaveURL(/\/my-history/);
+    await expect(page.getByRole('heading', { name: 'Nhật ký tài sản cá nhân' })).toBeVisible();
+
+    const pagination = page.locator('nav[aria-label="Phân trang"]');
+    await expect(pagination).toBeVisible();
+
+    // 1. Check Page 1: 20 items (#1 to #20), #21 not present
+    await expect(pagination).toContainText('Đang xem 1–20 trên tổng 25 bản ghi');
+    await expect(page.getByText('Thiết bị E2E #1').first()).toBeVisible();
+    await expect(page.getByText('Thiết bị E2E #20').first()).toBeVisible();
+    await expect(page.getByText('Thiết bị E2E #21')).toHaveCount(0);
+    const rowsP1 = await page.locator('tbody tr').count();
+    expect(rowsP1).toBe(20);
+
+    const prevBtn = pagination.getByRole('button', { name: 'Trang trước' });
+    const nextBtn = pagination.getByRole('button', { name: 'Trang sau' });
+    await expect(prevBtn).toBeDisabled();
+    await expect(nextBtn).toBeEnabled();
+
+    // 2. Click Next -> Go to Page 2
+    await nextBtn.click();
+
+    // Check Page 2: 5 items (#21 to #25), #1 not present
+    await expect(pagination).toContainText('Đang xem 21–25 trên tổng 25 bản ghi');
+    await expect(page.getByText('Thiết bị E2E #21').first()).toBeVisible();
+    await expect(page.getByText('Thiết bị E2E #25').first()).toBeVisible();
+    await expect(page.getByText('Thiết bị E2E #1')).toHaveCount(0);
+    const rowsP2 = await page.locator('tbody tr').count();
+    expect(rowsP2).toBe(5);
+
+    await expect(prevBtn).toBeEnabled();
+    await expect(nextBtn).toBeDisabled();
+
+    // 3. Click Prev -> Back to Page 1
+    await prevBtn.click();
+
+    // Check Page 1 again: 20 items restored
+    await expect(pagination).toContainText('Đang xem 1–20 trên tổng 25 bản ghi');
+    await expect(page.getByText('Thiết bị E2E #1').first()).toBeVisible();
+    await expect(page.getByText('Thiết bị E2E #20').first()).toBeVisible();
+    await expect(page.getByText('Thiết bị E2E #21')).toHaveCount(0);
+    const rowsP1Again = await page.locator('tbody tr').count();
+    expect(rowsP1Again).toBe(20);
+  });
 });
