@@ -2,7 +2,10 @@ import { test, expect } from '@playwright/test';
 
 test.describe('AssetHub End-to-End Lifecycle', () => {
   const timestamp = Date.now();
-  const seedPassword = process.env.E2E_SEED_PASSWORD || 'aoi0701@';
+  const seedPassword = process.env.E2E_SEED_PASSWORD || process.env.DEMO_SEED_PASSWORD;
+  if (!seedPassword) {
+    throw new Error('Missing E2E_SEED_PASSWORD or DEMO_SEED_PASSWORD environment variable.');
+  }
   const testUser = {
     username: `e2e_user_${timestamp}`,
     email: `e2e_${timestamp}@example.com`,

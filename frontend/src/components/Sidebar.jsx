@@ -102,10 +102,18 @@ const Sidebar = () => {
       aria-label="Thanh điều hướng chính"
     >
       {/* Sidebar Header */}
-      <div className="h-16 border-b border-gray-200 flex items-center justify-between px-3 gap-2">
+      <div
+        className={`border-b border-gray-200 flex transition-all duration-200 ${
+          isCollapsed
+            ? 'flex-col items-center justify-center py-3 gap-2'
+            : 'h-16 items-center justify-between px-3 gap-2'
+        }`}
+      >
         <Link
           to={role === 'USER' ? '/my-assets' : '/dashboard'}
-          className="flex items-center space-x-2 min-w-0 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg p-1"
+          className={`flex items-center min-w-0 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg p-1 ${
+            isCollapsed ? 'justify-center' : 'space-x-2'
+          }`}
           title="AssetHub"
           aria-label="AssetHub"
         >

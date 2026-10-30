@@ -802,17 +802,17 @@ npm --prefix frontend run test:e2e
 - **Task 4: Layout E2E Suite, Viewport Tests, Screenshots & Final Verification**:
   - Suite E2E chuyên sâu `frontend/e2e/layout.spec.js` kiểm tra responsive layout, bounding box, scroll độc lập, persistence.
 
-### 4.2 Kết quả kiểm chứng thực tế
+### 4.2 Kết quả kiểm chứng thực tế (Đã xử lý 4 điểm Review)
 
 #### Lệnh 1: Frontend Production Build (Vite)
 ```bash
 npm --prefix frontend run build
 ```
 - **Exit code:** 0
-- **Kết quả:** Build sạch sẽ trong 3.25s, không phát sinh lỗi cú pháp hay CSS bundle:
+- **Kết quả:** Build sạch sẽ trong 3.23s, không phát sinh lỗi cú pháp hay CSS bundle:
   - `dist/index.html` (0.47 kB)
-  - `dist/assets/index-wxnXl1po.css` (29.58 kB)
-  - `dist/assets/index-BhS5ukui.js` (800.93 kB)
+  - `dist/assets/index-BObjkesc.css` (29.56 kB)
+  - `dist/assets/index-BSp9RAf8.js` (801.16 kB)
 
 #### Lệnh 2: Frontend Unit Tests (Vitest)
 ```bash
@@ -836,30 +836,47 @@ npm --prefix frontend test -- --run
 npm --prefix frontend run test:e2e
 ```
 - **Exit code:** 0
-- **Thời gian chạy:** 12.7s
-- **Số lượng:** **2 test files, 7 passed (100%)**
+- **Thời gian chạy:** 16.6s
+- **Số lượng:** **2 test files, 8 passed (100%)**
   - `frontend/e2e/assethub.spec.js`: 1 passed (Chu trình nghiệp vụ toàn diện từ đăng ký đến thanh lý)
-  - `frontend/e2e/layout.spec.js`: 6 passed:
-    1. `renders sidebar & main layout correctly at 1024x768 (expanded & collapsed)`: PASS (1.4s)
-    2. `renders sidebar & main layout correctly at 1366x768 (expanded & collapsed)`: PASS (1.4s)
-    3. `renders sidebar & main layout correctly at 1920x1080 (expanded & collapsed)`: PASS (1.5s)
+  - `frontend/e2e/layout.spec.js`: 7 passed:
+    1. `renders sidebar & main layout correctly at 1024x768 (expanded & collapsed)`: PASS (2.1s)
+    2. `renders sidebar & main layout correctly at 1366x768 (expanded & collapsed)`: PASS (2.2s)
+    3. `renders sidebar & main layout correctly at 1920x1080 (expanded & collapsed)`: PASS (2.3s)
     4. `short viewport (1280x480): sidebar menu scrolls independently with sticky header and footer`: PASS (1.1s)
-    5. `table containment: asset list table is wrapped in overflow-x-auto and does not overflow viewport`: PASS (790ms)
+    5. `table containment: asset list table is wrapped in overflow-x-auto and does not overflow viewport`: PASS (692ms)
     6. `localStorage state persistence across in-app navigation`: PASS (1.3s)
+    7. `authenticated user accessing /login and /register renders guest layout without sidebar`: PASS (637ms)
 
 ### 4.3 Kiểm tra Bounding Box, Responsive Viewports & Screenshots
 
-| Viewport | Trạng thái Sidebar | Chiều rộng Sidebar | Bounding Box (`sidebar.x + width <= main.x + 1`) | Ghi chú / Đường dẫn Screenshot |
-|:---:|:---:|:---:|:---:|---|
-| **1024x768** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1024x768-expanded.png` |
-| **1024x768** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1024x768-collapsed.png` |
-| **1366x768** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1366x768-expanded.png` |
-| **1366x768** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1366x768-collapsed.png` |
-| **1920x1080** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1920x1080-expanded.png` |
-| **1920x1080** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | `frontend/e2e-screenshots/layout-1920x1080-collapsed.png` |
-| **1280x480** (Short) | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (`nav` có thanh cuộn riêng `overflow-y-auto`, header/footer sticky trong `0..480px`) | `frontend/e2e-screenshots/layout-1280x480-expanded.png` |
-| **1280x480** (Short) | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (Header toggle & logout footer tương tác tốt) | `frontend/e2e-screenshots/layout-1280x480-collapsed.png` |
-| **1024x768** (Table) | Bảng tài sản (`/assets`) | 256px (`w-64`) | Bảng bọc trong `.overflow-x-auto`, không tràn ngang trang (`scrollWidth <= innerWidth + 2`) | `frontend/e2e-screenshots/layout-1024x768-table.png` |
+| Viewport | Trạng thái Sidebar | Chiều rộng Sidebar | Bounding Box (`sidebar.x + width <= main.x + 1`) | Logo / Toggle Overlap | Ghi chú / Đường dẫn Screenshot |
+|:---:|:---:|:---:|:---:|:---:|---|
+| **1024x768** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | Không giao nhau (`overlap === false`) | `frontend/e2e-screenshots/layout-1024x768-expanded.png` |
+| **1024x768** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | Không giao nhau (`overlap === false`, xếp dọc) | `frontend/e2e-screenshots/layout-1024x768-collapsed.png` |
+| **1366x768** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | Không giao nhau (`overlap === false`) | `frontend/e2e-screenshots/layout-1366x768-expanded.png` |
+| **1366x768** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | Không giao nhau (`overlap === false`, xếp dọc) | `frontend/e2e-screenshots/layout-1366x768-collapsed.png` |
+| **1920x1080** | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (sidebar không đè main) | Không giao nhau (`overlap === false`) | `frontend/e2e-screenshots/layout-1920x1080-expanded.png` |
+| **1920x1080** | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (sidebar không đè main) | Không giao nhau (`overlap === false`, xếp dọc) | `frontend/e2e-screenshots/layout-1920x1080-collapsed.png` |
+| **1280x480** (Short) | Mở rộng (Expanded) | 256px (`w-64`) | Hợp lệ (`nav` cuộn độc lập `scrollTop > 0`, header/footer sticky `0..480px`) | Không giao nhau | `frontend/e2e-screenshots/layout-1280x480-expanded.png` |
+| **1280x480** (Short) | Thu gọn (Collapsed) | 80px (`w-20`) | Hợp lệ (Header toggle & logout footer tương tác tốt) | Không giao nhau | `frontend/e2e-screenshots/layout-1280x480-collapsed.png` |
+| **1024x768** (Table) | Bảng tài sản (`/assets`) | 256px (`w-64`) | Bảng bọc trong `.overflow-x-auto`, cuộn ngang độc lập (`scrollLeft > 0`), không tràn viewport | Không giao nhau | `frontend/e2e-screenshots/layout-1024x768-table.png` |
+
+### 4.4 Nghiệm thu 4 điểm phản hồi của Reviewer
+
+1. **Khắc phục Logo và nút Toggle chồng nhau khi Sidebar thu gọn (`w-20`)**:
+   - Khi `isCollapsed === true`, header sidebar chuyển sang layout xếp dọc `flex flex-col items-center justify-center py-3 gap-2`.
+   - Nút toggle và logo có khoảng cách chiều dọc rõ ràng. Playwright assert kiểm tra toán học bounding box `doBoxesOverlap(logoBox, toggleBox) === false` cho toàn bộ các viewport (1024, 1366, 1920).
+2. **Layout cho các trang `/login` và `/register`**:
+   - Trong `App.jsx` và `Navbar.jsx`, phát hiện `isGuestRoute = ['/login', '/register'].includes(location.pathname)`.
+   - Khi người dùng đang có phiên đăng nhập truy cập trực tiếp vào `/login` hoặc `/register`, giao diện chuyển sang Guest Layout căn giữa, ẩn hoàn toàn Sidebar và header nội bộ. Ca test E2E số 8 xác thực thành công hành vi này.
+3. **Cập nhật bộ kiểm thử E2E: Scroll thực tế và biểu đồ hoàn chỉnh trước khi chụp ảnh**:
+   - Menu nav kiểm tra cuộn thực tế: `navMenu.evaluate(el => el.scrollTop = 40)`.
+   - Bảng tài sản kiểm tra cuộn ngang thực tế: `tableWrapper.evaluate(el => el.scrollLeft = 50)`.
+   - Helper `waitForChartsReady(page)` đợi `.recharts-responsive-container` và `.recharts-surface` hiện diện, kết hợp 600ms ổn định hoạt ảnh trước khi thực hiện screenshot.
+4. **Bỏ mật khẩu hardcode trong mã kiểm thử**:
+   - Loại bỏ hoàn toàn chuỗi mật khẩu khỏi `assethub.spec.js` và `layout.spec.js`.
+   - Cấu hình nạp biến môi trường tự động `E2E_SEED_PASSWORD` / `DEMO_SEED_PASSWORD` qua `playwright.config.js` (`process.loadEnvFile`). Test ném ngoại lệ rõ ràng nếu biến môi trường bị thiếu thay vì dùng fallback insecure.
 
 
 

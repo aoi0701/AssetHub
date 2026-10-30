@@ -1,4 +1,27 @@
 import { defineConfig, devices } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load environment variables from .env if present
+const envCandidates = [
+  path.resolve(__dirname, '../.env'),
+  path.resolve(__dirname, '.env'),
+];
+
+for (const envPath of envCandidates) {
+  if (fs.existsSync(envPath) && typeof process.loadEnvFile === 'function') {
+    try {
+      process.loadEnvFile(envPath);
+      break;
+    } catch {
+      // ignore
+    }
+  }
+}
 
 export default defineConfig({
   testDir: './e2e',

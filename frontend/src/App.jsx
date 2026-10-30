@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route, Navigate, Link } from 'react-router-dom';
+import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
@@ -32,7 +32,9 @@ const HomeRedirect = () => {
 
 function App() {
   const { isAuthenticated, user } = useAuth();
-  const isAuth = Boolean(isAuthenticated && user);
+  const location = useLocation();
+  const isGuestRoute = location.pathname === '/login' || location.pathname === '/register';
+  const showSidebar = Boolean(isAuthenticated && user && !isGuestRoute);
 
   const routes = (
     <Routes>
@@ -160,7 +162,7 @@ function App() {
     </Routes>
   );
 
-  if (isAuth) {
+  if (showSidebar) {
     return (
       <div className="flex h-screen w-full overflow-hidden bg-gray-50 text-gray-900">
         <Sidebar />

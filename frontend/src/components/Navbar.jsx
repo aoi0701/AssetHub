@@ -1,12 +1,14 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Package } from 'lucide-react';
 
 const Navbar = () => {
   const { user, isAuthenticated } = useAuth();
+  const location = useLocation();
+  const isGuestRoute = location.pathname === '/login' || location.pathname === '/register';
 
-  if (isAuthenticated && user) {
+  if (isAuthenticated && user && !isGuestRoute) {
     return null;
   }
 
