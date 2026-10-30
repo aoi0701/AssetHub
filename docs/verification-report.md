@@ -887,20 +887,25 @@ npm --prefix frontend run test:e2e
    - Helper `waitForChartsReady(page)` chờ đồ họa Recharts gắn kết (`.recharts-pie-sector, .recharts-bar-rectangle, .recharts-line`), tự động bơm thẻ style `animation-duration: 0s !important; transition-duration: 0s !important;`.
    - Toàn bộ các lệnh chụp ảnh sử dụng cờ `animations: 'disabled'` của Playwright.
    - Chụp lại mới 100% 9 ảnh kiểm chứng trong thư mục `frontend/e2e-screenshots/`.
-4. **Kết quả chạy kiểm thử thực tế nhóm liên quan**:
-   - Lệnh chạy: `npm --prefix frontend run test:e2e -- e2e/layout.spec.js`
-   - Exit code: 0
-   - Thời gian chạy: 12.4s
-   - Số lượng ca kiểm thử: **7/7 passed (100%)**
+### 4.6 Nghiệm thu giao diện Linear SaaS: Sidebar xám sáng & Trang Danh mục (/categories)
 
+1. **Phạm vi hoàn thiện giao diện**:
+   - **Sidebar**: Chuyển sang phong cách Linear xám sáng `bg-slate-50`, viền `border-slate-200/90`. Mục đang chọn có nền xanh nhạt `bg-blue-50`, chữ và icon `text-blue-700`. Giữ nguyên responsive và thu gọn `w-20` / `w-64`.
+   - **Trang /categories**: Tiêu đề "Danh mục tài sản", mô tả ngắn, nút "Thêm danh mục" góc phải. Thanh công cụ tìm kiếm theo tên hoặc mô tả, hiển thị số lượng kết quả `X / Y danh mục` và nút làm mới.
+   - **Bảng dữ liệu**: Bảng nền trắng, icon danh mục trực quan (`Laptop`, `Monitor`, `Server`, `Printer`, `Armchair`, `Folder`), xem mô tả trọn vẹn, nút "Sửa" rõ ràng, không có nút xóa.
+   - **Hộp thoại Thêm/Sửa**: Đóng bằng phím `Escape`, tự động focus `cat_name`, trả focus về nút mở hộp thoại khi đóng. Chống gửi trùng (`disabled` khi `saving`), giữ nguyên dữ liệu nhập khi API trả lỗi.
 
+2. **Bằng chứng kiểm thử thực tế**:
+   - **Backend Pytest**: `docker compose exec -T backend pytest` -> **171/171 passed (100%)** trong 45.07s.
+   - **Frontend Vitest**: `npm --prefix frontend test -- --run` -> **47/47 passed (100%)** trong 2.15s (bao gồm 7/7 test cases `AdminPages.test.jsx`).
+   - **Frontend Production Build**: `npm --prefix frontend run build` -> Hoàn thành trong 3.61s, exit code 0.
+   - **E2E Playwright**: `npx playwright test e2e/categories-page.spec.js` -> **2/2 passed (100%)** trên desktop (1366x768) và mobile (375x667). Toàn bộ E2E suite: **11/11 passed (100%)**.
 
+3. **Ảnh chụp minh chứng kiểm thử**:
+   - Desktop view: `categories-desktop.png` (bảng danh mục, thanh tìm kiếm, sidebar xám sáng).
+   - Modal view: `categories-modal.png` (hộp thoại thêm danh mục, focus input, nhãn rõ ràng).
+   - Mobile view: `categories-mobile.png` (viewport 375x667, bảng cuộn ngang, bố cục co giãn).
 
-
-
-
-
-
-
-
-
+4. **Trạng thái mã nguồn**:
+   - Commit: `bf3ad2e` trên nhánh `dev`.
+   - Push: Đã đồng bộ với `origin/dev`.
