@@ -183,13 +183,15 @@ const RequestInboxPage = () => {
           <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
             <thead className="bg-gray-50 text-gray-700 font-semibold">
               <tr>
-                <th className="px-6 py-3">Mã phiếu</th>
-                <th className="px-6 py-3">Loại yêu cầu</th>
-                {isStaff && <th className="px-6 py-3">Người yêu cầu</th>}
-                <th className="px-6 py-3">Mục tiêu yêu cầu</th>
-                <th className="px-6 py-3">Lý do</th>
-                <th className="px-6 py-3">Trạng thái</th>
-                <th className="px-6 py-3 text-right">Thao tác</th>
+                <th className="px-4 py-3 whitespace-nowrap">Mã phiếu</th>
+                <th className="px-4 py-3 whitespace-nowrap">Loại yêu cầu</th>
+                {isStaff && <th className="px-4 py-3 whitespace-nowrap">Người yêu cầu</th>}
+                <th className="px-4 py-3">Mục tiêu yêu cầu</th>
+                <th className="px-4 py-3">Lý do</th>
+                <th className="px-4 py-3 whitespace-nowrap">Trạng thái</th>
+                <th className="sticky right-0 bg-gray-50 px-4 py-3 text-right whitespace-nowrap min-w-[195px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10">
+                  Thao tác
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 bg-white">
@@ -197,7 +199,7 @@ const RequestInboxPage = () => {
                 <tr>
                   <td
                     colSpan={isStaff ? 7 : 6}
-                    className="px-6 py-12 text-center text-gray-500"
+                    className="px-4 py-12 text-center text-gray-500"
                   >
                     {loading ? 'Đang tải dữ liệu...' : 'Không có phiếu yêu cầu nào.'}
                   </td>
@@ -210,33 +212,45 @@ const RequestInboxPage = () => {
                   };
 
                   return (
-                    <tr key={req.id} className="hover:bg-gray-50/75 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap font-mono font-semibold text-blue-600">
+                    <tr key={req.id} className="group hover:bg-gray-50/75 transition-colors">
+                      <td className="px-4 py-3.5 whitespace-nowrap font-mono font-semibold text-blue-600">
                         {req.request_code}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-4 py-3.5 whitespace-nowrap">
                         <span className="font-medium text-gray-900">
                           {requestTypeLabels[req.request_type] || req.request_type}
                         </span>
                       </td>
                       {isStaff && (
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="font-medium text-gray-900">
+                        <td className="px-4 py-3.5">
+                          <div
+                            className="font-medium text-gray-900 max-w-[170px] truncate"
+                            title={req.requester_name || req.requester_username}
+                          >
                             {req.requester_name || req.requester_username}
                           </div>
-                          <div className="text-xs text-gray-400">
+                          <div
+                            className="text-xs text-gray-400 max-w-[170px] truncate"
+                            title={`${req.department_name} (${req.department_code})`}
+                          >
                             {req.department_name} ({req.department_code})
                           </div>
                         </td>
                       )}
-                      <td className="px-6 py-4 whitespace-nowrap text-gray-700">
+                      <td className="px-4 py-3.5">
                         {req.request_type === 'ALLOCATE' ? (
-                          <span className="font-medium text-gray-800">
+                          <span
+                            className="font-medium text-gray-800 block max-w-[190px] truncate"
+                            title={req.requested_category_name || '-'}
+                          >
                             Danh mục: {req.requested_category_name || '-'}
                           </span>
                         ) : (
-                          <div>
-                            <span className="font-medium text-gray-800">
+                          <div className="max-w-[190px]">
+                            <span
+                              className="font-medium text-gray-800 block truncate"
+                              title={req.asset_name || '-'}
+                            >
                               {req.asset_name || '-'}
                             </span>
                             {req.asset_code && (
@@ -247,10 +261,10 @@ const RequestInboxPage = () => {
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-gray-600 max-w-xs truncate" title={req.reason}>
+                      <td className="px-4 py-3.5 text-gray-600 max-w-[180px] truncate" title={req.reason}>
                         {req.reason}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-4 py-3.5 whitespace-nowrap">
                         <span
                           className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold border ${badge.color}`}
                         >
@@ -258,32 +272,34 @@ const RequestInboxPage = () => {
                         </span>
                         {req.status === 'REJECTED' && req.rejection_reason && (
                           <div
-                            className="text-xs text-rose-600 mt-1 max-w-xs truncate"
+                            className="text-xs text-rose-600 mt-1 max-w-[180px] truncate"
                             title={`Lý do: ${req.rejection_reason}`}
                           >
                             Lý do: {req.rejection_reason}
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
-                        {/* Manager/Admin review button if PENDING */}
-                        {isStaff && req.status === 'PENDING' && (
-                          <button
-                            onClick={() => setReviewingRequest(req)}
-                            className="inline-flex items-center px-3 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition-colors"
-                          >
-                            Xét duyệt
-                          </button>
-                        )}
+                      <td className="sticky right-0 bg-white group-hover:bg-gray-50/90 px-4 py-3.5 whitespace-nowrap text-right min-w-[195px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10 transition-colors">
+                        <div className="flex items-center justify-end gap-2">
+                          {/* Manager/Admin review button if PENDING */}
+                          {isStaff && req.status === 'PENDING' && (
+                            <button
+                              onClick={() => setReviewingRequest(req)}
+                              className="inline-flex items-center px-3 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition-colors shrink-0"
+                            >
+                              Xét duyệt
+                            </button>
+                          )}
 
-                        <button
-                          onClick={() => setViewingDetail(req)}
-                          className="inline-flex items-center px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100 transition-colors"
-                          title="Xem chi tiết"
-                        >
-                          <Eye className="w-3.5 h-3.5 mr-1" />
-                          Chi tiết
-                        </button>
+                          <button
+                            onClick={() => setViewingDetail(req)}
+                            className="inline-flex items-center px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100 transition-colors shrink-0"
+                            title="Xem chi tiết"
+                          >
+                            <Eye className="w-3.5 h-3.5 mr-1" />
+                            Chi tiết
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
