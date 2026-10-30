@@ -3,6 +3,7 @@ import axiosClient from '../api/axiosClient';
 import { useAuth } from '../context/AuthContext';
 import RequestReviewModal from '../components/RequestReviewModal';
 import CreateRequestModal from '../components/CreateRequestModal';
+import Pagination from '../components/Pagination';
 import {
   FileText,
   Plus,
@@ -25,6 +26,12 @@ const RequestInboxPage = () => {
   const [errorAlert, setErrorAlert] = useState('');
   const [successAlert, setSuccessAlert] = useState('');
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(15);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
   // Filters
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
@@ -38,18 +45,33 @@ const RequestInboxPage = () => {
     setLoading(true);
     setErrorAlert('');
     try {
-      const params = {};
+      const params = {
+        page: currentPage,
+        page_size: pageSize,
+      };
       if (statusFilter) params.status = statusFilter;
       if (typeFilter) params.request_type = typeFilter;
 
       const res = await axiosClient.get('/api/requests/', { params });
-      setRequests(Array.isArray(res.data) ? res.data : res.data.results || []);
+      if (res.data && Array.isArray(res.data.results)) {
+        setRequests(res.data.results);
+        setTotalCount(res.data.count || 0);
+        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
+      } else if (Array.isArray(res.data)) {
+        setRequests(res.data);
+        setTotalCount(res.data.length);
+        setTotalPages(1);
+      } else {
+        setRequests([]);
+        setTotalCount(0);
+        setTotalPages(1);
+      }
     } catch {
       setErrorAlert('Không thể tải danh sách phiếu yêu cầu. Vui lòng thử lại.');
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, typeFilter]);
+  }, [currentPage, pageSize, statusFilter, typeFilter]);
 
   useEffect(() => {
     fetchRequests();
@@ -151,7 +173,10 @@ const RequestInboxPage = () => {
         <div>
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo trạng thái yêu cầu"
           >
@@ -165,7 +190,10 @@ const RequestInboxPage = () => {
         <div>
           <select
             value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
+            onChange={(e) => {
+              setTypeFilter(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo loại yêu cầu"
           >
@@ -186,10 +214,10 @@ const RequestInboxPage = () => {
                 <th className="px-4 py-3 whitespace-nowrap">Mã phiếu</th>
                 <th className="px-4 py-3 whitespace-nowrap">Loại yêu cầu</th>
                 {isStaff && <th className="px-4 py-3 whitespace-nowrap">Người yêu cầu</th>}
-                <th className="px-4 py-3">Mục tiêu yêu cầu</th>
-                <th className="px-4 py-3">Lý do</th>
+                <th className="px-4 py-3 min-w-[160px]">Mục tiêu yêu cầu</th>
+                <th className="px-4 py-3 min-w-[180px]">Lý do</th>
                 <th className="px-4 py-3 whitespace-nowrap">Trạng thái</th>
-                <th className="sticky right-0 bg-slate-50 pl-4 pr-5 py-3 text-right whitespace-nowrap min-w-[200px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10">
+                <th className="sticky right-0 bg-slate-50 px-4 py-3 text-right whitespace-nowrap min-w-[210px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10">
                   Thao tác
                 </th>
               </tr>
@@ -261,8 +289,10 @@ const RequestInboxPage = () => {
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-3.5 text-slate-600 max-w-[180px] truncate" title={req.reason}>
-                        {req.reason}
+                      <td className="px-4 py-3.5">
+                        <div className="text-slate-600 max-w-[200px] truncate" title={req.reason}>
+                          {req.reason}
+                        </div>
                       </td>
                       <td className="px-4 py-3.5 whitespace-nowrap">
                         <span
@@ -279,13 +309,13 @@ const RequestInboxPage = () => {
                           </div>
                         )}
                       </td>
-                      <td className="sticky right-0 bg-white group-hover:bg-slate-50/90 pl-4 pr-5 py-3.5 whitespace-nowrap text-right min-w-[200px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10 transition-colors">
+                      <td className="sticky right-0 bg-white group-hover:bg-slate-50/90 px-4 py-3.5 whitespace-nowrap text-right min-w-[210px] shadow-[-6px_0_10px_-4px_rgba(0,0,0,0.06)] z-10 transition-colors">
                         <div className="flex items-center justify-end gap-2">
                           {/* Manager/Admin review button if PENDING */}
                           {isStaff && req.status === 'PENDING' && (
                             <button
                               onClick={() => setReviewingRequest(req)}
-                              className="inline-flex items-center px-3 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition-colors shrink-0"
+                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors shrink-0"
                             >
                               Xét duyệt
                             </button>
@@ -293,10 +323,10 @@ const RequestInboxPage = () => {
 
                           <button
                             onClick={() => setViewingDetail(req)}
-                            className="inline-flex items-center px-2 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 rounded hover:bg-slate-100 transition-colors shrink-0"
+                            className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white hover:text-blue-700 hover:bg-blue-50/70 border border-slate-200/90 rounded-lg shadow-xs transition-colors shrink-0"
                             title="Xem chi tiết"
                           >
-                            <Eye className="w-3.5 h-3.5 mr-1" />
+                            <Eye className="w-3.5 h-3.5 mr-1 text-slate-500" />
                             Chi tiết
                           </button>
                         </div>
@@ -308,6 +338,15 @@ const RequestInboxPage = () => {
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalCount={totalCount}
+          pageSize={pageSize}
+          onPageChange={(page) => setCurrentPage(page)}
+          loading={loading}
+        />
       </div>
 
       {/* Review Modal (Manager / Admin) */}

@@ -96,7 +96,32 @@ const server = setupServer(
     return HttpResponse.json(mockUserAssets);
   }),
 
-  http.get('/api/requests/', () => HttpResponse.json(mockRequests)),
+  http.get('/api/requests/', ({ request }) => {
+    const url = new URL(request.url);
+    const pageParam = url.searchParams.get('page');
+    let filtered = mockRequests;
+    const status = url.searchParams.get('status');
+    if (status) {
+      filtered = filtered.filter((r) => r.status === status);
+    }
+    const type = url.searchParams.get('request_type');
+    if (type) {
+      filtered = filtered.filter((r) => r.request_type === type);
+    }
+    if (pageParam) {
+      const page = parseInt(pageParam, 10);
+      const pageSize = parseInt(url.searchParams.get('page_size') || '15', 10);
+      const start = (page - 1) * pageSize;
+      return HttpResponse.json({
+        count: filtered.length,
+        total_pages: Math.ceil(filtered.length / pageSize) || 1,
+        current_page: page,
+        page_size: pageSize,
+        results: filtered.slice(start, start + pageSize),
+      });
+    }
+    return HttpResponse.json(filtered);
+  }),
 
   http.post('/api/requests/', async ({ request }) => {
     const body = await request.json();
@@ -334,5 +359,60 @@ describe('RequestFlows Integration Tests', () => {
     await userEvent.click(within(reviewModal).getByRole('button', { name: /Xác nhận từ chối/i }));
 
     expect(await screen.findByRole('status')).toHaveTextContent(/Xử lý phiếu yêu cầu thành công/i);
+  });
+
+  it('RequestInboxPage renders pagination controls and navigates across pages', async () => {
+    const manyRequests = Array.from({ length: 22 }, (_, i) => ({
+      id: i + 1,
+      request_code: `REQ-202610-${String(i + 1).padStart(4, '0')}`,
+      request_type: 'ALLOCATE',
+      requester_name: `Employee ${i + 1}`,
+      requester_username: `emp_${i + 1}`,
+      department_name: 'Phòng IT',
+      department_code: 'IT',
+      requested_category_name: 'Laptop',
+      reason: `Project work ${i + 1}`,
+      status: 'PENDING',
+      created_at: '2026-10-01T00:00:00Z',
+    }));
+
+    server.use(
+      http.get('/api/requests/', ({ request }) => {
+        const url = new URL(request.url);
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: manyRequests.length,
+          total_pages: Math.ceil(manyRequests.length / pageSize),
+          current_page: page,
+          page_size: pageSize,
+          results: manyRequests.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <RequestInboxPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-202610-0001')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 22 bản ghi/i)).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    expect(nextBtn).toBeEnabled();
+    await userEvent.click(nextBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-202610-0016')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 16–22 trên tổng 22 bản ghi/i)).toBeInTheDocument();
   });
 });

@@ -95,6 +95,19 @@ const server = setupServer(
     if (category_id) {
       filtered = filtered.filter((a) => a.category_id === Number(category_id));
     }
+    const pageParam = url.searchParams.get('page');
+    if (pageParam) {
+      const page = parseInt(pageParam, 10);
+      const pageSize = parseInt(url.searchParams.get('page_size') || '15', 10);
+      const start = (page - 1) * pageSize;
+      return HttpResponse.json({
+        count: filtered.length,
+        total_pages: Math.ceil(filtered.length / pageSize) || 1,
+        current_page: page,
+        page_size: pageSize,
+        results: filtered.slice(start, start + pageSize),
+      });
+    }
     return HttpResponse.json(filtered);
   }),
 
@@ -384,5 +397,61 @@ describe('AssetFlows Integration Tests', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/Xung đột/i);
+  });
+
+  it('AssetListPage renders pagination controls and navigates across pages', async () => {
+    const manyAssets = Array.from({ length: 25 }, (_, i) => ({
+      id: i + 1,
+      asset_code: `AST-202610-${String(i + 1).padStart(4, '0')}`,
+      name: `Asset Item ${i + 1}`,
+      category_id: 1,
+      category_name: 'Laptop',
+      department_id: 1,
+      department_name: 'Phòng IT',
+      department_code: 'IT',
+      status: 'AVAILABLE',
+      serial_number: `SN-${i + 1}`,
+      assigned_to_user_name: null,
+      created_at: '2026-10-01T00:00:00Z',
+    }));
+
+    server.use(
+      http.get('/api/assets/', ({ request }) => {
+        const url = new URL(request.url);
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: manyAssets.length,
+          total_pages: Math.ceil(manyAssets.length / pageSize),
+          current_page: page,
+          page_size: pageSize,
+          results: manyAssets.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <AssetListPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Asset Item 1')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 25 bản ghi/i)).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    expect(nextBtn).toBeEnabled();
+    await userEvent.click(nextBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Asset Item 16')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 16–25 trên tổng 25 bản ghi/i)).toBeInTheDocument();
   });
 });

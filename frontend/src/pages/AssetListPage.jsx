@@ -4,6 +4,7 @@ import axiosClient from '../api/axiosClient';
 import { useAuth } from '../context/AuthContext';
 import AssetStatusBadge from '../components/AssetStatusBadge';
 import AssetCreateModal from '../components/AssetCreateModal';
+import Pagination from '../components/Pagination';
 import {
   Package,
   Search,
@@ -24,6 +25,12 @@ const AssetListPage = () => {
   const [loading, setLoading] = useState(false);
   const [errorAlert, setErrorAlert] = useState('');
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(15);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -35,7 +42,7 @@ const AssetListPage = () => {
 
   const fetchDropdowns = useCallback(async () => {
     try {
-      const catRes = await axiosClient.get('/api/categories/');
+      const catRes = await axiosClient.get('/api/categories/', { params: { all: 'true' } });
       setCategories(Array.isArray(catRes.data) ? catRes.data : catRes.data.results || []);
     } catch {
       // ignore
@@ -43,7 +50,7 @@ const AssetListPage = () => {
 
     if (isAdmin) {
       try {
-        const deptRes = await axiosClient.get('/api/departments/');
+        const deptRes = await axiosClient.get('/api/departments/', { params: { all: 'true' } });
         setDepartments(Array.isArray(deptRes.data) ? deptRes.data : deptRes.data.results || []);
       } catch {
         // ignore
@@ -55,20 +62,35 @@ const AssetListPage = () => {
     setLoading(true);
     setErrorAlert('');
     try {
-      const params = {};
+      const params = {
+        page: currentPage,
+        page_size: pageSize,
+      };
       if (searchTerm.trim()) params.search = searchTerm.trim();
       if (statusFilter) params.status = statusFilter;
       if (categoryFilter) params.category_id = categoryFilter;
       if (isAdmin && departmentFilter) params.department_id = departmentFilter;
 
       const res = await axiosClient.get('/api/assets/', { params });
-      setAssets(Array.isArray(res.data) ? res.data : res.data.results || []);
+      if (res.data && Array.isArray(res.data.results)) {
+        setAssets(res.data.results);
+        setTotalCount(res.data.count || 0);
+        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
+      } else if (Array.isArray(res.data)) {
+        setAssets(res.data);
+        setTotalCount(res.data.length);
+        setTotalPages(1);
+      } else {
+        setAssets([]);
+        setTotalCount(0);
+        setTotalPages(1);
+      }
     } catch {
       setErrorAlert('Không thể tải danh sách tài sản. Vui lòng thử lại.');
     } finally {
       setLoading(false);
     }
-  }, [searchTerm, statusFilter, categoryFilter, departmentFilter, isAdmin]);
+  }, [currentPage, pageSize, searchTerm, statusFilter, categoryFilter, departmentFilter, isAdmin]);
 
   useEffect(() => {
     fetchDropdowns();
@@ -143,7 +165,10 @@ const AssetListPage = () => {
             type="text"
             placeholder="Tìm theo mã, tên, serial..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800"
           />
         </div>
@@ -152,7 +177,10 @@ const AssetListPage = () => {
         <div>
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo trạng thái"
           >
@@ -170,7 +198,10 @@ const AssetListPage = () => {
         <div>
           <select
             value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
+            onChange={(e) => {
+              setCategoryFilter(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
             aria-label="Lọc theo danh mục"
           >
@@ -188,7 +219,10 @@ const AssetListPage = () => {
           <div>
             <select
               value={departmentFilter}
-              onChange={(e) => setDepartmentFilter(e.target.value)}
+              onChange={(e) => {
+                setDepartmentFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 bg-white"
               aria-label="Lọc theo phòng ban"
             >
@@ -287,6 +321,15 @@ const AssetListPage = () => {
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalCount={totalCount}
+          pageSize={pageSize}
+          onPageChange={(page) => setCurrentPage(page)}
+          loading={loading}
+        />
       </div>
 
       {/* Create Modal (Admin only) */}

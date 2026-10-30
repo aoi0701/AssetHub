@@ -31,7 +31,7 @@ const CreateRequestModal = ({
 
       if (categories.length === 0) {
         axiosClient
-          .get('/api/categories/')
+          .get('/api/categories/', { params: { all: 'true' } })
           .then((res) => {
             const list = Array.isArray(res.data) ? res.data : res.data.results || [];
             setAvailableCategories(list);
@@ -43,7 +43,7 @@ const CreateRequestModal = ({
 
       if (heldAssets.length === 0) {
         axiosClient
-          .get('/api/assets/')
+          .get('/api/assets/', { params: { all: 'true' } })
           .then((res) => {
             const list = Array.isArray(res.data) ? res.data : res.data.results || [];
             setUserAssets(list);
