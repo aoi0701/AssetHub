@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../context/AuthContext';
+import Pagination from '../components/Pagination';
 import { Users, Search, Filter, Edit, CheckCircle, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
 
 const UserAdminPage = () => {
@@ -12,6 +13,12 @@ const UserAdminPage = () => {
   const [loading, setLoading] = useState(false);
   const [errorAlert, setErrorAlert] = useState('');
   const [successAlert, setSuccessAlert] = useState('');
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(15);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -28,7 +35,7 @@ const UserAdminPage = () => {
 
   const fetchDepartments = useCallback(async () => {
     try {
-      const res = await axiosClient.get('/api/departments/');
+      const res = await axiosClient.get('/api/departments/', { params: { all: 'true' } });
       setDepartments(Array.isArray(res.data) ? res.data : res.data.results || []);
     } catch {
       // departments might fail for unprivileged, ignore
@@ -39,20 +46,35 @@ const UserAdminPage = () => {
     setLoading(true);
     setErrorAlert('');
     try {
-      const params = {};
+      const params = {
+        page: currentPage,
+        page_size: pageSize,
+      };
       if (searchTerm.trim()) params.search = searchTerm.trim();
       if (roleFilter) params.role = roleFilter;
       if (deptFilter) params.department_id = deptFilter;
       if (activeFilter !== '') params.is_active = activeFilter;
 
       const res = await axiosClient.get('/api/users/', { params });
-      setUsers(Array.isArray(res.data) ? res.data : res.data.results || []);
+      if (res.data && Array.isArray(res.data.results)) {
+        setUsers(res.data.results);
+        setTotalCount(res.data.count || 0);
+        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
+      } else if (Array.isArray(res.data)) {
+        setUsers(res.data);
+        setTotalCount(res.data.length);
+        setTotalPages(1);
+      } else {
+        setUsers([]);
+        setTotalCount(0);
+        setTotalPages(1);
+      }
     } catch (err) {
       setErrorAlert('Không thể tải danh sách người dùng. Vui lòng thử lại.');
     } finally {
       setLoading(false);
     }
-  }, [searchTerm, roleFilter, deptFilter, activeFilter]);
+  }, [currentPage, pageSize, searchTerm, roleFilter, deptFilter, activeFilter]);
 
   useEffect(() => {
     fetchDepartments();
@@ -205,7 +227,10 @@ const UserAdminPage = () => {
             type="text"
             placeholder="Tìm theo tên, username, email..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -214,7 +239,10 @@ const UserAdminPage = () => {
         <div>
           <select
             value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
+            onChange={(e) => {
+              setRoleFilter(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
             aria-label="Lọc theo vai trò"
           >
@@ -230,7 +258,10 @@ const UserAdminPage = () => {
           <div>
             <select
               value={deptFilter}
-              onChange={(e) => setDeptFilter(e.target.value)}
+              onChange={(e) => {
+                setDeptFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
               aria-label="Lọc theo phòng ban"
             >
@@ -248,7 +279,10 @@ const UserAdminPage = () => {
         <div>
           <select
             value={activeFilter}
-            onChange={(e) => setActiveFilter(e.target.value)}
+            onChange={(e) => {
+              setActiveFilter(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
             aria-label="Lọc theo trạng thái hoạt động"
           >
@@ -359,6 +393,15 @@ const UserAdminPage = () => {
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalCount={totalCount}
+          pageSize={pageSize}
+          onPageChange={(page) => setCurrentPage(page)}
+          loading={loading}
+        />
       </div>
 
       {/* Edit Role & Department Modal (Admin only, NO DELETE BUTTON) */}

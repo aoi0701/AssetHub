@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axiosClient from '../api/axiosClient';
+import Pagination from '../components/Pagination';
 import { Building2, Plus, Edit, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
 
 const DepartmentPage = () => {
@@ -7,6 +8,12 @@ const DepartmentPage = () => {
   const [loading, setLoading] = useState(false);
   const [errorAlert, setErrorAlert] = useState('');
   const [successAlert, setSuccessAlert] = useState('');
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(15);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   // Modal State (Create or Edit)
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -23,14 +30,30 @@ const DepartmentPage = () => {
     setLoading(true);
     setErrorAlert('');
     try {
-      const res = await axiosClient.get('/api/departments/');
-      setDepartments(Array.isArray(res.data) ? res.data : res.data.results || []);
+      const params = {
+        page: currentPage,
+        page_size: pageSize,
+      };
+      const res = await axiosClient.get('/api/departments/', { params });
+      if (res.data && Array.isArray(res.data.results)) {
+        setDepartments(res.data.results);
+        setTotalCount(res.data.count || 0);
+        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
+      } else if (Array.isArray(res.data)) {
+        setDepartments(res.data);
+        setTotalCount(res.data.length);
+        setTotalPages(1);
+      } else {
+        setDepartments([]);
+        setTotalCount(0);
+        setTotalPages(1);
+      }
     } catch {
       setErrorAlert('Không thể tải danh sách phòng ban. Vui lòng thử lại.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentPage, pageSize]);
 
   useEffect(() => {
     fetchDepartments();
@@ -209,6 +232,15 @@ const DepartmentPage = () => {
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalCount={totalCount}
+          pageSize={pageSize}
+          onPageChange={(page) => setCurrentPage(page)}
+          loading={loading}
+        />
       </div>
 
       {/* Modal: Create / Edit Department (STRICT: NO DELETE BUTTON) */}

@@ -49,11 +49,53 @@ let mockCategories = [
 ];
 
 const server = setupServer(
-  http.get('/api/users/', () => {
-    return HttpResponse.json(mockUsers);
+  http.get('/api/users/', ({ request }) => {
+    const url = new URL(request.url);
+    const pageParam = url.searchParams.get('page');
+    let filtered = mockUsers;
+    const role = url.searchParams.get('role');
+    if (role) {
+      filtered = filtered.filter((u) => u.role === role);
+    }
+    const search = (url.searchParams.get('search') || '').toLowerCase().trim();
+    if (search) {
+      filtered = filtered.filter(
+        (u) =>
+          u.username.toLowerCase().includes(search) ||
+          (u.full_name && u.full_name.toLowerCase().includes(search)) ||
+          (u.email && u.email.toLowerCase().includes(search))
+      );
+    }
+    if (pageParam) {
+      const page = parseInt(pageParam, 10);
+      const pageSize = parseInt(url.searchParams.get('page_size') || '15', 10);
+      const start = (page - 1) * pageSize;
+      return HttpResponse.json({
+        count: filtered.length,
+        total_pages: Math.ceil(filtered.length / pageSize) || 1,
+        current_page: page,
+        page_size: pageSize,
+        results: filtered.slice(start, start + pageSize),
+      });
+    }
+    return HttpResponse.json(filtered);
   }),
 
-  http.get('/api/departments/', () => {
+  http.get('/api/departments/', ({ request }) => {
+    const url = new URL(request.url);
+    const pageParam = url.searchParams.get('page');
+    if (pageParam) {
+      const page = parseInt(pageParam, 10);
+      const pageSize = parseInt(url.searchParams.get('page_size') || '15', 10);
+      const start = (page - 1) * pageSize;
+      return HttpResponse.json({
+        count: mockDepartments.length,
+        total_pages: Math.ceil(mockDepartments.length / pageSize) || 1,
+        current_page: page,
+        page_size: pageSize,
+        results: mockDepartments.slice(start, start + pageSize),
+      });
+    }
     return HttpResponse.json(mockDepartments);
   }),
 
@@ -505,5 +547,115 @@ describe('Admin Management Pages Tests', () => {
       expect(screen.getByText('Category 16')).toBeInTheDocument();
     });
     expect(screen.getByText(/Đang xem 16–25 trên tổng 25 bản ghi/i)).toBeInTheDocument();
+  });
+
+  it('DepartmentPage: renders pagination controls and navigates across pages', async () => {
+    const manyDepts = Array.from({ length: 20 }, (_, i) => ({
+      id: i + 1,
+      code: `DP${i + 1}`,
+      name: `Phòng Ban ${i + 1}`,
+      description: `Mô tả ${i + 1}`,
+    }));
+
+    server.use(
+      http.get('/api/departments/', ({ request }) => {
+        const url = new URL(request.url);
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: manyDepts.length,
+          total_pages: Math.ceil(manyDepts.length / pageSize),
+          current_page: page,
+          page_size: pageSize,
+          results: manyDepts.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <DepartmentPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Phòng Ban 1')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 20 bản ghi/i)).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    expect(nextBtn).toBeEnabled();
+    await userEvent.click(nextBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Phòng Ban 16')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 16–20 trên tổng 20 bản ghi/i)).toBeInTheDocument();
+  });
+
+  it('UserAdminPage: renders pagination controls and resets page to 1 on filter change', async () => {
+    const manyUsers = Array.from({ length: 25 }, (_, i) => ({
+      id: i + 1,
+      username: `user_${i + 1}`,
+      email: `user_${i + 1}@example.com`,
+      full_name: `User ${i + 1}`,
+      role: i === 0 ? 'ADMIN' : 'USER',
+      department_id: 1,
+      department_name: 'Phòng IT',
+      department_code: 'IT',
+      is_active: true,
+    }));
+
+    let lastRequestedPage = null;
+
+    server.use(
+      http.get('/api/users/', ({ request }) => {
+        const url = new URL(request.url);
+        lastRequestedPage = url.searchParams.get('page');
+        const page = parseInt(lastRequestedPage || '1', 10);
+        const pageSize = 15;
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: manyUsers.length,
+          total_pages: Math.ceil(manyUsers.length / pageSize),
+          current_page: page,
+          page_size: pageSize,
+          results: manyUsers.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <UserAdminPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('User 1')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 25 bản ghi/i)).toBeInTheDocument();
+
+    // Navigate to page 2
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    await userEvent.click(nextBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('User 16')).toBeInTheDocument();
+    });
+    expect(lastRequestedPage).toBe('2');
+
+    // Change role filter -> should reset to page 1
+    const roleSelect = screen.getByLabelText(/Lọc theo vai trò/i);
+    await userEvent.selectOptions(roleSelect, 'USER');
+
+    await waitFor(() => {
+      expect(lastRequestedPage).toBe('1');
+    });
   });
 });
