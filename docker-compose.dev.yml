@@ -12,6 +12,8 @@ services:
       DJANGO_DEBUG: "True"
       ALLOW_DEMO_SEED: "true"
       DEMO_SEED_PASSWORD: "aoi0701@"
+      AUTH_LOGIN_THROTTLE_RATE: "300/minute"
+      AUTH_REGISTER_THROTTLE_RATE: "300/minute"
 
   frontend:
     build:

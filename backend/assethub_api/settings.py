@@ -155,8 +155,8 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_THROTTLE_RATES': {
         'anon': '1000/minute',
-        'auth_login': '10/minute',
-        'auth_register': '10/minute',
+        'auth_login': os.environ.get('AUTH_LOGIN_THROTTLE_RATE', '10/minute'),
+        'auth_register': os.environ.get('AUTH_REGISTER_THROTTLE_RATE', '10/minute'),
     },
 }
 

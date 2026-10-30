@@ -909,3 +909,32 @@ npm --prefix frontend run test:e2e
 4. **Trạng thái mã nguồn**:
    - Commit: `bf3ad2e` trên nhánh `dev`.
    - Push: Đã đồng bộ với `origin/dev`.
+
+---
+
+### 4.7 Nghiệm thu Phân trang phía Backend & Khắc phục Tràn Cột Bảng Yêu cầu (/requests)
+
+1. **Phân trang phía Backend (`StandardPagination`)**:
+   - Tạo class chuẩn `StandardPagination` (`page_size = 15`, `page_size_query_param = 'page_size'`, `max_page_size = 100`).
+   - Trả về payload chuẩn: `count`, `total_pages`, `current_page`, `page_size`, `next`, `previous`, `results`.
+   - Hỗ trợ `optional_pagination = True` trên `DepartmentViewSet`, `CategoryViewSet`, `UserAdminViewSet` và cờ `all=true` để các dropdown trong modal (`CreateRequestModal`, `AssetCreateModal`, `AssetActionModal`, bộ lọc bảng) luôn lấy đầy đủ danh mục và phòng ban mà không bị giới hạn 15 bản ghi.
+   - Tìm kiếm và lọc bằng `Q()` trên toàn bộ database trước khi phân trang.
+
+2. **Component phân trang dùng chung (`Pagination.jsx`)**:
+   - Thẻ ngữ nghĩa `<nav aria-label="Phân trang">`.
+   - Hiển thị tóm tắt: `Đang xem X–Y trên tổng Z bản ghi (Trang C / T)`.
+   - Nút `Trước`, `Sau` và dãy số trang có ellipsis `...`.
+   - Tự co giãn linh hoạt trên mobile/desktop (`hidden sm:inline`, `hidden sm:flex`).
+   - Đổi bộ lọc hoặc tìm kiếm tự động đưa về trang 1.
+   - Tích hợp đồng bộ trên 5 trang quản trị: `/categories`, `/departments`, `/users`, `/assets`, `/requests`.
+
+3. **Khắc phục lỗi tràn cột thao tác và nút bị cắt trên trang Yêu cầu (`/requests`)**:
+   - Cột `Thao tác` được cố định độ rộng `min-w-[210px]`, padding chuẩn `px-4 py-3.5` (loại bỏ `pl-4 pr-5`), cho phép cả 2 nút `[Xét duyệt]` và `[Chi tiết]` hiển thị trọn vẹn, không đè nhau và không bị cắt chữ "Thao tác" hay "Chi tiết" ở bất kỳ độ phân giải nào (kể cả 1366x768 và 1920x1080).
+   - Ô lý do `reason` và mục tiêu yêu cầu được bọc trong container `truncate` có `max-w-[200px]` và tooltip `title` để không làm phình chiều rộng dòng bảng.
+
+4. **Kết quả kiểm chứng thực tế**:
+   - **Backend Pytest**: `docker compose exec -T backend pytest` -> **176/176 passed (100%)** trong 45.60s.
+   - **Frontend Vitest**: `npm --prefix frontend test -- --run` -> **57/57 passed (100%)** trong 4.02s (10/10 test suites).
+   - **Frontend Production Build**: `npm --prefix frontend run build` -> Hoàn thành trong 3.33s, exit code 0.
+   - **Playwright E2E**: `npx playwright test e2e/categories-page.spec.js e2e/layout.spec.js e2e/requests-layout.spec.js e2e/pagination.spec.js` -> **14/14 passed (100%)** trong 28.3s.
+

@@ -45,8 +45,7 @@ const Pagination = ({
   const isNextDisabled = currentPage >= safeTotalPages || loading || totalCount === 0;
 
   return (
-    <div
-      role="navigation"
+    <nav
       aria-label="Phân trang"
       className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 bg-white border-t border-slate-200/90 text-sm text-slate-500"
     >
@@ -113,7 +112,7 @@ const Pagination = ({
           <ChevronRight className="w-3.5 h-3.5 ml-1" />
         </button>
       </div>
-    </div>
+    </nav>
   );
 };
 

@@ -16,7 +16,9 @@ test.describe('Requests Page Table Layout', () => {
 
   test.beforeEach(() => {
     try {
-      execSync('docker compose exec -T backend python manage.py shell -c "from django.core.cache import cache; cache.clear()"', {
+      const projectRoot = path.resolve(__dirname, '../..');
+      execSync('docker compose exec -T backend python -c "import django, os; os.environ.setdefault(\'DJANGO_SETTINGS_MODULE\', \'assethub_api.settings\'); django.setup(); from django.core.cache import cache; cache.clear()"', {
+        cwd: projectRoot,
         stdio: 'ignore',
         timeout: 10000,
       });
