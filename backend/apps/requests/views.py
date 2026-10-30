@@ -73,7 +73,7 @@ class RequestListCreateView(generics.ListCreateAPIView):
 
         return qs.select_related(
             'requester', 'department', 'requested_category', 'asset', 'reviewed_by'
-        ).order_by('-created_at')
+        ).order_by('-created_at', '-id')
 
 
     @extend_schema(

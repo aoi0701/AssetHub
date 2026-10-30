@@ -8,7 +8,9 @@ class StandardPagination(PageNumberPagination):
     max_page_size = 100
 
     def paginate_queryset(self, queryset, request, view=None):
-        if request.query_params.get('all') == 'true' or request.query_params.get('pagination') == 'false':
+        all_param = str(request.query_params.get('all', '')).strip().lower()
+        pagination_param = str(request.query_params.get('pagination', '')).strip().lower()
+        if all_param in ('true', '1') or pagination_param in ('false', '0'):
             return None
         if getattr(view, 'optional_pagination', False) and 'page' not in request.query_params and 'page_size' not in request.query_params:
             return None

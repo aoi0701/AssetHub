@@ -37,6 +37,10 @@ const AssetListPage = () => {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
 
+  // Refresh trigger
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refreshAssets = () => setRefreshKey((prev) => prev + 1);
+
   // Create Modal
   const [isCreateOpen, setIsCreateOpen] = useState(false);
 
@@ -58,47 +62,88 @@ const AssetListPage = () => {
     }
   }, [isAdmin]);
 
-  const fetchAssets = useCallback(async () => {
-    setLoading(true);
-    setErrorAlert('');
-    try {
-      const params = {
-        page: currentPage,
-        page_size: pageSize,
-      };
-      if (searchTerm.trim()) params.search = searchTerm.trim();
-      if (statusFilter) params.status = statusFilter;
-      if (categoryFilter) params.category_id = categoryFilter;
-      if (isAdmin && departmentFilter) params.department_id = departmentFilter;
-
-      const res = await axiosClient.get('/api/assets/', { params });
-      if (res.data && Array.isArray(res.data.results)) {
-        setAssets(res.data.results);
-        setTotalCount(res.data.count || 0);
-        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
-      } else if (Array.isArray(res.data)) {
-        setAssets(res.data);
-        setTotalCount(res.data.length);
-        setTotalPages(1);
-      } else {
-        setAssets([]);
-        setTotalCount(0);
-        setTotalPages(1);
-      }
-    } catch {
-      setErrorAlert('Không thể tải danh sách tài sản. Vui lòng thử lại.');
-    } finally {
-      setLoading(false);
-    }
-  }, [currentPage, pageSize, searchTerm, statusFilter, categoryFilter, departmentFilter, isAdmin]);
-
   useEffect(() => {
     fetchDropdowns();
   }, [fetchDropdowns]);
 
+  // Race condition guard & fetch assets
   useEffect(() => {
-    fetchAssets();
-  }, [fetchAssets]);
+    let active = true;
+
+    const loadAssets = async () => {
+      setLoading(true);
+      setErrorAlert('');
+      try {
+        const params = {
+          page: currentPage,
+          page_size: pageSize,
+        };
+        if (searchTerm.trim()) params.search = searchTerm.trim();
+        if (statusFilter) params.status = statusFilter;
+        if (categoryFilter) params.category_id = categoryFilter;
+        if (isAdmin && departmentFilter) params.department_id = departmentFilter;
+
+        const res = await axiosClient.get('/api/assets/', { params });
+        if (!active) return;
+
+        if (res.data && Array.isArray(res.data.results)) {
+          const count = res.data.count || 0;
+          const pages = res.data.total_pages || Math.ceil(count / pageSize) || 1;
+          setAssets(res.data.results);
+          setTotalCount(count);
+          setTotalPages(pages);
+
+          if (currentPage > pages && pages > 0) {
+            setCurrentPage(pages);
+          }
+        } else if (Array.isArray(res.data)) {
+          setAssets(res.data);
+          setTotalCount(res.data.length);
+          setTotalPages(1);
+          if (currentPage > 1) {
+            setCurrentPage(1);
+          }
+        } else {
+          setAssets([]);
+          setTotalCount(0);
+          setTotalPages(1);
+        }
+      } catch {
+        if (active) {
+          setErrorAlert('Không thể tải danh sách tài sản. Vui lòng thử lại.');
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadAssets();
+
+    return () => {
+      active = false;
+    };
+  }, [currentPage, pageSize, searchTerm, statusFilter, categoryFilter, departmentFilter, isAdmin, refreshKey]);
+
+  // Page clamping guard when totalPages drops
+  useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const hasActiveFilters = Boolean(
+    searchTerm.trim() || statusFilter || categoryFilter || (isAdmin && departmentFilter)
+  );
+
+  const handleClearFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('');
+    setCategoryFilter('');
+    setDepartmentFilter('');
+    setCurrentPage(1);
+  };
 
   return (
     <div className="w-full py-6 px-4 sm:px-6 lg:px-8">
@@ -118,7 +163,8 @@ const AssetListPage = () => {
 
         <div className="flex items-center space-x-3 self-start sm:self-auto">
           <button
-            onClick={fetchAssets}
+            type="button"
+            onClick={refreshAssets}
             className="inline-flex items-center px-3 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 transition-colors shadow-sm"
           >
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
@@ -127,6 +173,7 @@ const AssetListPage = () => {
 
           {isAdmin && (
             <button
+              type="button"
               onClick={() => setIsCreateOpen(true)}
               className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
             >
@@ -146,6 +193,7 @@ const AssetListPage = () => {
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div className="flex-1">{errorAlert}</div>
           <button
+            type="button"
             onClick={() => setErrorAlert('')}
             className="text-red-500 hover:text-red-700 font-bold ml-2"
           >
@@ -258,8 +306,23 @@ const AssetListPage = () => {
             <tbody className="divide-y divide-slate-100 bg-white">
               {assets.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
-                    {loading ? 'Đang tải dữ liệu...' : 'Không tìm thấy tài sản nào phù hợp.'}
+                  <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
+                    {loading ? (
+                      'Đang tải dữ liệu...'
+                    ) : hasActiveFilters ? (
+                      <div className="flex flex-col items-center justify-center space-y-2">
+                        <span>Không tìm thấy tài sản nào phù hợp.</span>
+                        <button
+                          type="button"
+                          onClick={handleClearFilters}
+                          className="text-xs font-medium text-blue-600 hover:text-blue-800 underline focus:outline-none"
+                        >
+                          Xóa bộ lọc
+                        </button>
+                      </div>
+                    ) : (
+                      'Chưa có tài sản nào.'
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -338,7 +401,7 @@ const AssetListPage = () => {
           isOpen={isCreateOpen}
           onClose={() => setIsCreateOpen(false)}
           onSuccess={() => {
-            fetchAssets();
+            refreshAssets();
           }}
           categories={categories}
           departments={departments}

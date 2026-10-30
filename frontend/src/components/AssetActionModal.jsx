@@ -82,7 +82,7 @@ const AssetActionModal = ({
       // Fetch users in department if allocating and none provided
       if (actionType === 'allocate' && users.length === 0 && asset?.department_id) {
         axiosClient
-          .get('/api/users/', { params: { department_id: asset.department_id, is_active: true } })
+          .get('/api/users/', { params: { department_id: asset.department_id, is_active: true, all: 'true' } })
           .then((res) => {
             const list = Array.isArray(res.data) ? res.data : res.data.results || [];
             setDepartmentUsers(list);
@@ -95,7 +95,7 @@ const AssetActionModal = ({
       // Fetch departments if transfer and none provided
       if (actionType === 'transfer' && departments.length === 0) {
         axiosClient
-          .get('/api/departments/')
+          .get('/api/departments/', { params: { all: 'true' } })
           .then((res) => {
             const list = Array.isArray(res.data) ? res.data : res.data.results || [];
             setAllDepartments(list);

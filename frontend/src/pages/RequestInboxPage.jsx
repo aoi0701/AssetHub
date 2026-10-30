@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../context/AuthContext';
 import RequestReviewModal from '../components/RequestReviewModal';
@@ -10,9 +10,6 @@ import {
   RefreshCw,
   AlertCircle,
   CheckCircle,
-  Clock,
-  CheckCircle2,
-  XCircle,
   Eye,
 } from 'lucide-react';
 
@@ -36,46 +33,87 @@ const RequestInboxPage = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
 
+  // Refresh trigger
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refreshRequests = () => setRefreshKey((prev) => prev + 1);
+
   // Modals
   const [reviewingRequest, setReviewingRequest] = useState(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [viewingDetail, setViewingDetail] = useState(null);
 
-  const fetchRequests = useCallback(async () => {
-    setLoading(true);
-    setErrorAlert('');
-    try {
-      const params = {
-        page: currentPage,
-        page_size: pageSize,
-      };
-      if (statusFilter) params.status = statusFilter;
-      if (typeFilter) params.request_type = typeFilter;
-
-      const res = await axiosClient.get('/api/requests/', { params });
-      if (res.data && Array.isArray(res.data.results)) {
-        setRequests(res.data.results);
-        setTotalCount(res.data.count || 0);
-        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
-      } else if (Array.isArray(res.data)) {
-        setRequests(res.data);
-        setTotalCount(res.data.length);
-        setTotalPages(1);
-      } else {
-        setRequests([]);
-        setTotalCount(0);
-        setTotalPages(1);
-      }
-    } catch {
-      setErrorAlert('Không thể tải danh sách phiếu yêu cầu. Vui lòng thử lại.');
-    } finally {
-      setLoading(false);
-    }
-  }, [currentPage, pageSize, statusFilter, typeFilter]);
-
+  // Race condition guard & fetch requests
   useEffect(() => {
-    fetchRequests();
-  }, [fetchRequests]);
+    let active = true;
+
+    const loadRequests = async () => {
+      setLoading(true);
+      setErrorAlert('');
+      try {
+        const params = {
+          page: currentPage,
+          page_size: pageSize,
+        };
+        if (statusFilter) params.status = statusFilter;
+        if (typeFilter) params.request_type = typeFilter;
+
+        const res = await axiosClient.get('/api/requests/', { params });
+        if (!active) return;
+
+        if (res.data && Array.isArray(res.data.results)) {
+          const count = res.data.count || 0;
+          const pages = res.data.total_pages || Math.ceil(count / pageSize) || 1;
+          setRequests(res.data.results);
+          setTotalCount(count);
+          setTotalPages(pages);
+
+          if (currentPage > pages && pages > 0) {
+            setCurrentPage(pages);
+          }
+        } else if (Array.isArray(res.data)) {
+          setRequests(res.data);
+          setTotalCount(res.data.length);
+          setTotalPages(1);
+          if (currentPage > 1) {
+            setCurrentPage(1);
+          }
+        } else {
+          setRequests([]);
+          setTotalCount(0);
+          setTotalPages(1);
+        }
+      } catch {
+        if (active) {
+          setErrorAlert('Không thể tải danh sách phiếu yêu cầu. Vui lòng thử lại.');
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadRequests();
+
+    return () => {
+      active = false;
+    };
+  }, [currentPage, pageSize, statusFilter, typeFilter, refreshKey]);
+
+  // Page clamping guard when totalPages drops
+  useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const hasActiveFilters = Boolean(statusFilter || typeFilter);
+
+  const handleClearFilters = () => {
+    setStatusFilter('');
+    setTypeFilter('');
+    setCurrentPage(1);
+  };
 
   const requestTypeLabels = {
     ALLOCATE: 'Cấp phát mới',
@@ -116,7 +154,8 @@ const RequestInboxPage = () => {
 
         <div className="flex items-center space-x-3 self-start sm:self-auto">
           <button
-            onClick={fetchRequests}
+            type="button"
+            onClick={refreshRequests}
             className="inline-flex items-center px-3 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 transition-colors shadow-sm"
           >
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
@@ -125,6 +164,7 @@ const RequestInboxPage = () => {
 
           {isUser && (
             <button
+              type="button"
               onClick={() => setIsCreateOpen(true)}
               className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
             >
@@ -144,6 +184,7 @@ const RequestInboxPage = () => {
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div className="flex-1">{errorAlert}</div>
           <button
+            type="button"
             onClick={() => setErrorAlert('')}
             className="text-red-500 hover:text-red-700 font-bold ml-2"
           >
@@ -160,6 +201,7 @@ const RequestInboxPage = () => {
           <CheckCircle className="w-5 h-5 flex-shrink-0" />
           <div className="flex-1">{successAlert}</div>
           <button
+            type="button"
             onClick={() => setSuccessAlert('')}
             className="text-green-500 hover:text-green-700 font-bold ml-2"
           >
@@ -227,9 +269,24 @@ const RequestInboxPage = () => {
                 <tr>
                   <td
                     colSpan={isStaff ? 7 : 6}
-                    className="px-4 py-12 text-center text-slate-400"
+                    className="px-4 py-12 text-center text-slate-500"
                   >
-                    {loading ? 'Đang tải dữ liệu...' : 'Không có phiếu yêu cầu nào.'}
+                    {loading ? (
+                      'Đang tải dữ liệu...'
+                    ) : hasActiveFilters ? (
+                      <div className="flex flex-col items-center justify-center space-y-2">
+                        <span>Không tìm thấy phiếu yêu cầu nào phù hợp.</span>
+                        <button
+                          type="button"
+                          onClick={handleClearFilters}
+                          className="text-xs font-medium text-blue-600 hover:text-blue-800 underline focus:outline-none"
+                        >
+                          Xóa bộ lọc
+                        </button>
+                      </div>
+                    ) : (
+                      'Không có phiếu yêu cầu nào.'
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -314,6 +371,7 @@ const RequestInboxPage = () => {
                           {/* Manager/Admin review button if PENDING */}
                           {isStaff && req.status === 'PENDING' && (
                             <button
+                              type="button"
                               onClick={() => setReviewingRequest(req)}
                               className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors shrink-0"
                             >
@@ -322,6 +380,7 @@ const RequestInboxPage = () => {
                           )}
 
                           <button
+                            type="button"
                             onClick={() => setViewingDetail(req)}
                             className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white hover:text-blue-700 hover:bg-blue-50/70 border border-slate-200/90 rounded-lg shadow-xs transition-colors shrink-0"
                             title="Xem chi tiết"
@@ -356,7 +415,7 @@ const RequestInboxPage = () => {
           onClose={() => setReviewingRequest(null)}
           onSuccess={() => {
             setSuccessAlert('Xử lý phiếu yêu cầu thành công.');
-            fetchRequests();
+            refreshRequests();
           }}
           requestItem={reviewingRequest}
         />
@@ -369,7 +428,7 @@ const RequestInboxPage = () => {
           onClose={() => setIsCreateOpen(false)}
           onSuccess={() => {
             setSuccessAlert('Tạo phiếu yêu cầu thành công.');
-            fetchRequests();
+            refreshRequests();
           }}
         />
       )}

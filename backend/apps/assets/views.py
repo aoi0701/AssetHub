@@ -35,8 +35,7 @@ from apps.common.pagination import StandardPagination
 from apps.common.storage_backends import AttachmentStorage
 
 
-class AssetPagination(StandardPagination):
-    pass
+AssetPagination = StandardPagination
 
 
 class AssetPermission(permissions.BasePermission):
@@ -158,7 +157,7 @@ class AssetViewSet(viewsets.ModelViewSet):
     - User: Read-only access scoped to currently held assets.
     """
     permission_classes = [permissions.IsAuthenticated, AssetPermission]
-    pagination_class = AssetPagination
+    pagination_class = StandardPagination
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_queryset(self):

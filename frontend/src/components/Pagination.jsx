@@ -13,7 +13,7 @@ const Pagination = ({
   const start = totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const end = Math.min(currentPage * pageSize, totalCount);
 
-  // Generate page numbers to display
+  // Generate page numbers to display with ellipsis when safeTotalPages > 5
   const getPageNumbers = () => {
     if (safeTotalPages <= 5) {
       return Array.from({ length: safeTotalPages }, (_, i) => i + 1);
@@ -29,20 +29,20 @@ const Pagination = ({
     return pages;
   };
 
+  const isPrevDisabled = currentPage <= 1 || loading || totalCount === 0;
+  const isNextDisabled = currentPage >= safeTotalPages || loading || totalCount === 0;
+
   const handlePrev = () => {
-    if (currentPage > 1 && !loading && onPageChange) {
+    if (!isPrevDisabled && onPageChange) {
       onPageChange(currentPage - 1);
     }
   };
 
   const handleNext = () => {
-    if (currentPage < safeTotalPages && !loading && onPageChange) {
+    if (!isNextDisabled && onPageChange) {
       onPageChange(currentPage + 1);
     }
   };
-
-  const isPrevDisabled = currentPage <= 1 || loading || totalCount === 0;
-  const isNextDisabled = currentPage >= safeTotalPages || loading || totalCount === 0;
 
   return (
     <nav
@@ -51,9 +51,9 @@ const Pagination = ({
     >
       <div className="text-xs sm:text-sm text-slate-600">
         {`Đang xem ${start}–${end} trên tổng ${totalCount} bản ghi`}
-        {safeTotalPages > 1 && (
+        {totalPages > 0 && totalCount > 0 && (
           <span className="ml-2 text-slate-400 hidden sm:inline">
-            {` (Trang ${currentPage} / ${safeTotalPages})`}
+            {`(Trang ${currentPage} / ${totalPages})`}
           </span>
         )}
       </div>
@@ -64,7 +64,8 @@ const Pagination = ({
           onClick={handlePrev}
           disabled={isPrevDisabled}
           aria-label="Trang trước"
-          className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-300 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-2xs"
+          title="Trang trước"
+          className="inline-flex items-center justify-center min-h-[32px] min-w-[32px] sm:min-h-[28px] sm:min-w-[28px] px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-300 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <ChevronLeft className="w-3.5 h-3.5 mr-1" />
           Trước
@@ -75,7 +76,11 @@ const Pagination = ({
             {getPageNumbers().map((page, idx) => {
               if (page === '...') {
                 return (
-                  <span key={`ellipsis-${idx}`} className="px-2 py-1 text-xs text-slate-400">
+                  <span
+                    key={`ellipsis-${idx}`}
+                    aria-hidden="true"
+                    className="px-2 py-1 text-xs text-slate-400 select-none"
+                  >
                     ...
                   </span>
                 );
@@ -85,14 +90,16 @@ const Pagination = ({
                 <button
                   key={`page-${page}`}
                   type="button"
-                  onClick={() => onPageChange && onPageChange(page)}
+                  onClick={() => !loading && onPageChange && onPageChange(page)}
                   disabled={loading}
+                  aria-label={`Trang ${page}`}
+                  title={`Trang ${page}`}
                   aria-current={isCurrent ? 'page' : undefined}
-                  className={`inline-flex items-center justify-center min-w-[28px] h-7 px-2 text-xs font-medium rounded-lg border transition-colors ${
+                  className={`inline-flex items-center justify-center min-w-[32px] min-h-[32px] sm:min-w-[28px] sm:min-h-[28px] px-2 text-xs font-medium rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                     isCurrent
                       ? 'bg-blue-50 text-blue-700 border-blue-200 font-semibold shadow-2xs'
                       : 'text-slate-600 border-slate-200 bg-white hover:bg-slate-50 hover:text-slate-900'
-                  }`}
+                  } disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
                   {page}
                 </button>
@@ -106,7 +113,8 @@ const Pagination = ({
           onClick={handleNext}
           disabled={isNextDisabled}
           aria-label="Trang sau"
-          className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-300 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-2xs"
+          title="Trang sau"
+          className="inline-flex items-center justify-center min-h-[32px] min-w-[32px] sm:min-h-[28px] sm:min-w-[28px] px-2.5 py-1 text-xs font-medium rounded-lg border border-slate-300 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           Sau
           <ChevronRight className="w-3.5 h-3.5 ml-1" />

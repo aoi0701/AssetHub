@@ -51,11 +51,21 @@ let mockCategories = [
 const server = setupServer(
   http.get('/api/users/', ({ request }) => {
     const url = new URL(request.url);
-    const pageParam = url.searchParams.get('page');
-    let filtered = mockUsers;
+    const allParam = url.searchParams.get('all');
+    let filtered = [...mockUsers];
+
     const role = url.searchParams.get('role');
     if (role) {
       filtered = filtered.filter((u) => u.role === role);
+    }
+    const deptId = url.searchParams.get('department_id');
+    if (deptId) {
+      filtered = filtered.filter((u) => String(u.department_id) === String(deptId));
+    }
+    const isActive = url.searchParams.get('is_active');
+    if (isActive !== null && isActive !== '') {
+      const activeBool = isActive === 'true';
+      filtered = filtered.filter((u) => u.is_active === activeBool);
     }
     const search = (url.searchParams.get('search') || '').toLowerCase().trim();
     if (search) {
@@ -66,6 +76,12 @@ const server = setupServer(
           (u.email && u.email.toLowerCase().includes(search))
       );
     }
+
+    if (allParam === 'true') {
+      return HttpResponse.json(filtered);
+    }
+
+    const pageParam = url.searchParams.get('page');
     if (pageParam) {
       const page = parseInt(pageParam, 10);
       const pageSize = parseInt(url.searchParams.get('page_size') || '15', 10);
@@ -83,17 +99,34 @@ const server = setupServer(
 
   http.get('/api/departments/', ({ request }) => {
     const url = new URL(request.url);
+    const allParam = url.searchParams.get('all');
+    let filtered = [...mockDepartments];
+
+    const search = (url.searchParams.get('search') || '').toLowerCase().trim();
+    if (search) {
+      filtered = filtered.filter(
+        (d) =>
+          (d.name && d.name.toLowerCase().includes(search)) ||
+          (d.code && d.code.toLowerCase().includes(search)) ||
+          (d.description && d.description.toLowerCase().includes(search))
+      );
+    }
+
+    if (allParam === 'true') {
+      return HttpResponse.json(filtered);
+    }
+
     const pageParam = url.searchParams.get('page');
     if (pageParam) {
       const page = parseInt(pageParam, 10);
       const pageSize = parseInt(url.searchParams.get('page_size') || '15', 10);
       const start = (page - 1) * pageSize;
       return HttpResponse.json({
-        count: mockDepartments.length,
-        total_pages: Math.ceil(mockDepartments.length / pageSize) || 1,
+        count: filtered.length,
+        total_pages: Math.ceil(filtered.length / pageSize) || 1,
         current_page: page,
         page_size: pageSize,
-        results: mockDepartments.slice(start, start + pageSize),
+        results: filtered.slice(start, start + pageSize),
       });
     }
     return HttpResponse.json(mockDepartments);
@@ -119,8 +152,10 @@ const server = setupServer(
 
   http.get('/api/categories/', ({ request }) => {
     const url = new URL(request.url);
+    const allParam = url.searchParams.get('all');
+    let filtered = [...mockCategories];
+
     const search = (url.searchParams.get('search') || '').toLowerCase().trim();
-    let filtered = mockCategories;
     if (search) {
       filtered = filtered.filter(
         (c) =>
@@ -128,6 +163,11 @@ const server = setupServer(
           (c.description && c.description.toLowerCase().includes(search))
       );
     }
+
+    if (allParam === 'true') {
+      return HttpResponse.json(filtered);
+    }
+
     const pageParam = url.searchParams.get('page');
     if (pageParam) {
       const page = parseInt(pageParam, 10);
@@ -657,5 +697,352 @@ describe('Admin Management Pages Tests', () => {
     await waitFor(() => {
       expect(lastRequestedPage).toBe('1');
     });
+  });
+
+  it('DepartmentPage: search filter narrows down items, displays count, and resets page', async () => {
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <DepartmentPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Phòng Công nghệ')).toBeInTheDocument();
+    expect(screen.getByText('Phòng Nhân sự')).toBeInTheDocument();
+    expect(screen.getByText(/Tổng số:/i)).toHaveTextContent('2');
+
+    // Type in search box
+    const searchInput = screen.getByPlaceholderText(/Tìm theo tên hoặc mã/i);
+    await userEvent.type(searchInput, 'Nhân sự');
+
+    expect(await screen.findByText('Phòng Nhân sự')).toBeInTheDocument();
+    expect(screen.queryByText('Phòng Công nghệ')).toBeNull();
+    expect(screen.getByText(/Tìm thấy/i)).toHaveTextContent('1');
+
+    // Clear search button
+    const clearBtn = screen.getByRole('button', { name: /Xóa tìm kiếm/i });
+    await userEvent.click(clearBtn);
+
+    expect(await screen.findByText('Phòng Công nghệ')).toBeInTheDocument();
+    expect(screen.getByText('Phòng Nhân sự')).toBeInTheDocument();
+  });
+
+  it('DepartmentPage: distinguishes empty search results from zero departments', async () => {
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <DepartmentPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Phòng Công nghệ')).toBeInTheDocument();
+
+    // Search with no matching items
+    const searchInput = screen.getByPlaceholderText(/Tìm theo tên hoặc mã/i);
+    await userEvent.type(searchInput, 'NonExistentXYZ');
+
+    expect(await screen.findByText(/Không tìm thấy kết quả phù hợp/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Xóa bộ lọc tìm kiếm/i })).toBeInTheDocument();
+
+    // Clear and mock 0 departments total
+    server.use(
+      http.get('/api/departments/', () => {
+        return HttpResponse.json({
+          count: 0,
+          total_pages: 1,
+          current_page: 1,
+          page_size: 15,
+          results: [],
+        });
+      })
+    );
+
+    const clearBtn = screen.getByRole('button', { name: /Xóa bộ lọc tìm kiếm/i });
+    await userEvent.click(clearBtn);
+
+    expect(await screen.findByText(/Chưa có phòng ban nào/i)).toBeInTheDocument();
+  });
+
+  it('DepartmentPage: clamps currentPage to totalPages if currentPage > totalPages', async () => {
+    let currentPageParam = null;
+
+    server.use(
+      http.get('/api/departments/', ({ request }) => {
+        const url = new URL(request.url);
+        currentPageParam = parseInt(url.searchParams.get('page') || '1', 10);
+        // Initially 25 items (2 pages), then shrink to 5 items (1 page)
+        return HttpResponse.json({
+          count: 20,
+          total_pages: 2,
+          current_page: currentPageParam,
+          page_size: 15,
+          results: Array.from({ length: 15 }, (_, i) => ({
+            id: i + 1,
+            code: `D${i + 1}`,
+            name: `Phòng ${i + 1}`,
+          })),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <DepartmentPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Phòng 1')).toBeInTheDocument();
+    });
+
+    // Go to page 2
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    await userEvent.click(nextBtn);
+
+    await waitFor(() => {
+      expect(currentPageParam).toBe(2);
+    });
+
+    // Now server returns total_pages: 1
+    server.use(
+      http.get('/api/departments/', ({ request }) => {
+        const url = new URL(request.url);
+        currentPageParam = parseInt(url.searchParams.get('page') || '1', 10);
+        return HttpResponse.json({
+          count: 5,
+          total_pages: 1,
+          current_page: currentPageParam,
+          page_size: 15,
+          results: [{ id: 1, code: 'D1', name: 'Phòng 1 duy nhất' }],
+        });
+      })
+    );
+
+    // Click Làm mới to fetch
+    const refreshBtn = screen.getByRole('button', { name: /Làm mới/i });
+    await userEvent.click(refreshBtn);
+
+    // Clamping should reset currentPage to 1
+    await waitFor(() => {
+      expect(currentPageParam).toBe(1);
+      expect(screen.getByText('Phòng 1 duy nhất')).toBeInTheDocument();
+    });
+  });
+
+  it('CategoryPage: distinguishes empty search results from zero categories and clamps page', async () => {
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <CategoryPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Laptop')).toBeInTheDocument();
+
+    // Search miss
+    const searchInput = screen.getByPlaceholderText(/Tìm theo tên hoặc mô tả/i);
+    await userEvent.type(searchInput, 'UnknownDevice123');
+
+    expect(await screen.findByText(/Không tìm thấy kết quả phù hợp/i)).toBeInTheDocument();
+
+    // Mock zero categories
+    server.use(
+      http.get('/api/categories/', () => {
+        return HttpResponse.json({
+          count: 0,
+          total_pages: 1,
+          current_page: 1,
+          page_size: 15,
+          results: [],
+        });
+      })
+    );
+
+    const clearBtn = screen.getByRole('button', { name: /Xóa bộ lọc tìm kiếm/i });
+    await userEvent.click(clearBtn);
+
+    expect(await screen.findByText(/Chưa có danh mục nào/i)).toBeInTheDocument();
+  });
+
+  it('UserAdminPage: loads departments with all=true for filter and modal dropdowns', async () => {
+    let capturedAllParam = null;
+
+    server.use(
+      http.get('/api/departments/', ({ request }) => {
+        const url = new URL(request.url);
+        capturedAllParam = url.searchParams.get('all');
+        return HttpResponse.json(mockDepartments);
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider
+          initialUser={{ id: 1, username: 'adminuser', role: 'ADMIN' }}
+          initialToken="token-admin"
+        >
+          <UserAdminPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(capturedAllParam).toBe('true');
+    });
+
+    // Verify departments dropdown in filters contains both departments
+    const deptFilterSelect = screen.getByLabelText(/Lọc theo phòng ban/i);
+    expect(within(deptFilterSelect).getByText('Phòng Công nghệ (IT)')).toBeInTheDocument();
+    expect(within(deptFilterSelect).getByText('Phòng Nhân sự (HR)')).toBeInTheDocument();
+
+    // Open edit modal and verify modal department dropdown
+    const editButtons = screen.getAllByRole('button', { name: /Sửa/i });
+    await userEvent.click(editButtons[0]);
+
+    const modal = screen.getByRole('dialog');
+    const modalDeptSelect = within(modal).getByLabelText('Phòng ban');
+    expect(within(modalDeptSelect).getByText('Phòng Công nghệ (IT)')).toBeInTheDocument();
+    expect(within(modalDeptSelect).getByText('Phòng Nhân sự (HR)')).toBeInTheDocument();
+  });
+
+  it('UserAdminPage: clamps currentPage to totalPages if currentPage > totalPages', async () => {
+    let currentPageParam = null;
+
+    server.use(
+      http.get('/api/users/', ({ request }) => {
+        const url = new URL(request.url);
+        currentPageParam = parseInt(url.searchParams.get('page') || '1', 10);
+        return HttpResponse.json({
+          count: 20,
+          total_pages: 2,
+          current_page: currentPageParam,
+          page_size: 15,
+          results: Array.from({ length: 15 }, (_, i) => ({
+            id: i + 1,
+            username: `u${i + 1}`,
+            role: 'USER',
+            is_active: true,
+          })),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <UserAdminPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('@u1')).toBeInTheDocument();
+    });
+
+    // Go to page 2
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    await userEvent.click(nextBtn);
+
+    await waitFor(() => {
+      expect(currentPageParam).toBe(2);
+    });
+
+    // Shrunk to 1 page
+    server.use(
+      http.get('/api/users/', ({ request }) => {
+        const url = new URL(request.url);
+        currentPageParam = parseInt(url.searchParams.get('page') || '1', 10);
+        return HttpResponse.json({
+          count: 2,
+          total_pages: 1,
+          current_page: currentPageParam,
+          page_size: 15,
+          results: [{ id: 1, username: 'u_only', role: 'USER', is_active: true }],
+        });
+      })
+    );
+
+    // Refresh
+    const refreshBtn = screen.getByRole('button', { name: /Làm mới/i });
+    await userEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      expect(currentPageParam).toBe(1);
+      expect(screen.getByText('@u_only')).toBeInTheDocument();
+    });
+  });
+
+  it('CategoryPage: race condition guard ignores stale delayed response from previous search', async () => {
+    // We simulate request 1 for "lap" being slow (150ms) and request 2 for "mon" being fast (20ms)
+    server.use(
+      http.get('/api/categories/', async ({ request }) => {
+        const url = new URL(request.url);
+        const search = url.searchParams.get('search') || '';
+
+        if (search === 'lap') {
+          // Slow response
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          return HttpResponse.json({
+            count: 1,
+            total_pages: 1,
+            current_page: 1,
+            page_size: 15,
+            results: [{ id: 1, name: 'Laptop Stale', description: 'Stale item' }],
+          });
+        }
+
+        if (search === 'mon') {
+          // Fast response
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return HttpResponse.json({
+            count: 1,
+            total_pages: 1,
+            current_page: 1,
+            page_size: 15,
+            results: [{ id: 2, name: 'Monitor Latest', description: 'Fresh item' }],
+          });
+        }
+
+        return HttpResponse.json({
+          count: 2,
+          total_pages: 1,
+          current_page: 1,
+          page_size: 15,
+          results: mockCategories,
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <CategoryPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Laptop')).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText(/Tìm theo tên hoặc mô tả/i);
+    // Type 'lap', then rapidly replace with 'mon'
+    await userEvent.clear(searchInput);
+    await userEvent.type(searchInput, 'lap');
+    await userEvent.clear(searchInput);
+    await userEvent.type(searchInput, 'mon');
+
+    // Wait for the faster 'mon' result
+    expect(await screen.findByText('Monitor Latest')).toBeInTheDocument();
+
+    // Wait until past the 150ms delay of 'lap'
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // 'Monitor Latest' should STILL be in document, and 'Laptop Stale' must NOT overwrite it
+    expect(screen.getByText('Monitor Latest')).toBeInTheDocument();
+    expect(screen.queryByText('Laptop Stale')).toBeNull();
   });
 });

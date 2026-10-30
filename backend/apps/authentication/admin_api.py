@@ -287,7 +287,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
                 | Q(full_name__icontains=search)
             )
 
-        return queryset.order_by('-date_joined')
+        return queryset.order_by('-date_joined', '-id')
 
     def get_serializer_class(self):
         if self.action == 'create':

@@ -454,4 +454,107 @@ describe('AssetFlows Integration Tests', () => {
     });
     expect(screen.getByText(/Đang xem 16–25 trên tổng 25 bản ghi/i)).toBeInTheDocument();
   });
+
+  it('differentiates empty state between filtered no-match and completely empty database', async () => {
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <AssetListPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('MacBook Pro M2 14 inch')).toBeInTheDocument();
+
+    // 1. Search non-existent item -> shows "Không tìm thấy tài sản nào phù hợp."
+    const searchInput = screen.getByPlaceholderText(/Tìm theo mã, tên, serial.../i);
+    await userEvent.type(searchInput, 'XYZ-NOT-FOUND-999');
+
+    expect(await screen.findByText(/Không tìm thấy tài sản nào phù hợp\./i)).toBeInTheDocument();
+    const clearBtn = screen.getByRole('button', { name: /Xóa bộ lọc/i });
+    expect(clearBtn).toBeInTheDocument();
+
+    // 2. Click "Xóa bộ lọc" -> resets filter and recovers list
+    await userEvent.click(clearBtn);
+    expect(await screen.findByText('MacBook Pro M2 14 inch')).toBeInTheDocument();
+    expect(searchInput.value).toBe('');
+
+    // 3. Completely empty database with no filters -> shows "Chưa có tài sản nào."
+    server.use(
+      http.get('/api/assets/', () => {
+        return HttpResponse.json({
+          count: 0,
+          total_pages: 1,
+          current_page: 1,
+          page_size: 15,
+          results: [],
+        });
+      })
+    );
+
+    const refreshBtn = screen.getByRole('button', { name: /Làm mới/i });
+    await userEvent.click(refreshBtn);
+
+    expect(await screen.findByText(/Chưa có tài sản nào\./i)).toBeInTheDocument();
+  });
+
+  it('clamps currentPage when totalPages decreases below currentPage', async () => {
+    let mockPageData = Array.from({ length: 20 }, (_, i) => ({
+      id: i + 1,
+      asset_code: `AST-202610-${String(i + 1).padStart(4, '0')}`,
+      name: `Asset Item ${i + 1}`,
+      category_id: 1,
+      category_name: 'Laptop',
+      department_id: 1,
+      department_name: 'Phòng IT',
+      department_code: 'IT',
+      status: 'AVAILABLE',
+      serial_number: `SN-${i + 1}`,
+      assigned_to_user_name: null,
+      created_at: '2026-10-01T00:00:00Z',
+    }));
+
+    server.use(
+      http.get('/api/assets/', ({ request }) => {
+        const url = new URL(request.url);
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const start = (page - 1) * pageSize;
+        return HttpResponse.json({
+          count: mockPageData.length,
+          total_pages: Math.ceil(mockPageData.length / pageSize),
+          current_page: page,
+          page_size: pageSize,
+          results: mockPageData.slice(start, start + pageSize),
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <AssetListPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Asset Item 1')).toBeInTheDocument();
+
+    // Go to page 2
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    await userEvent.click(nextBtn);
+    expect(await screen.findByText('Asset Item 16')).toBeInTheDocument();
+
+    // Now dataset shrinks to 5 items (totalPages = 1)
+    mockPageData = mockPageData.slice(0, 5);
+
+    const refreshBtn = screen.getByRole('button', { name: /Làm mới/i });
+    await userEvent.click(refreshBtn);
+
+    // Clamps back to page 1
+    await waitFor(() => {
+      expect(screen.getByText('Asset Item 1')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 1–5 trên tổng 5 bản ghi/i)).toBeInTheDocument();
+  });
 });

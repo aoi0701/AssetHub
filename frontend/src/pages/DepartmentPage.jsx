@@ -1,13 +1,16 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
 import Pagination from '../components/Pagination';
-import { Building2, Plus, Edit, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
+import { Building2, Plus, Edit, AlertCircle, CheckCircle, RefreshCw, Search, X } from 'lucide-react';
 
 const DepartmentPage = () => {
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [errorAlert, setErrorAlert] = useState('');
   const [successAlert, setSuccessAlert] = useState('');
+
+  // Search filter
+  const [searchTerm, setSearchTerm] = useState('');
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -26,7 +29,11 @@ const DepartmentPage = () => {
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState('');
 
-  const fetchDepartments = useCallback(async () => {
+  const reqIdRef = useRef(0);
+
+  const fetchDepartments = useCallback(async (isCancelled = () => false) => {
+    const isAborted = typeof isCancelled === 'function' ? isCancelled : () => false;
+    const currentReqId = ++reqIdRef.current;
     setLoading(true);
     setErrorAlert('');
     try {
@@ -34,11 +41,20 @@ const DepartmentPage = () => {
         page: currentPage,
         page_size: pageSize,
       };
+      if (searchTerm.trim()) {
+        params.search = searchTerm.trim();
+      }
       const res = await axiosClient.get('/api/departments/', { params });
+      if (isAborted() || currentReqId !== reqIdRef.current) return;
       if (res.data && Array.isArray(res.data.results)) {
         setDepartments(res.data.results);
-        setTotalCount(res.data.count || 0);
-        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
+        const count = res.data.count || 0;
+        const total = res.data.total_pages || Math.ceil(count / pageSize) || 1;
+        setTotalCount(count);
+        setTotalPages(total);
+        if (currentPage > total && total > 0) {
+          setCurrentPage(total);
+        }
       } else if (Array.isArray(res.data)) {
         setDepartments(res.data);
         setTotalCount(res.data.length);
@@ -49,15 +65,28 @@ const DepartmentPage = () => {
         setTotalPages(1);
       }
     } catch {
+      if (isAborted() || currentReqId !== reqIdRef.current) return;
       setErrorAlert('Không thể tải danh sách phòng ban. Vui lòng thử lại.');
     } finally {
-      setLoading(false);
+      if (!isAborted() && currentReqId === reqIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, [currentPage, pageSize]);
+  }, [currentPage, pageSize, searchTerm]);
 
   useEffect(() => {
-    fetchDepartments();
+    let active = true;
+    fetchDepartments(() => !active);
+    return () => {
+      active = false;
+    };
   }, [fetchDepartments]);
+
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const handleOpenCreateModal = () => {
     setEditingDept(null);
@@ -136,7 +165,7 @@ const DepartmentPage = () => {
 
         <div className="flex items-center space-x-3">
           <button
-            onClick={fetchDepartments}
+            onClick={() => fetchDepartments()}
             className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
           >
             <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
@@ -185,8 +214,52 @@ const DepartmentPage = () => {
         </div>
       )}
 
+      {/* Toolbar: Search & Count */}
+      <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+        <div className="relative flex-1 max-w-md">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+            <Search size={16} />
+          </div>
+          <input
+            type="text"
+            placeholder="Tìm theo tên hoặc mã phòng ban..."
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="w-full pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-gray-50/50 hover:bg-white transition-colors"
+          />
+          {searchTerm && (
+            <button
+              onClick={() => {
+                setSearchTerm('');
+                setCurrentPage(1);
+              }}
+              className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-gray-400 hover:text-gray-600"
+              title="Xóa tìm kiếm"
+              aria-label="Xóa tìm kiếm"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+
+        <div className="text-xs text-gray-500 font-medium sm:pr-2">
+          {searchTerm ? (
+            <span>
+              Tìm thấy <strong className="text-gray-800">{totalCount}</strong> phòng ban
+            </span>
+          ) : (
+            <span>
+              Tổng số: <strong className="text-gray-800">{totalCount}</strong> phòng ban
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* Table */}
-      <div className="mt-6 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="mt-4 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
             <thead className="bg-gray-50 text-gray-700 font-semibold">
@@ -198,10 +271,49 @@ const DepartmentPage = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 bg-white">
-              {departments.length === 0 ? (
+              {loading && departments.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-gray-400">
+                    <RefreshCw className="h-6 w-6 animate-spin mx-auto text-blue-600 mb-2" />
+                    Đang tải danh sách phòng ban...
+                  </td>
+                </tr>
+              ) : departments.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
-                    {loading ? 'Đang tải dữ liệu...' : 'Chưa có phòng ban nào.'}
+                    {searchTerm ? (
+                      <>
+                        <Search className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+                        <p className="font-medium text-gray-700">Không tìm thấy kết quả phù hợp</p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          Không có phòng ban nào chứa từ khóa "{searchTerm}".
+                        </p>
+                        <button
+                          onClick={() => {
+                            setSearchTerm('');
+                            setCurrentPage(1);
+                          }}
+                          className="mt-3 text-xs text-blue-600 hover:text-blue-800 font-medium underline"
+                        >
+                          Xóa bộ lọc tìm kiếm
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <Building2 className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+                        <p className="font-medium text-gray-700">Chưa có phòng ban nào</p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          Tạo phòng ban đầu tiên để bắt đầu phân loại tài sản doanh nghiệp.
+                        </p>
+                        <button
+                          onClick={handleOpenCreateModal}
+                          className="mt-3 inline-flex items-center px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors shadow-xs"
+                        >
+                          <Plus className="h-3.5 w-3.5 mr-1" />
+                          Thêm phòng ban mới
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ) : (

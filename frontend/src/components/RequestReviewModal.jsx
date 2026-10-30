@@ -27,6 +27,7 @@ const RequestReviewModal = ({ isOpen, onClose, onSuccess, requestItem }) => {
         setLoadingAssets(true);
         const params = {
           status: 'AVAILABLE',
+          all: 'true',
         };
         if (requestItem.requested_category_id) {
           params.category_id = requestItem.requested_category_id;

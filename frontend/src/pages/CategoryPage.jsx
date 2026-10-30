@@ -58,8 +58,11 @@ const CategoryPage = () => {
   const openerButtonRef = useRef(null);
   const nameInputRef = useRef(null);
   const modalDialogRef = useRef(null);
+  const reqIdRef = useRef(0);
 
-  const fetchCategories = useCallback(async () => {
+  const fetchCategories = useCallback(async (isCancelled = () => false) => {
+    const isAborted = typeof isCancelled === 'function' ? isCancelled : () => false;
+    const currentReqId = ++reqIdRef.current;
     setLoading(true);
     setErrorAlert('');
     try {
@@ -71,10 +74,16 @@ const CategoryPage = () => {
         params.search = searchTerm.trim();
       }
       const res = await axiosClient.get('/api/categories/', { params });
+      if (isAborted() || currentReqId !== reqIdRef.current) return;
       if (res.data && Array.isArray(res.data.results)) {
         setCategories(res.data.results);
-        setTotalCount(res.data.count || 0);
-        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
+        const count = res.data.count || 0;
+        const total = res.data.total_pages || Math.ceil(count / pageSize) || 1;
+        setTotalCount(count);
+        setTotalPages(total);
+        if (currentPage > total && total > 0) {
+          setCurrentPage(total);
+        }
       } else if (Array.isArray(res.data)) {
         setCategories(res.data);
         setTotalCount(res.data.length);
@@ -85,15 +94,28 @@ const CategoryPage = () => {
         setTotalPages(1);
       }
     } catch {
+      if (isAborted() || currentReqId !== reqIdRef.current) return;
       setErrorAlert('Không thể tải danh sách danh mục tài sản. Vui lòng thử lại.');
     } finally {
-      setLoading(false);
+      if (!isAborted() && currentReqId === reqIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [currentPage, pageSize, searchTerm]);
 
   useEffect(() => {
-    fetchCategories();
+    let active = true;
+    fetchCategories(() => !active);
+    return () => {
+      active = false;
+    };
   }, [fetchCategories]);
+
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   // Handle Escape key to close modal
   useEffect(() => {
@@ -202,7 +224,7 @@ const CategoryPage = () => {
 
         <div className="flex items-center space-x-3 self-start sm:self-auto">
           <button
-            onClick={fetchCategories}
+            onClick={() => fetchCategories()}
             className="inline-flex items-center px-3 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
             title="Làm mới danh sách"
             aria-label="Làm mới"

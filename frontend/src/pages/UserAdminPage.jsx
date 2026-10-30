@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../context/AuthContext';
 import Pagination from '../components/Pagination';
-import { Users, Search, Filter, Edit, CheckCircle, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { Users, Search, Filter, Edit, CheckCircle, XCircle, AlertCircle, RefreshCw, X } from 'lucide-react';
 
 const UserAdminPage = () => {
   const { user: currentUser } = useAuth();
@@ -33,6 +33,8 @@ const UserAdminPage = () => {
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState('');
 
+  const reqIdRef = useRef(0);
+
   const fetchDepartments = useCallback(async () => {
     try {
       const res = await axiosClient.get('/api/departments/', { params: { all: 'true' } });
@@ -42,7 +44,9 @@ const UserAdminPage = () => {
     }
   }, []);
 
-  const fetchUsers = useCallback(async () => {
+  const fetchUsers = useCallback(async (isCancelled = () => false) => {
+    const isAborted = typeof isCancelled === 'function' ? isCancelled : () => false;
+    const currentReqId = ++reqIdRef.current;
     setLoading(true);
     setErrorAlert('');
     try {
@@ -56,10 +60,16 @@ const UserAdminPage = () => {
       if (activeFilter !== '') params.is_active = activeFilter;
 
       const res = await axiosClient.get('/api/users/', { params });
+      if (isAborted() || currentReqId !== reqIdRef.current) return;
       if (res.data && Array.isArray(res.data.results)) {
         setUsers(res.data.results);
-        setTotalCount(res.data.count || 0);
-        setTotalPages(res.data.total_pages || Math.ceil((res.data.count || 0) / pageSize) || 1);
+        const count = res.data.count || 0;
+        const total = res.data.total_pages || Math.ceil(count / pageSize) || 1;
+        setTotalCount(count);
+        setTotalPages(total);
+        if (currentPage > total && total > 0) {
+          setCurrentPage(total);
+        }
       } else if (Array.isArray(res.data)) {
         setUsers(res.data);
         setTotalCount(res.data.length);
@@ -69,10 +79,13 @@ const UserAdminPage = () => {
         setTotalCount(0);
         setTotalPages(1);
       }
-    } catch (err) {
+    } catch {
+      if (isAborted() || currentReqId !== reqIdRef.current) return;
       setErrorAlert('Không thể tải danh sách người dùng. Vui lòng thử lại.');
     } finally {
-      setLoading(false);
+      if (!isAborted() && currentReqId === reqIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [currentPage, pageSize, searchTerm, roleFilter, deptFilter, activeFilter]);
 
@@ -81,8 +94,18 @@ const UserAdminPage = () => {
   }, [fetchDepartments]);
 
   useEffect(() => {
-    fetchUsers();
+    let active = true;
+    fetchUsers(() => !active);
+    return () => {
+      active = false;
+    };
   }, [fetchUsers]);
+
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const handleToggleActive = async (targetUser) => {
     if (!isAdmin) return;
@@ -175,7 +198,7 @@ const UserAdminPage = () => {
         </div>
 
         <button
-          onClick={fetchUsers}
+          onClick={() => fetchUsers()}
           className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors self-start sm:self-auto"
         >
           <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
@@ -231,8 +254,21 @@ const UserAdminPage = () => {
               setSearchTerm(e.target.value);
               setCurrentPage(1);
             }}
-            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          {searchTerm && (
+            <button
+              onClick={() => {
+                setSearchTerm('');
+                setCurrentPage(1);
+              }}
+              className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-gray-400 hover:text-gray-600"
+              title="Xóa tìm kiếm"
+              aria-label="Xóa tìm kiếm"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         {/* Role Filter */}

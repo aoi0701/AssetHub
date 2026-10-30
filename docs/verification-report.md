@@ -933,8 +933,9 @@ npm --prefix frontend run test:e2e
    - Ô lý do `reason` và mục tiêu yêu cầu được bọc trong container `truncate` có `max-w-[200px]` và tooltip `title` để không làm phình chiều rộng dòng bảng.
 
 4. **Kết quả kiểm chứng thực tế**:
-   - **Backend Pytest**: `docker compose exec -T backend pytest` -> **176/176 passed (100%)** trong 45.60s.
-   - **Frontend Vitest**: `npm --prefix frontend test -- --run` -> **57/57 passed (100%)** trong 4.02s (10/10 test suites).
-   - **Frontend Production Build**: `npm --prefix frontend run build` -> Hoàn thành trong 3.33s, exit code 0.
-   - **Playwright E2E**: `npx playwright test e2e/categories-page.spec.js e2e/layout.spec.js e2e/requests-layout.spec.js e2e/pagination.spec.js` -> **14/14 passed (100%)** trong 28.3s.
+   - **Backend Pytest**: `docker compose exec -T backend pytest` -> **177/177 passed (100%)** trong 49.54s.
+   - **Frontend Vitest**: `npm --prefix frontend test -- --run` -> **70/70 passed (100%)** trong 5.60s (10/10 test suites).
+   - **Frontend Production Build**: `npm --prefix frontend run build` -> Hoàn thành trong 3.40s, exit code 0.
+   - **Playwright E2E**: `cd frontend && E2E_SEED_PASSWORD="aoi0701@" npx playwright test` -> **15/15 passed (100%)** trong 39.4s.
+   - **Thao tác & Tràn Cột**: Đã kiểm tra trực tiếp qua Playwright và chụp màn hình thực tế ở 1920x1080: hai nút `[Xét duyệt]` và `[Chi tiết]` hiển thị trọn vẹn, không bị cắt góc, chữ "Thao tác" hiển thị đầy đủ, thanh phân trang `Pagination` hiển thị sắc nét dưới đáy bảng.
 
