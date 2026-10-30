@@ -75,8 +75,31 @@ const server = setupServer(
     return new HttpResponse(null, { status: 404 });
   }),
 
-  http.get('/api/categories/', () => {
-    return HttpResponse.json(mockCategories);
+  http.get('/api/categories/', ({ request }) => {
+    const url = new URL(request.url);
+    const search = (url.searchParams.get('search') || '').toLowerCase().trim();
+    let filtered = mockCategories;
+    if (search) {
+      filtered = filtered.filter(
+        (c) =>
+          (c.name && c.name.toLowerCase().includes(search)) ||
+          (c.description && c.description.toLowerCase().includes(search))
+      );
+    }
+    const pageParam = url.searchParams.get('page');
+    if (pageParam) {
+      const page = parseInt(pageParam, 10);
+      const pageSize = parseInt(url.searchParams.get('page_size') || '15', 10);
+      const start = (page - 1) * pageSize;
+      return HttpResponse.json({
+        count: filtered.length,
+        total_pages: Math.ceil(filtered.length / pageSize) || 1,
+        current_page: page,
+        page_size: pageSize,
+        results: filtered.slice(start, start + pageSize),
+      });
+    }
+    return HttpResponse.json(filtered);
   }),
 
   http.post('/api/categories/', async ({ request }) => {
@@ -434,5 +457,53 @@ describe('Admin Management Pages Tests', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
+  });
+
+  it('CategoryPage: renders pagination controls and navigates across pages', async () => {
+    const manyCategories = Array.from({ length: 25 }, (_, i) => ({
+      id: i + 1,
+      name: `Category ${i + 1}`,
+      description: `Description ${i + 1}`,
+    }));
+
+    server.use(
+      http.get('/api/categories/', ({ request }) => {
+        const url = new URL(request.url);
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = 15;
+        const start = (page - 1) * pageSize;
+        const results = manyCategories.slice(start, start + pageSize);
+        return HttpResponse.json({
+          count: manyCategories.length,
+          total_pages: Math.ceil(manyCategories.length / pageSize),
+          current_page: page,
+          page_size: pageSize,
+          results,
+        });
+      })
+    );
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialRole="ADMIN">
+          <CategoryPage />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Category 1')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Đang xem 1–15 trên tổng 25 bản ghi/i)).toBeInTheDocument();
+
+    const nextBtn = screen.getByRole('button', { name: /Trang sau/i });
+    expect(nextBtn).toBeEnabled();
+    await userEvent.click(nextBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Category 16')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Đang xem 16–25 trên tổng 25 bản ghi/i)).toBeInTheDocument();
   });
 });
