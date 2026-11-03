@@ -24,12 +24,20 @@ for p in env_paths:
         load_dotenv(p)
         break
 
+import io
+import json
+import uuid
+import urllib.error
+from unittest.mock import patch
 import pytest
 import django
 from django.conf import settings
-from django.db import connections, IntegrityError
+from django.db import connections, IntegrityError, DatabaseError
+from django.db.models.functions import TruncMonth, TruncDay
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.test import APIRequestFactory
+
+from assethub_api.backends.d1 import d1_batch, D1IncompleteBatchError
 
 # Import AssetHub models and authentication views
 from apps.departments.models import Department, Category
@@ -320,5 +328,216 @@ def test_d1_zero_postgresql_leakage():
     assert User.objects.using("default").filter(username="d1_exclusive_user").exists() is False
 
     # AST-EXCLUSIVE-001 must exist in D1 and NOT in PostgreSQL
-    assert Asset.objects.using("d1").filter(asset_code="AST-EXCLUSIVE-001").exists() is True
-    assert Asset.objects.using("default").filter(asset_code="AST-EXCLUSIVE-001").exists() is False
+    assert Asset.objects.using("d1").filter(asset_code__exact="AST-EXCLUSIVE-001").exists() is True
+    assert Asset.objects.using("default").filter(asset_code__exact="AST-EXCLUSIVE-001").exists() is False
+
+
+def test_d1_database_error_wrapper_preserves_incomplete_batch_state_cursor():
+    """
+    Regression Test: Simulates INCOMPLETE_BATCH_STATE failure during cursor.execute.
+    Django's D1DatabaseErrorWrapper must preserve:
+    - committed is True
+    - code == 'INCOMPLETE_BATCH_STATE'
+    - idempotency_key is not None
+    - payload is not None
+    to the business layer catching DatabaseError or D1IncompleteBatchError.
+    """
+    error_payload = {
+        "error": "Incomplete batch state after commit",
+        "code": "INCOMPLETE_BATCH_STATE",
+        "committed": True,
+    }
+
+    def mock_urlopen(req, timeout=None):
+        fp = io.BytesIO(json.dumps(error_payload).encode("utf-8"))
+        raise urllib.error.HTTPError(
+            url=req.full_url,
+            code=500,
+            msg="Internal Server Error",
+            hdrs={"Content-Type": "application/json"},
+            fp=fp,
+        )
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        with pytest.raises(DatabaseError) as exc_info:
+            with connections["d1"].cursor() as cursor:
+                cursor.execute(
+                    "UPDATE departments_department SET name = %s WHERE code = %s",
+                    ["Simulated Crash", "TEST_IT"],
+                )
+
+        err = exc_info.value
+        assert isinstance(err, D1IncompleteBatchError)
+        assert err.committed is True
+        assert err.code == "INCOMPLETE_BATCH_STATE"
+        assert err.idempotency_key is not None
+        assert err.payload is not None
+        assert isinstance(err.payload, dict)
+        assert err.payload.get("sql") is not None
+        assert err.raw_response == error_payload
+
+
+def test_d1_database_error_wrapper_preserves_incomplete_batch_state_d1_batch():
+    """
+    Regression Test: Simulates INCOMPLETE_BATCH_STATE failure during d1_batch execution.
+    Preserves all recovery metadata through wrap_database_errors.
+    """
+    error_payload = {
+        "error": "Batch fault injection",
+        "code": "INCOMPLETE_BATCH_STATE",
+        "committed": True,
+    }
+
+    def mock_urlopen(req, timeout=None):
+        fp = io.BytesIO(json.dumps(error_payload).encode("utf-8"))
+        raise urllib.error.HTTPError(
+            url=req.full_url,
+            code=500,
+            msg="Internal Server Error",
+            hdrs={"Content-Type": "application/json"},
+            fp=fp,
+        )
+
+    statements = [
+        ("UPDATE departments_department SET name = ? WHERE code = ?", ["Dept Batch Crash", "TEST_IT"]),
+    ]
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        with pytest.raises(DatabaseError) as exc_info:
+            d1_batch(statements, using="d1")
+
+        err = exc_info.value
+        assert isinstance(err, D1IncompleteBatchError)
+        assert err.committed is True
+        assert err.code == "INCOMPLETE_BATCH_STATE"
+        assert err.idempotency_key is not None
+        assert err.payload is not None
+        assert "statements" in err.payload
+        assert err.raw_response == error_payload
+
+
+def test_d1_database_error_wrapper_preserves_incomplete_batch_state_orm_mutation():
+    """
+    Regression Test: Simulates INCOMPLETE_BATCH_STATE failure during high-level Django ORM mutation.
+    Preserves all recovery metadata to the business logic.
+    """
+    error_payload = {
+        "error": "ORM mutation crash after commit",
+        "code": "INCOMPLETE_BATCH_STATE",
+        "committed": True,
+    }
+
+    def mock_urlopen(req, timeout=None):
+        fp = io.BytesIO(json.dumps(error_payload).encode("utf-8"))
+        raise urllib.error.HTTPError(
+            url=req.full_url,
+            code=500,
+            msg="Internal Server Error",
+            hdrs={"Content-Type": "application/json"},
+            fp=fp,
+        )
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        with pytest.raises(DatabaseError) as exc_info:
+            Department.objects.using("d1").filter(code="TEST_IT").update(name="ORM Failure")
+
+        err = exc_info.value
+        assert isinstance(err, D1IncompleteBatchError)
+        assert err.committed is True
+        assert err.code == "INCOMPLETE_BATCH_STATE"
+        assert err.idempotency_key is not None
+        assert err.payload is not None
+
+
+def test_d1_batch_helper_execution_success():
+    """
+    Test helper function d1_batch executing a real multi-statement batch on D1.
+    """
+    code_a = f"T-BHA-{uuid.uuid4().hex[:6].upper()}"
+    cat_name = f"Cat Batch Helper {uuid.uuid4().hex[:6]}"
+
+    statements = [
+        ("INSERT INTO departments_department (code, name, description) VALUES (?, ?, ?)", [code_a, "Dept Batch Helper", "Batch test"]),
+        ("INSERT INTO departments_category (name, description) VALUES (?, ?)", [cat_name, "Cat Batch Helper Desc"]),
+        ("SELECT count(*) as total FROM departments_department WHERE code = ?", [code_a]),
+    ]
+
+    res = d1_batch(statements, using="d1")
+    assert res.get("success") is True
+    assert len(res.get("results", [])) == 3
+
+    # Assert persistence
+    assert Department.objects.using("d1").filter(code=code_a).exists() is True
+    assert Category.objects.using("d1").filter(name=cat_name).exists() is True
+
+    # Clean up via d1_batch
+    d1_batch([
+        ("DELETE FROM departments_department WHERE code = ?", [code_a]),
+        ("DELETE FROM departments_category WHERE name = ?", [cat_name]),
+    ], using="d1")
+
+
+def test_replace_date_trunc_orm_query():
+    """
+    Test replace_date_trunc_in_sql via real ORM QuerySet using TruncMonth and TruncDay.
+    """
+    dept = Department.objects.using("d1").filter(code="TEST_IT").first()
+    if not dept:
+        dept = Department.objects.using("d1").create(code="TEST_IT", name="Phòng Công Nghệ Kiểm Thử")
+    cat = Category.objects.using("d1").filter(name="Thiết bị kiểm thử D1").first()
+    if not cat:
+        cat = Category.objects.using("d1").create(name="Thiết bị kiểm thử D1")
+
+    asset = Asset.objects.using("d1").filter(asset_code="AST-GATE-001").first()
+    if not asset:
+        asset = Asset.objects.using("d1").create(
+            asset_code="AST-GATE-001",
+            name="MacBook Pro M3 Max (Gate Test)",
+            category=cat,
+            department=dept,
+            status=Asset.Status.AVAILABLE,
+        )
+
+    qs = Asset.objects.using("d1").filter(asset_code="AST-GATE-001").annotate(
+        created_month=TruncMonth("created_at"),
+        created_day=TruncDay("created_at"),
+    ).values("asset_code", "created_month", "created_day")
+
+    results = list(qs)
+    assert len(results) == 1
+    row = results[0]
+    assert row["asset_code"] == "AST-GATE-001"
+    assert row["created_month"] is not None
+    assert row["created_day"] is not None
+    assert hasattr(row["created_month"], "year")
+    assert hasattr(row["created_day"], "day")
+    assert row["created_month"].day == 1
+
+
+def test_d1_cursor_description_standard_7_tuple():
+    """
+    Verify DB-API 2.0 cursor.description returns standard 7-tuple.
+    """
+    with connections["d1"].cursor() as cursor:
+        cursor.execute("SELECT id, code, name FROM departments_department LIMIT 1")
+        desc = cursor.description
+        assert desc is not None
+        assert len(desc) == 3
+        for col_desc in desc:
+            assert isinstance(col_desc, tuple)
+            assert len(col_desc) == 7
+            col_name, type_code, display_size, internal_size, precision, scale, null_ok = col_desc
+            assert isinstance(col_name, str)
+            assert col_name in ("id", "code", "name")
+            assert type_code is None
+            assert display_size is None
+
+
+def test_d1_cursor_boolean_normalization():
+    """
+    Verify boolean normalization (True -> 1, False -> 0) in cursor execution.
+    """
+    with connections["d1"].cursor() as cursor:
+        cursor.execute("SELECT %s as t_val, %s as f_val", [True, False])
+        row = cursor.fetchone()
+        assert row == (1, 0)

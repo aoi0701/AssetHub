@@ -231,9 +231,13 @@ class D1Client:
     def query(self, sql, params=None, idempotency_key=None, custom_headers=None, retries=3):
         if params is None:
             params = []
+        clean_params = [
+            1 if p is True else (0 if p is False else p)
+            for p in params
+        ]
         is_read_only = is_read_only_query(sql)
         is_mutation = not is_read_only
-        payload = {"sql": sql, "params": params}
+        payload = {"sql": sql, "params": clean_params}
         return self._post(
             "/api/v1/query",
             payload,
@@ -247,11 +251,22 @@ class D1Client:
         formatted = []
         for st in statements:
             if isinstance(st, (tuple, list)):
-                formatted.append({"sql": st[0], "params": list(st[1]) if len(st) > 1 else []})
+                raw_sql = st[0]
+                raw_params = list(st[1]) if len(st) > 1 else []
             elif isinstance(st, dict):
-                formatted.append({"sql": st["sql"], "params": st.get("params", [])})
+                raw_sql = st["sql"]
+                raw_params = st.get("params", [])
             elif isinstance(st, str):
-                formatted.append({"sql": st, "params": []})
+                raw_sql = st
+                raw_params = []
+            else:
+                continue
+
+            clean_params = [
+                1 if p is True else (0 if p is False else p)
+                for p in raw_params
+            ]
+            formatted.append({"sql": raw_sql, "params": clean_params})
 
         if not idempotency_key:
             idempotency_key = f"batch-{uuid.uuid4()}"
