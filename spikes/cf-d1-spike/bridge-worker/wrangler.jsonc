@@ -1,0 +1,12 @@
+{
+  "name": "assethub-test-worker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-03-08",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "assethub-test-d1",
+      "database_id": "3850e3a1-7c57-42f4-afd6-1fa1655bbcf1"
+    }
+  ]
+}

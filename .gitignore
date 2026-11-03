@@ -32,6 +32,8 @@ wheels/
 # Virtual environments
 venv/
 .venv/
+.venv*/
+**/.*venv*/
 env/
 ENV/
 
@@ -56,7 +58,7 @@ staticfiles/
 *.sqlite3
 *.db
 *.sql
-!cloudflare-worker/*.sql
+!**/schema.sql
 *.dump
 dumps/
 backups/
@@ -67,6 +69,7 @@ node_modules/
 
 # Cloudflare / Wrangler local state
 .wrangler/
+**/python_modules/
 deploy/cloudflared/credentials.json
 
 

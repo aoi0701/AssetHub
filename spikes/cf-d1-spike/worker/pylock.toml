@@ -1,0 +1,43 @@
+lock-version = "1.0"
+created-by = "uv"
+requires-python = ">=3.13.2"
+
+[[packages]]
+name = "asgiref"
+version = "3.13.0"
+wheels = [{ url = "https://files.pythonhosted.org/packages/2e/b0/ec211e1f7966247cb6469158d856bac9aa4c2fe13621bd6a352e4f850453/asgiref-3.13.0-py3-none-any.whl", upload-time = 2026-10-23T08:13:13Z, size = 27593, hashes = { sha256 = "f9596a2434512686473d50f96ff6207fbba49ae1a785dfac614df4aeb085674d" } }]
+
+[[packages]]
+name = "django"
+version = "5.2.18"
+wheels = [{ url = "https://files.pythonhosted.org/packages/d6/01/6568ec52b26548ca1b83d33249f7274db3bf74698f42c0da42ec9db1a24a/django-5.2.18-py3-none-any.whl", upload-time = 2026-10-06T13:01:04Z, size = 8316071, hashes = { sha256 = "92ed81d500be6408ecd704d7bd1366c534f30427bffcc63c5fefb129561aec7c" } }]
+
+[[packages]]
+name = "django-cf"
+version = "0.2.17"
+wheels = [{ url = "https://files.pythonhosted.org/packages/57/6e/9b88fb52f3f86d8d29dc90ac2723999645a1047c72499ef79c34ecca779f/django_cf-0.2.17-py3-none-any.whl", upload-time = 2026-10-06T04:01:13Z, size = 25704, hashes = { sha256 = "8c51f251de623f6632dc0963f3b56f691556f00d837cc100fa0ed27d27a0db08" } }]
+
+[[packages]]
+name = "djangorestframework"
+version = "3.18.3"
+wheels = [{ url = "https://files.pythonhosted.org/packages/c4/dd/de5f4543765bec94e036a5e9593a42f8fa7efec8de78eb56b9ca834385f3/djangorestframework-3.18.3-py3-none-any.whl", upload-time = 2026-10-06T21:33:49Z, size = 903986, hashes = { sha256 = "8544bb674846731b1e3c9b309236ee1dc412905a0aa725be2ec193ca950a7d12" } }]
+
+[[packages]]
+name = "djangorestframework-simplejwt"
+version = "5.5.1"
+wheels = [{ url = "https://files.pythonhosted.org/packages/60/94/fdfb7b2f0b16cd3ed4d4171c55c1c07a2d1e3b106c5978c8ad0c15b4a48b/djangorestframework_simplejwt-5.5.1-py3-none-any.whl", upload-time = 2025-07-21T16:52:07Z, size = 107674, hashes = { sha256 = "2c30f3707053d384e9f315d11c2daccfcb548d4faa453111ca19a542b732e469" } }]
+
+[[packages]]
+name = "pyjwt"
+version = "2.15.1"
+wheels = [{ url = "https://files.pythonhosted.org/packages/50/ca/44de4e75f8aadc457f0634be3b542815078ded46dca30efb960edeecad6e/pyjwt-2.15.1-py3-none-any.whl", upload-time = 2026-09-28T18:40:41Z, size = 33860, hashes = { sha256 = "42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193" } }]
+
+[[packages]]
+name = "sqlparse"
+version = "0.6.1"
+wheels = [{ url = "https://files.pythonhosted.org/packages/df/ff/2fee788e82e75be8f210c65c5d103bf44c880e3769c884652a4cd911b8ba/sqlparse-0.6.1-py3-none-any.whl", upload-time = 2026-11-01T18:06:47Z, size = 51200, hashes = { sha256 = "3be5a72d04c873d690d7c6dedd33d6fae2ef82759881ceec02fc2efd0cba564f" } }]
+
+[[packages]]
+name = "workers-runtime-sdk"
+version = "1.9.5"
+wheels = [{ url = "https://files.pythonhosted.org/packages/ad/33/1154f8d518becf3ca3dea57627dea7a84888937cf7b313e6dc4e6f7c7fdf/workers_runtime_sdk-1.9.5-py3-none-any.whl", upload-time = 2026-10-20T07:54:21Z, size = 41297, hashes = { sha256 = "f2b912660a3ab60d2a24920106422f9eaf4cd7a794e42b022237ad2444287fef" } }]
