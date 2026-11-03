@@ -51,6 +51,32 @@ function cleanSql(sql) {
 }
 
 /**
+ * Analyzes whether an SQL statement is a read-only query that returns rows.
+ */
+function isReadQuery(sql) {
+  const cleaned = cleanSql(sql);
+  const match = cleaned.match(/^\s*([a-zA-Z]+)/);
+  if (!match) return false;
+  const firstWord = match[1].toUpperCase();
+  if (firstWord === 'SELECT' || firstWord === 'EXPLAIN') return true;
+  if (firstWord === 'WITH') {
+    return !/\b(insert|update|delete)\b/i.test(cleaned);
+  }
+  if (firstWord === 'PRAGMA') {
+    const upper = cleaned.toUpperCase();
+    return (
+      upper.startsWith('PRAGMA TABLE_INFO') ||
+      upper.startsWith('PRAGMA TABLE_XINFO') ||
+      upper.startsWith('PRAGMA INDEX_LIST') ||
+      upper.startsWith('PRAGMA INDEX_INFO') ||
+      upper.startsWith('PRAGMA FOREIGN_KEY_LIST') ||
+      upper.startsWith('PRAGMA DATABASE_LIST')
+    );
+  }
+  return false;
+}
+
+/**
  * Analyzes whether an SQL statement has a single-column ID RETURNING clause on INSERT.
  * Supported single ID forms:
  * - RETURNING "id"
@@ -308,9 +334,18 @@ export default {
             });
           }
 
+          let queryCols = [];
+          let queryRows = [];
+          if (Array.isArray(queryRes.results) && queryRes.results.length > 0) {
+            queryCols = Object.keys(queryRes.results[0]);
+            queryRows = queryRes.results.map(r => queryCols.map(c => r[c]));
+          }
+
           responsePayload = JSON.stringify({
             success: true,
             results: queryRes.results || [],
+            columns: queryCols,
+            rows: queryRows,
             meta: {
               changes: queryRes.meta?.changes ?? queryRes.meta?.rows_written ?? 0,
               last_row_id: queryRes.meta?.last_row_id ?? null,
@@ -326,17 +361,61 @@ export default {
         } else {
           // Standard read/unkeyed execution
           const stmt = params.length > 0 ? env.DB.prepare(sql).bind(...params) : env.DB.prepare(sql);
-          const result = await stmt.all();
+          const isRead = isReadQuery(sql) || Boolean(body.raw);
 
-          responsePayload = JSON.stringify({
-            success: true,
-            results: result.results || [],
-            meta: {
-              changes: result.meta?.changes ?? result.meta?.rows_written ?? 0,
-              last_row_id: result.meta?.last_row_id ?? null,
-              duration: result.meta?.duration ?? 0,
-            },
-          });
+          if (isRead && typeof stmt.raw === 'function') {
+            const rawData = await stmt.raw({ columnNames: true });
+            let columns = [];
+            let rows = [];
+            if (Array.isArray(rawData) && rawData.length > 0) {
+              columns = Array.isArray(rawData[0]) ? rawData[0] : [];
+              rows = rawData.slice(1);
+            }
+            const results = rows.map(r => {
+              const obj = {};
+              for (let i = 0; i < columns.length; i++) {
+                obj[columns[i]] = r[i];
+              }
+              return obj;
+            });
+            const meta = (rawData && rawData.meta) ? {
+              changes: rawData.meta.changes ?? 0,
+              last_row_id: rawData.meta.last_row_id ?? null,
+              duration: rawData.meta.duration ?? 0,
+            } : {
+              changes: 0,
+              last_row_id: null,
+              duration: 0,
+            };
+
+            responsePayload = JSON.stringify({
+              success: true,
+              results,
+              columns,
+              rows,
+              meta,
+            });
+          } else {
+            const result = await stmt.all();
+            const results = result.results || [];
+            let columns = [];
+            let rows = [];
+            if (results.length > 0) {
+              columns = Object.keys(results[0]);
+              rows = results.map(r => columns.map(c => r[c]));
+            }
+            responsePayload = JSON.stringify({
+              success: true,
+              results,
+              columns,
+              rows,
+              meta: {
+                changes: result.meta?.changes ?? result.meta?.rows_written ?? 0,
+                last_row_id: result.meta?.last_row_id ?? null,
+                duration: result.meta?.duration ?? 0,
+              },
+            });
+          }
         }
 
         return new Response(responsePayload, {
@@ -529,4 +608,4 @@ export default {
   },
 };
 
-export { cleanSql, analyzeReturningClause };
+export { cleanSql, analyzeReturningClause, isReadQuery };

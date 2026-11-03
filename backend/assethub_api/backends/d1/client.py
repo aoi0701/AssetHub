@@ -237,7 +237,7 @@ class D1Client:
         ]
         is_read_only = is_read_only_query(sql)
         is_mutation = not is_read_only
-        payload = {"sql": sql, "params": clean_params}
+        payload = {"sql": sql, "params": clean_params, "raw": is_read_only}
         return self._post(
             "/api/v1/query",
             payload,

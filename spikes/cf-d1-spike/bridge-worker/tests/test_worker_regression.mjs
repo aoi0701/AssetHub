@@ -63,6 +63,23 @@ function createMockDB(options = {}) {
         async all() {
           return { results: [], meta: { changes: 0 } };
         },
+        async raw(options) {
+          if (options && options.columnNames) {
+            if (sql.includes('SELECT a.id, a.name, c.id, c.name FROM assets a JOIN categories c') || (sql.includes('a.id') && sql.includes('c.id'))) {
+              return [
+                ['id', 'name', 'id', 'name'],
+                [101, 'Asset Laptop', 201, 'Category Hardware'],
+              ];
+            }
+            return [
+              ['id', 'code'],
+              [101, 'AST-001'],
+            ];
+          }
+          return [
+            [101, 'AST-001'],
+          ];
+        },
       };
     },
     async batch(statements) {
@@ -191,6 +208,9 @@ test('Regression Defect 2: Race condition winnerObj must not throw ReferenceErro
             }
           }
           return baseStmt.first();
+        },
+        async raw(options) {
+          return baseStmt.raw ? baseStmt.raw(options) : [];
         },
       };
     },
@@ -418,4 +438,72 @@ test('Test 3: UPDATE / DELETE with RETURNING or multi-column returning outside s
       assert.equal(json2.results, undefined, 'Must not fake results on error response');
     }
   }
+});
+
+test('Test 4: SELECT with duplicate column names via raw({ columnNames: true }) - preserves column order and duplicate names without key overwriting', async () => {
+  const db = createMockDB();
+  const env = { BRIDGE_SECRET_TOKEN: VALID_TOKEN, DB: db };
+  const body = {
+    sql: 'SELECT a.id, a.name, c.id, c.name FROM assets a JOIN categories c',
+    params: [],
+  };
+
+  const req = makeRequest('/api/v1/query', body);
+  const res = await worker.fetch(req, env);
+
+  assert.equal(res.status, 200, 'Query endpoint must return 200');
+  const json = await res.json();
+  assert.equal(json.success, true);
+
+  // Columns array must preserve duplicate names in exact order
+  assert.deepEqual(
+    json.columns,
+    ['id', 'name', 'id', 'name'],
+    'Column names array must preserve duplicates in exact order'
+  );
+
+  // Rows array must preserve values at exact column indices
+  assert.equal(json.rows.length, 1);
+  assert.deepEqual(
+    json.rows[0],
+    [101, 'Asset Laptop', 201, 'Category Hardware'],
+    'Row values must match exact column positions'
+  );
+
+  // Legacy results array still present for backward compatibility
+  assert.ok(Array.isArray(json.results));
+  assert.equal(json.results.length, 1);
+
+  // Meta must be present
+  assert.ok(json.meta);
+  assert.equal(json.meta.changes, 0);
+});
+
+test('Test 5: SELECT with raw({ columnNames: true }) returning 0 rows - returns columns header and empty rows array', async () => {
+  const db = createMockDB();
+  const originalPrepare = db.prepare.bind(db);
+  db.prepare = (sql) => {
+    const stmt = originalPrepare(sql);
+    stmt.raw = async (options) => {
+      if (options && options.columnNames) {
+        return [['id', 'name']]; // only column header, 0 data rows
+      }
+      return [];
+    };
+    return stmt;
+  };
+  const env = { BRIDGE_SECRET_TOKEN: VALID_TOKEN, DB: db };
+  const body = {
+    sql: 'SELECT id, name FROM departments_department WHERE 1 = 0',
+  };
+
+  const req = makeRequest('/api/v1/query', body);
+  const res = await worker.fetch(req, env);
+
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  assert.equal(json.success, true);
+  assert.deepEqual(json.columns, ['id', 'name']);
+  assert.deepEqual(json.rows, []);
+  assert.deepEqual(json.results, []);
 });

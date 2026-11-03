@@ -541,3 +541,100 @@ def test_d1_cursor_boolean_normalization():
         cursor.execute("SELECT %s as t_val, %s as f_val", [True, False])
         row = cursor.fetchone()
         assert row == (1, 0)
+
+
+def test_d1_orm_select_related_duplicate_columns_preservation():
+    """
+    Regression Test: ORM select_related() produces duplicate column names in SQL
+    (e.g., assets_asset.id, departments_category.id, departments_department.id, authentication_user.id,
+     assets_asset.name, departments_category.name, departments_department.name).
+    D1 Worker Bridge raw({ columnNames: true }) and D1Cursor must preserve column order
+    and prevent duplicate column keys from overwriting each other.
+    """
+    dept_code = "DEPT_SR_01"
+    cat_name = "Cat Select Related Test"
+    username = "user_sr_test"
+    asset_code = "AST-SR-001"
+
+    # 0. Clean up in reverse-FK order
+    Asset.objects.using("d1").filter(asset_code=asset_code).delete()
+    User.objects.using("d1").filter(username=username).delete()
+    Category.objects.using("d1").filter(name=cat_name).delete()
+    Department.objects.using("d1").filter(code=dept_code).delete()
+
+    # 1. Create related models
+    dept = Department.objects.using("d1").create(
+        code=dept_code,
+        name="Phòng Ban Kỹ Thuật Số",
+        description="Department for select_related test",
+    )
+    assert dept.id is not None
+
+    cat = Category.objects.using("d1").create(
+        name=cat_name,
+        description="Category for select_related test",
+    )
+    assert cat.id is not None
+
+    user = User(
+        username=username,
+        email="sr_test@assethub.test",
+        role=User.Role.USER,
+        full_name="Nguyễn Văn Test JOIN",
+        department=dept,
+        is_active=True,
+        auth_version=1,
+    )
+    user.set_password("SecureP@ssw0rd2026!")
+    user.save(using="d1")
+    assert user.id is not None
+
+    # 2. Create Asset with IN_USE status and all relationships linked
+    asset = Asset.objects.using("d1").create(
+        asset_code=asset_code,
+        name="Tài Sản Laptop Dell XPS (Unique Asset Name)",
+        category=cat,
+        department=dept,
+        assigned_to_user=user,
+        status=Asset.Status.IN_USE,
+        serial_number="SN-SR-9999",
+    )
+    assert asset.id is not None
+
+    # Guarantee distinct names across joined entities
+    assert asset.name != cat.name
+    assert asset.name != dept.name
+
+    # 3. Perform ORM query with select_related
+    fetched_asset = (
+        Asset.objects.using("d1")
+        .select_related("category", "department", "assigned_to_user")
+        .get(asset_code=asset_code)
+    )
+
+    # 4. Assertions on Asset fields (must not be overwritten by joined models)
+    assert fetched_asset.id == asset.id
+    assert fetched_asset.name == "Tài Sản Laptop Dell XPS (Unique Asset Name)"
+    assert fetched_asset.name != cat.name
+    assert fetched_asset.name != dept.name
+
+    # 5. Assertions on Category fields
+    assert fetched_asset.category is not None
+    assert fetched_asset.category.id == cat.id
+    assert fetched_asset.category.name == cat_name
+
+    # 6. Assertions on Department fields
+    assert fetched_asset.department is not None
+    assert fetched_asset.department.id == dept.id
+    assert fetched_asset.department.name == "Phòng Ban Kỹ Thuật Số"
+
+    # 7. Assertions on Assigned User fields
+    assert fetched_asset.assigned_to_user is not None
+    assert fetched_asset.assigned_to_user.id == user.id
+    assert fetched_asset.assigned_to_user.username == username
+
+    # Clean up test artifacts
+    Asset.objects.using("d1").filter(asset_code=asset_code).delete()
+    User.objects.using("d1").filter(username=username).delete()
+    Category.objects.using("d1").filter(name=cat_name).delete()
+    Department.objects.using("d1").filter(code=dept_code).delete()

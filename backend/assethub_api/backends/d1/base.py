@@ -181,17 +181,26 @@ class D1Cursor:
 
         res = self.connection.client.query(query, clean_params, idempotency_key=idempotency_key)
 
-        results = res.get("results", [])
         meta = res.get("meta", {})
 
-        if results:
-            self._columns = list(results[0].keys())
-            self._rows = [tuple(r.get(c) for c in self._columns) for r in results]
-            self.description = tuple((col, None, None, None, None, None, None) for col in self._columns)
+        if "rows" in res and "columns" in res and res.get("rows") is not None and res.get("columns") is not None:
+            self._columns = list(res.get("columns", []))
+            self._rows = [tuple(r) for r in res.get("rows", [])]
+            self.description = (
+                tuple((col, None, None, None, None, None, None) for col in self._columns)
+                if self._columns
+                else None
+            )
         else:
-            self._columns = []
-            self._rows = []
-            self.description = None
+            results = res.get("results", [])
+            if results:
+                self._columns = list(results[0].keys())
+                self._rows = [tuple(r.get(c) for c in self._columns) for r in results]
+                self.description = tuple((col, None, None, None, None, None, None) for col in self._columns)
+            else:
+                self._columns = []
+                self._rows = []
+                self.description = None
 
         upper_q = query.strip().upper()
         if any(upper_q.startswith(kw) for kw in ("INSERT", "UPDATE", "DELETE")):
