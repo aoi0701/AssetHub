@@ -130,10 +130,11 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 | `backend/assethub_api/backends/d1/base.py` | **Task 1** | DB-API 2.0 cursor, `replace_date_trunc_in_sql`, DatabaseWrapper |
 | `backend/assethub_api/backends/d1/__init__.py` | **Task 1** | Export `d1_batch` public helper |
 | `backend/assethub_api/backends/d1/tests/test_isolation_guard.py` | **Task 1** | Test URL guard RFC 3986 và chặn trước transport |
-| `cloudflare-worker/bridge/schema.sql` | **Task 2** | Authoritative DDL 19 bảng (14 app + 2 infra + 1 AI log + 2 Django), triggers bảo vệ Admin, CHECK constraints |
+| `cloudflare-worker/bridge/schema.sql` | **Task 2** | Authoritative DDL 19 bảng an toàn (`IF NOT EXISTS`, không tự động DROP), triggers bảo vệ Admin, CHECK constraints |
 | `cloudflare-worker/bridge/wrangler.toml` | **Task 2** | Cấu hình triển khai Worker Bridge sản xuất lên Cloudflare |
 | `backend/assethub_api/backends/d1/sql/schema.sql` | **Task 2** | Bản sao đồng bộ DDL schema trong backend |
-| `backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py`| **Task 2** | Test kiểm chứng 19 bảng, constraints và triggers |
+| `scripts/reset_d1_test_db.sh` & `.sql` | **Task 2** | Công cụ reset database test có guard `--confirm-destructive` và check target |
+| `backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py`| **Task 2** | Test kiểm chứng 19 bảng, constraints, triggers và tính bất biến khi chạy lại |
 | `backend/apps/common/management/commands/migrate_pg_to_d1.py` | **Task 3** | Lệnh di chuyển dữ liệu chunked 4-Tier và đối soát 1:1 |
 | `backend/apps/common/tests/test_d1_migration.py` | **Task 3** | Test kiểm chứng lệnh di chuyển dữ liệu và đối soát |
 | `scripts/sync_d1_schema.sh` | **Task 3** | Script đồng bộ và kiểm tra byte-level giữa 2 bản DDL schema |
@@ -232,7 +233,7 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 
 ### Task 1: D1 Database Backend Adapter & Client (`assethub_api.backends.d1`)
 
-> **Mục tiêu:** Hoàn thiện adapter CSDL tùy biến cho Django kết nối Cloudflare D1 qua Worker Bridge, chuẩn DB-API 2.0, bảo vệ URL Guard RFC 3986 và phân loại read/write thận trọng.
+> **Mục tiêu:** Hoàn thiện adapter CSDL tùy biến cho Django kết nối Cloudflare D1 qua Worker Bridge, chuẩn DB-API 2.0, bảo vệ URL Guard RFC 3986, bảo toàn siêu dữ liệu ngoại lệ qua `D1DatabaseErrorWrapper`, và bảo toàn trọn vẹn thứ tự/tên cột trùng khi JOIN (`select_related`) bằng giao thức D1 `raw({ columnNames: true })`.
 > 
 > **Điều kiện tiên quyết:** Task 0 đã PASS 100%.
 
@@ -240,49 +241,54 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 - Create: `backend/assethub_api/backends/d1/__init__.py`
 - Modify: `backend/assethub_api/backends/d1/client.py`
 - Modify: `backend/assethub_api/backends/d1/base.py`
+- Modify: `spikes/cf-d1-spike/bridge-worker/src/index.js`
 - Modify: `backend/assethub_api/backends/d1/tests/test_isolation_guard.py`
 - Test: `backend/assethub_api/backends/d1/tests/test_d1_orm_integration.py`
 
 **Interfaces:**
 - Consumes: Cấu hình `DATABASES['d1']` hoặc `DATABASES['default']` với `ENGINE = 'assethub_api.backends.d1'`.
-- Produces: `DatabaseWrapper`, `D1Cursor`, `D1Client`, và hàm tiện ích `d1_batch(statements)`.
+- Produces: `DatabaseWrapper`, `D1Cursor`, `D1Client`, `D1DatabaseErrorWrapper`, và hàm tiện ích `d1_batch(statements)`.
 
-- [ ] **Step 1: Viết test cho chuyển đổi placeholders `%s -> ?`, types và date truncation**
+- [ ] **Step 1: Viết test cho chuyển đổi placeholders, types, date truncation và JOIN select_related**
   Tạo test trong `test_d1_orm_integration.py` kiểm tra:
-  - Cursor description trả về 7-tuple.
+  - Cursor description trả về 7-tuple chuẩn DB-API 2.0.
   - Boolean `True/False` chuyển thành `1/0`.
-  - Date truncation `django_date_trunc('month', ...)` được viết lại thành `STRFTIME`.
+  - Date truncation `django_date_trunc` được viết lại thành `STRFTIME`.
   - `parse_and_normalize_endpoint` chặn đứng URL sai scheme, userinfo, hoặc port không hợp lệ trước khi gọi mạng.
+  - Ngoại lệ `D1DatabaseErrorWrapper` bảo toàn 5 thuộc tính (`committed`, `code`, `idempotency_key`, `payload`, `raw_response`) khi qua cursor, `d1_batch` và ORM mutation.
+  - ORM `select_related("category", "department", "assigned_to_user")` bảo toàn đúng giá trị từng model, không bị đè cột trùng tên `id` hay `name`.
 
 - [ ] **Step 2: Chạy kiểm thử để xác nhận thất bại (Red)**
   ```bash
   docker compose exec backend pytest assethub_api/backends/d1/tests/test_isolation_guard.py assethub_api/backends/d1/tests/test_d1_orm_integration.py -v
   ```
 
-- [ ] **Step 3: Hoàn thiện `base.py`, `client.py` và `__init__.py`**
+- [ ] **Step 3: Hoàn thiện `base.py`, `client.py`, `index.js` và `__init__.py`**
+  - Trong Worker Bridge `index.js`: Sử dụng `stmt.raw({ columnNames: true })` cho query để trả về `columns` và `rows` nguyên bản từ SQLite engine, bảo toàn thứ tự cột và tên trùng khi JOIN.
+  - Trong `base.py`: Dựng `D1Cursor._rows` trực tiếp từ `rows` tuple thay vì object keys.
+  - Cài đặt `D1DatabaseErrorWrapper` sao chép thuộc tính lỗi khi re-raise.
   - Khai báo cấu hình `D1_DATABASE_CONFIG` trong `backend/assethub_api/settings.py` (giữ cờ `USE_D1_DATABASE=False` ở giai đoạn này).
   - Cài đặt `replace_date_trunc_in_sql(sql)` thay thế các UDF của Django bằng SQLite native STRFTIME.
-  - Cài đặt `D1Cursor` với `description`, `rowcount`, `lastrowid`, `fetchall`, `fetchone`.
   - Export `d1_batch(statements, using='default')` trong `assethub_api/backends/d1/__init__.py`.
-  - Đảm bảo `is_read_only_query()` chỉ cho phép `SELECT`, `EXPLAIN`, và các `PRAGMA` đọc đã duyệt. Mọi câu lệnh khác bắt buộc coi là mutation và không tự động retry khi thiếu idempotency key.
+  - Đảm bảo `is_read_only_query()` chỉ cho phép `SELECT`, `EXPLAIN`, và các `PRAGMA` đọc đã duyệt.
 
 - [ ] **Step 4: Chạy kiểm thử xác nhận thành công (Green)**
   ```bash
   docker compose exec backend pytest assethub_api/backends/d1/tests/ -v
   ```
-  Mong đợi: Toàn bộ 22+ tests trong thư mục tests của D1 backend PASSED 100%.
+  Mong đợi: Toàn bộ tests trong thư mục tests của D1 backend PASSED 100%.
 
 - [ ] **Step 5: Commit Task 1**
   ```bash
-  git add backend/assethub_api/backends/d1/
+  git add backend/assethub_api/backends/d1/ spikes/cf-d1-spike/bridge-worker/src/index.js
   git commit -m "feat(db): complete django d1 database backend adapter and client with db-api 2.0 compliance"
   ```
 
 ---
 
-### Task 2: Schema DDL (19 Bảng), Constraints & Triggers Bảo Vệ
+### Task 2: Schema DDL (19 Bảng An Toàn), Constraints & Triggers Bảo Vệ
 
-> **Mục tiêu:** Xây dựng tệp DDL chính thức 19 bảng cho D1 (14 bảng ứng dụng/auth/system, 2 bảng hạ tầng `_assert_guard`/`_idempotency_log`, 1 bảng `ai_suggestion_logs`, 2 bảng hệ thống Django), cài đặt 2 Triggers bảo vệ Admin cuối cùng (UPDATE và DELETE), ràng buộc CHECK trạng thái tài sản (đúng 6 trạng thái nghiệp vụ chuẩn) và áp dụng lên D1 từ xa.
+> **Mục tiêu:** Xây dựng tệp DDL chính thức 19 bảng cho D1 (14 bảng ứng dụng/auth/system, 2 bảng hạ tầng `_assert_guard`/`_idempotency_log`, 1 bảng `ai_suggestion_logs`, 2 bảng hệ thống Django) bảo đảm tính idempotent re-entrant (`CREATE TABLE IF NOT EXISTS`, tuyệt đối không tự động DROP/xóa dữ liệu), cài đặt 2 Triggers bảo vệ Admin cuối cùng (UPDATE và DELETE), ràng buộc CHECK trạng thái tài sản (đúng 6 trạng thái nghiệp vụ chuẩn), tách công cụ reset database test riêng biệt có guard bảo mật, và đồng bộ 100% byte giữa 2 bản DDL.
 > 
 > **Điều kiện tiên quyết:** Task 0 đã PASS 100%. (Lưu ý: Việc biên soạn DDL có thể thực hiện trước, nhưng Step 4 chạy kiểm thử `test_d1_schema_constraints.py` qua pytest phụ thuộc vào adapter kết nối D1 từ Task 1).
 
@@ -290,13 +296,15 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 - Create: `cloudflare-worker/bridge/schema.sql`
 - Create: `cloudflare-worker/bridge/wrangler.toml`
 - Create: `backend/assethub_api/backends/d1/sql/schema.sql`
+- Create: `scripts/sync_d1_schema.sh`
+- Create: `scripts/reset_d1_test_db.sh` & `scripts/reset_d1_test_db.sql`
 - Create: `backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py`
 
 **Interfaces:**
 - Consumes: CSDL Cloudflare D1 `assethub-test-d1` qua `wrangler d1 execute`.
-- Produces: 19 bảng hoàn chỉnh, 2 triggers `protect_last_admin_before_update` và `protect_last_admin_before_delete`, bảng `_assert_guard`, `_idempotency_log`, bảng `ai_suggestion_logs`.
+- Produces: 19 bảng hoàn chỉnh idempotent, 2 triggers `protect_last_admin_before_update` và `protect_last_admin_before_delete`, bảng `_assert_guard`, `_idempotency_log`, bảng `ai_suggestion_logs`, công cụ reset an toàn.
 
-- [ ] **Step 1: Viết failing test kiểm tra schema constraints và admin triggers**
+- [ ] **Step 1: Viết failing test kiểm tra schema constraints, admin triggers và re-entrant safety**
   Tạo `backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py`:
   - Test kiểm chứng ràng buộc CHECK trạng thái tài sản bắt buộc thuộc đúng 6 trạng thái chuẩn:
     `CHECK(status IN ('AVAILABLE', 'IN_USE', 'DAMAGED_PENDING_REPAIR', 'UNDER_MAINTENANCE', 'PENDING_DISPOSAL', 'DISPOSED'))`.
@@ -305,6 +313,8 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
   - Test de-activate hoặc giáng quyền Admin duy nhất bị từ chối bởi trigger (`Cannot demote or deactivate the last active Admin`).
   - Test xóa Admin duy nhất bị từ chối bởi trigger (`Cannot delete the last active Admin`).
   - Test kiểm tra tính đồng nhất 100% từng byte giữa `cloudflare-worker/bridge/schema.sql` và `backend/assethub_api/backends/d1/sql/schema.sql`.
+  - Test bảo toàn dữ liệu khi chạy lại schema (Re-entrant execution): chèn dữ liệu mẫu rồi chạy lại `schema.sql`, bảo đảm dữ liệu cũ không bị DROP hay xóa mất.
+  - Test công cụ reset `reset_d1_test_db.sh` có guard: từ chối nếu thiếu `--confirm-destructive` hoặc truyền sai database target.
 
 - [ ] **Step 2: Chạy kiểm thử để xác nhận thất bại (Red)**
   ```bash
@@ -312,24 +322,21 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
   ```
   Mong đợi: FAIL (chưa có tệp test hoặc schema chưa có đủ triggers/constraints).
 
-- [ ] **Step 3: Biên soạn `schema.sql` và thực thi trên D1 từ xa**
-  - Biên soạn `cloudflare-worker/bridge/schema.sql` với đủ 19 bảng theo thứ tự topo ngược và 2 triggers bảo vệ.
+- [ ] **Step 3: Biên soạn `schema.sql`, công cụ reset và đồng bộ**
+  - Biên soạn `cloudflare-worker/bridge/schema.sql` với đủ 19 bảng sử dụng `CREATE TABLE IF NOT EXISTS`, loại bỏ hoàn toàn các lệnh `DROP TABLE`.
+  - Tạo `scripts/reset_d1_test_db.sh` và `scripts/reset_d1_test_db.sql` phục vụ riêng việc dọn dẹp testbed có guard nghiêm ngặt.
   - Cấu hình `cloudflare-worker/bridge/wrangler.toml` (database_name = "assethub-test-d1", database_id = "3850e3a1-7c57-42f4-afd6-1fa1655bbcf1").
-  - Thực thi DDL lên D1 từ xa từ thư mục gốc dự án:
-    ```bash
-    npx wrangler d1 execute assethub-test-d1 --remote --file=./cloudflare-worker/bridge/schema.sql
-    ```
-  - Đồng bộ bản sao tệp DDL vào `backend/assethub_api/backends/d1/sql/schema.sql`.
+  - Đồng bộ bản sao tệp DDL vào `backend/assethub_api/backends/d1/sql/schema.sql` qua `scripts/sync_d1_schema.sh`.
 
 - [ ] **Step 4: Chạy kiểm thử xác nhận thành công (Green)**
   ```bash
   docker compose exec backend pytest assethub_api/backends/d1/tests/test_d1_schema_constraints.py -v
   ```
-  Mong đợi: PASS 100%. Các ràng buộc 6 trạng thái và trigger hoạt động chính xác trên D1.
+  Mong đợi: PASS 100%. Các ràng buộc 6 trạng thái, trigger và tính bất biến an toàn hoạt động chính xác.
 
 - [ ] **Step 5: Commit Task 2**
   ```bash
-  git add cloudflare-worker/bridge/ backend/assethub_api/backends/d1/sql/ backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py
+  git add cloudflare-worker/bridge/ backend/assethub_api/backends/d1/sql/ scripts/ backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py
   git commit -m "feat(schema): define official d1 schema with 19 tables, 6 asset statuses and admin protection triggers"
   ```
 
