@@ -1,29 +1,8 @@
 -- Official Cloudflare D1 Production Schema for AssetHub (19 Tables, Constraints & Protection Triggers)
-
-DROP TRIGGER IF EXISTS protect_last_admin_before_update;
-DROP TRIGGER IF EXISTS protect_last_admin_before_delete;
-DROP TABLE IF EXISTS ai_suggestion_logs;
-DROP TABLE IF EXISTS _idempotency_log;
-DROP TABLE IF EXISTS _assert_guard;
-DROP TABLE IF EXISTS assets_assethistorylog;
-DROP TABLE IF EXISTS requests_assetrequest;
-DROP TABLE IF EXISTS assets_asset;
-DROP TABLE IF EXISTS assets_identifiersequence;
-DROP TABLE IF EXISTS django_session;
-DROP TABLE IF EXISTS django_migrations;
-DROP TABLE IF EXISTS django_admin_log;
-DROP TABLE IF EXISTS authentication_user_user_permissions;
-DROP TABLE IF EXISTS authentication_user_groups;
-DROP TABLE IF EXISTS auth_group_permissions;
-DROP TABLE IF EXISTS authentication_user;
-DROP TABLE IF EXISTS auth_group;
-DROP TABLE IF EXISTS auth_permission;
-DROP TABLE IF EXISTS django_content_type;
-DROP TABLE IF EXISTS departments_category;
-DROP TABLE IF EXISTS departments_department;
+-- Safe & Idempotent: No DROP statements. Re-entrant execution preserves all existing data.
 
 -- 1. Departments (matches apps.departments.models.Department)
-CREATE TABLE departments_department (
+CREATE TABLE IF NOT EXISTS departments_department (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     code TEXT UNIQUE NOT NULL,
@@ -32,7 +11,7 @@ CREATE TABLE departments_department (
 );
 
 -- 2. Categories (matches apps.departments.models.Category)
-CREATE TABLE departments_category (
+CREATE TABLE IF NOT EXISTS departments_category (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     description TEXT NOT NULL DEFAULT '',
@@ -40,7 +19,7 @@ CREATE TABLE departments_category (
 );
 
 -- 3. Django Content Types (required by Django ORM internals)
-CREATE TABLE django_content_type (
+CREATE TABLE IF NOT EXISTS django_content_type (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     app_label TEXT NOT NULL,
     model TEXT NOT NULL,
@@ -48,7 +27,7 @@ CREATE TABLE django_content_type (
 );
 
 -- 4. Auth Permissions (matches django.contrib.auth)
-CREATE TABLE auth_permission (
+CREATE TABLE IF NOT EXISTS auth_permission (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     content_type_id INTEGER NOT NULL REFERENCES django_content_type(id),
@@ -57,13 +36,13 @@ CREATE TABLE auth_permission (
 );
 
 -- 5. Auth Groups (matches django.contrib.auth)
-CREATE TABLE auth_group (
+CREATE TABLE IF NOT EXISTS auth_group (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE
 );
 
 -- 6. Auth Group Permissions
-CREATE TABLE auth_group_permissions (
+CREATE TABLE IF NOT EXISTS auth_group_permissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     group_id INTEGER NOT NULL REFERENCES auth_group(id),
     permission_id INTEGER NOT NULL REFERENCES auth_permission(id),
@@ -71,7 +50,7 @@ CREATE TABLE auth_group_permissions (
 );
 
 -- 7. Users (matches apps.authentication.models.User with AbstractUser parity)
-CREATE TABLE authentication_user (
+CREATE TABLE IF NOT EXISTS authentication_user (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     password TEXT NOT NULL,
     last_login TEXT,
@@ -92,7 +71,7 @@ CREATE TABLE authentication_user (
 );
 
 -- 8. Authentication User Groups
-CREATE TABLE authentication_user_groups (
+CREATE TABLE IF NOT EXISTS authentication_user_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES authentication_user(id),
     group_id INTEGER NOT NULL REFERENCES auth_group(id),
@@ -100,7 +79,7 @@ CREATE TABLE authentication_user_groups (
 );
 
 -- 9. Authentication User Permissions
-CREATE TABLE authentication_user_user_permissions (
+CREATE TABLE IF NOT EXISTS authentication_user_user_permissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES authentication_user(id),
     permission_id INTEGER NOT NULL REFERENCES auth_permission(id),
@@ -108,7 +87,7 @@ CREATE TABLE authentication_user_user_permissions (
 );
 
 -- 10. Django Admin Log (required by Django ORM user cascade)
-CREATE TABLE django_admin_log (
+CREATE TABLE IF NOT EXISTS django_admin_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action_time TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
     user_id INTEGER NOT NULL REFERENCES authentication_user(id),
@@ -120,7 +99,7 @@ CREATE TABLE django_admin_log (
 );
 
 -- 11. Django Migrations tracking
-CREATE TABLE django_migrations (
+CREATE TABLE IF NOT EXISTS django_migrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     app TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -128,7 +107,7 @@ CREATE TABLE django_migrations (
 );
 
 -- 12. Django Session storage
-CREATE TABLE django_session (
+CREATE TABLE IF NOT EXISTS django_session (
     session_key TEXT PRIMARY KEY,
     session_data TEXT NOT NULL,
     expire_date TEXT NOT NULL
@@ -136,7 +115,7 @@ CREATE TABLE django_session (
 CREATE INDEX IF NOT EXISTS django_session_expire_date_idx ON django_session(expire_date);
 
 -- 13. Identifier Sequences (matches apps.assets.models.IdentifierSequence)
-CREATE TABLE assets_identifiersequence (
+CREATE TABLE IF NOT EXISTS assets_identifiersequence (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK(kind IN ('AST', 'REQ')),
     year INTEGER NOT NULL,
@@ -145,7 +124,7 @@ CREATE TABLE assets_identifiersequence (
 );
 
 -- 14. Assets (matches apps.assets.models.Asset with 6 strict statuses and holder checks)
-CREATE TABLE assets_asset (
+CREATE TABLE IF NOT EXISTS assets_asset (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     asset_code TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
@@ -167,7 +146,7 @@ CREATE TABLE assets_asset (
 );
 
 -- 15. Requests (matches apps.requests.models.AssetRequest)
-CREATE TABLE requests_assetrequest (
+CREATE TABLE IF NOT EXISTS requests_assetrequest (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     request_code TEXT UNIQUE NOT NULL,
     request_type TEXT NOT NULL CHECK(request_type IN ('ALLOCATE', 'RETURN', 'DAMAGE_REPORT')),
@@ -187,7 +166,7 @@ ON requests_assetrequest(requester_id, request_type, asset_id)
 WHERE status = 'PENDING' AND request_type IN ('RETURN', 'DAMAGE_REPORT') AND asset_id IS NOT NULL;
 
 -- 16. Asset History Audit Trail (matches apps.assets.models.AssetHistoryLog)
-CREATE TABLE assets_assethistorylog (
+CREATE TABLE IF NOT EXISTS assets_assethistorylog (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     asset_id INTEGER NOT NULL REFERENCES assets_asset(id),
     actor_id INTEGER NOT NULL REFERENCES authentication_user(id),
@@ -205,14 +184,14 @@ CREATE TABLE assets_assethistorylog (
 );
 
 -- 17. Assertion guard table for batch atomicity
-CREATE TABLE _assert_guard (
+CREATE TABLE IF NOT EXISTS _assert_guard (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     rows_affected INTEGER NOT NULL CHECK(rows_affected > 0),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- 18. Idempotency table for network retry safety
-CREATE TABLE _idempotency_log (
+CREATE TABLE IF NOT EXISTS _idempotency_log (
     idempotency_key TEXT PRIMARY KEY,
     payload_hash TEXT,
     request_hash TEXT,
@@ -222,7 +201,7 @@ CREATE TABLE _idempotency_log (
 );
 
 -- 19. AI Suggestion Audit Logs for Workers AI & Django
-CREATE TABLE ai_suggestion_logs (
+CREATE TABLE IF NOT EXISTS ai_suggestion_logs (
     id TEXT PRIMARY KEY,
     asset_name TEXT NOT NULL,
     description TEXT NOT NULL,
@@ -233,7 +212,7 @@ CREATE TABLE ai_suggestion_logs (
 );
 
 -- Trigger: Protect Last Active Admin from being de-activated or demoted
-CREATE TRIGGER protect_last_admin_before_update
+CREATE TRIGGER IF NOT EXISTS protect_last_admin_before_update
 BEFORE UPDATE OF role, is_active ON authentication_user
 FOR EACH ROW
 WHEN OLD.role = 'ADMIN' AND OLD.is_active = 1
@@ -247,7 +226,7 @@ BEGIN
 END;
 
 -- Trigger: Protect Last Active Admin from being deleted
-CREATE TRIGGER protect_last_admin_before_delete
+CREATE TRIGGER IF NOT EXISTS protect_last_admin_before_delete
 BEFORE DELETE ON authentication_user
 FOR EACH ROW
 WHEN OLD.role = 'ADMIN' AND OLD.is_active = 1

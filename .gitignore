@@ -59,6 +59,7 @@ staticfiles/
 *.db
 *.sql
 !**/schema.sql
+!scripts/reset_d1_test_db.sql
 *.dump
 dumps/
 backups/

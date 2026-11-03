@@ -24,9 +24,10 @@ else
   exit 1
 fi
 
-# If backend container is active, synchronize container's /cloudflare-worker root copy
+# If backend container is active, synchronize container's root copies
 if command -v docker >/dev/null 2>&1; then
   if docker ps --format '{{.Names}}' | grep -qw "assethub-backend-1"; then
     docker cp "${PROJECT_ROOT}/cloudflare-worker" assethub-backend-1:/ >/dev/null 2>&1 || true
+    docker cp "${PROJECT_ROOT}/scripts" assethub-backend-1:/ >/dev/null 2>&1 || true
   fi
 fi
