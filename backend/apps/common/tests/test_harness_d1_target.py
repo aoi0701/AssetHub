@@ -8,6 +8,7 @@ and complete lifecycle management for zero-cloud D1 migration rehearsals.
 import json
 import socket
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -219,3 +220,98 @@ def test_d1_target_harness_lifecycle():
     finally:
         # Clean sentinel other directory
         cleanup_persist_directory(sentinel_other_dir, run_id="sentinel_other_run")
+
+
+def test_foreign_marker_and_sentinel_never_overwritten_or_deleted():
+    """
+    Regression Test 2 (D1 Target):
+    Preflight check prevents overwriting or deleting foreign directories.
+    If persist_dir exists with foreign marker and sentinel files:
+    - setup() raises RuntimeError immediately.
+    - foreign marker is NEVER overwritten with new run_id.
+    - sentinel file is NEVER deleted.
+    - teardown() refuses to delete foreign directory.
+    """
+    foreign_run_id = "foreign_run_sentinel_123"
+    our_run_id = "our_new_run_456"
+
+    foreign_dir = Path(f"/tmp/assethub_rehearsal_d1_{foreign_run_id}")
+    foreign_dir.mkdir(parents=True, exist_ok=True)
+    write_run_marker(foreign_dir, run_id=foreign_run_id, pid=77777)
+
+    sentinel_file = foreign_dir / "sentinel_payload.txt"
+    sentinel_file.write_text("CRITICAL_FOREIGN_REHEARSAL_DATA", encoding="utf-8")
+
+    try:
+        harness = D1TargetHarness(run_id=our_run_id, persist_dir=foreign_dir)
+
+        # 1. setup() must fail with clear ownership preflight error
+        with pytest.raises(RuntimeError, match="is owned by foreign run"):
+            harness.setup(clean_first=True)
+
+        # 2. Marker must still belong to foreign_run_id (never overwritten)
+        marker_data = json.loads((foreign_dir / "run_marker.json").read_text(encoding="utf-8"))
+        assert marker_data["run_id"] == foreign_run_id
+
+        # 3. Sentinel file must still exist with unchanged contents
+        assert sentinel_file.exists()
+        assert sentinel_file.read_text(encoding="utf-8") == "CRITICAL_FOREIGN_REHEARSAL_DATA"
+
+        # 4. teardown() on the new harness must not delete the foreign directory
+        harness.teardown()
+        assert foreign_dir.exists()
+        assert sentinel_file.exists()
+    finally:
+        if sentinel_file.exists():
+            sentinel_file.unlink()
+        cleanup_persist_directory(foreign_dir, run_id=foreign_run_id)
+
+
+def test_d1_setup_failure_self_cleans_resources():
+    """
+    Regression Test 3 (D1 Target):
+    Verify that if setup fails at any step (e.g., DDL ingest, bridge start, verify_clean),
+    D1TargetHarness.setup() automatically self-cleans its own persist directory, env file,
+    and process, and re-raises the original exception without leaving behind leaked resources.
+    """
+    run_id = "d1_setup_fail_self_clean_test"
+    harness = D1TargetHarness(run_id=run_id)
+
+    # Mock ingest_d1_ddl to raise an unexpected failure
+    with mock.patch("apps.common.tests.harness_d1_target.ingest_d1_ddl", side_effect=RuntimeError("Simulated DDL crash")):
+        with pytest.raises(RuntimeError, match="Simulated DDL crash"):
+            harness.setup()
+
+    # Assert persist_dir was cleanly deleted during self-cleanup on failure
+    assert not harness.persist_dir.exists(), (
+        f"Persist directory {harness.persist_dir} must be cleaned up on setup failure!"
+    )
+    # Assert env_file was cleanly unlinked
+    assert not harness.env_file.exists(), (
+        f"Env file {harness.env_file} must be cleaned up on setup failure!"
+    )
+    assert harness.process is None
+
+
+def test_foreign_env_file_preflight_refuses_overwrite():
+    """
+    Regression Test 2b (Env File):
+    Preflight check refuses to overwrite an environment file that does not belong to run_id.
+    """
+    foreign_run_id = "foreign_env_run_123"
+    our_run_id = "our_env_run_456"
+
+    foreign_env = Path(f"/tmp/assethub_rehearsal_d1_{foreign_run_id}.env")
+    foreign_env.write_text("BRIDGE_SECRET_TOKEN=foreign_secret_token_value_32ch\n", encoding="utf-8")
+
+    try:
+        harness = D1TargetHarness(run_id=our_run_id, env_file=foreign_env)
+        with pytest.raises(RuntimeError, match="not owned by run"):
+            harness.setup()
+
+        # Foreign env file contents must be preserved
+        assert foreign_env.exists()
+        assert "foreign_secret_token_value_32ch" in foreign_env.read_text(encoding="utf-8")
+    finally:
+        if foreign_env.exists():
+            foreign_env.unlink()

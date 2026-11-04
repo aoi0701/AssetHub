@@ -40,11 +40,8 @@ def test_sentinel_port_conflict_guard():
     Start a dummy socket server on test port 5434.
     Attempt to start PGSourceHarness on that port.
     Assert it raises RuntimeError and the sentinel server is NOT killed.
+    No bulk cleanup is run beforehand to avoid touching external resources.
     """
-    # Clean up any leftover rehearsal containers on 5434 if any
-    cleanup_rehearsal_containers(port=5434)
-    teardown_pg_source()
-
     sentinel = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sentinel.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -67,6 +64,50 @@ def test_sentinel_port_conflict_guard():
 
     finally:
         sentinel.close()
+
+
+def test_foreign_container_same_port_not_removed():
+    """
+    Regression Test 1:
+    Verify that foreign container belonging to a different run on the same port
+    is NEVER removed by cleanup or start, and port conflict fails safely.
+    """
+    # 1. Calling cleanup_rehearsal_containers without run_id does nothing
+    assert cleanup_rehearsal_containers() == []
+
+    # 2. Mock foreign container on port 5434
+    harness = PGSourceHarness(run_id="our_current_run", port=5434)
+    with mock.patch("apps.common.tests.harness_pg_source.is_port_in_use", return_value=True):
+        with mock.patch.object(harness, "is_container_running", return_value=True):
+            with mock.patch.object(harness, "get_container_labels") as mock_labels:
+                mock_labels.return_value = {
+                    "assethub.owner": "rehearsal",
+                    "assethub.run_id": "foreign_run_123",
+                }
+                with mock.patch("subprocess.run") as mock_run:
+                    with pytest.raises(RuntimeError, match="already in use by an external process"):
+                        harness.start()
+                    # Verify no docker rm was called on foreign container
+                    for call_args in mock_run.call_args_list:
+                        args = call_args[0][0]
+                        assert not (args[0] == "docker" and args[1] == "rm")
+
+
+def test_pg_setup_failure_self_cleans_resources():
+    """
+    Regression Test 3 (PG Source):
+    Verify that if setup fails at any step (e.g., migrations, schema verify, seeding),
+    PGSourceHarness.setup() automatically tears down its own resources and re-raises the error.
+    """
+    harness = PGSourceHarness(run_id="pg_setup_fail_test")
+    with mock.patch.object(harness, "start") as mock_start:
+        with mock.patch.object(harness, "apply_django_migrations", side_effect=RuntimeError("Simulated migration crash")):
+            with mock.patch.object(harness, "teardown") as mock_teardown:
+                with pytest.raises(RuntimeError, match="Simulated migration crash"):
+                    harness.setup()
+
+                mock_start.assert_called_once()
+                mock_teardown.assert_called_once()
 
 
 def test_teardown_guard_refuses_foreign_containers():

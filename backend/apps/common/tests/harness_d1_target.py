@@ -231,6 +231,81 @@ def cleanup_env_file(env_file: Optional[Path]) -> bool:
         return False
 
 
+def assert_persist_dir_preflight(persist_dir: Optional[Path], run_id: str) -> None:
+    """
+    Preflight check before any creation or deletion.
+    If directory exists, verifies that it belongs to this run_id:
+    - Must be within /tmp with expected pattern.
+    - Must have run_marker.json.
+    - Marker run_id must match this run_id.
+    Raises RuntimeError if directory exists and is not owned by run_id.
+    """
+    if persist_dir is None:
+        return
+    path = Path(persist_dir).resolve()
+    if not path.exists():
+        return
+
+    tmp_path = Path("/tmp").resolve()
+    try:
+        path.relative_to(tmp_path)
+    except ValueError:
+        raise RuntimeError(f"Persist directory '{path}' exists outside /tmp. Refusing to touch.")
+
+    if path == tmp_path:
+        raise RuntimeError("Persist directory cannot be the root /tmp directory itself.")
+
+    name = path.name
+    if not (name.startswith("assethub_rehearsal_d1_") or name.startswith("wrangler")):
+        raise RuntimeError(f"Persist directory '{name}' does not match run directory pattern. Refusing to touch.")
+
+    marker_path = path / "run_marker.json"
+    if not marker_path.is_file():
+        raise RuntimeError(
+            f"Persist directory '{path}' already exists without run_marker.json. "
+            "Refusing to overwrite or delete foreign directory."
+        )
+
+    try:
+        data = json.loads(marker_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(
+            f"Persist directory '{path}' contains unreadable marker: {exc}. Refusing to overwrite."
+        )
+
+    if not isinstance(data, dict) or data.get("run_id") != run_id:
+        existing_run = data.get("run_id") if isinstance(data, dict) else "unknown"
+        raise RuntimeError(
+            f"Persist directory '{path}' is owned by foreign run '{existing_run}', "
+            f"not expected run '{run_id}'. Refusing to overwrite foreign directory."
+        )
+
+
+def assert_env_file_preflight(env_file: Optional[Path], run_id: str) -> None:
+    """
+    Preflight check for env_file before any creation or deletion.
+    If file exists, verifies that it belongs to this run_id (must be under /tmp and contain run_id).
+    Raises RuntimeError if file exists and is not owned by run_id.
+    """
+    if env_file is None:
+        return
+    path = Path(env_file).resolve()
+    if not path.exists():
+        return
+
+    tmp_path = Path("/tmp").resolve()
+    try:
+        path.relative_to(tmp_path)
+    except ValueError:
+        raise RuntimeError(f"Environment file '{path}' exists outside /tmp. Refusing to touch.")
+
+    if run_id not in path.name:
+        raise RuntimeError(
+            f"Environment file '{path}' already exists and is not owned by run '{run_id}'. "
+            "Refusing to overwrite foreign file."
+        )
+
+
 def terminate_process(proc: Optional[subprocess.Popen], timeout: float = 5.0) -> None:
     """
     Safely terminate only the given subprocess and its process group.
@@ -643,40 +718,54 @@ class D1TargetHarness:
         # 1. Immediate port check: Fail if port is in use; NEVER kill external processes
         assert_port_available(host=self.host, port=self.port)
 
-        # 2. Clean prior instance files if requested
-        if clean_first:
-            if self.process is not None:
-                terminate_process(self.process)
-                self.process = None
-            cleanup_persist_directory(self.persist_dir, run_id=self.run_id)
-            cleanup_env_file(self.env_file)
+        # 2. Preflight persist_dir and env_file ownership before touching anything
+        assert_persist_dir_preflight(self.persist_dir, run_id=self.run_id)
+        assert_env_file_preflight(self.env_file, run_id=self.run_id)
 
-        # 3. Create run directory and write initial marker
-        self.persist_dir.mkdir(parents=True, exist_ok=True)
-        write_run_marker(self.persist_dir, run_id=self.run_id, pid=None)
+        # 3. Wrap all subsequent mutations in try...except for automatic self-cleanup on failure
+        try:
+            # Clean prior instance files if requested (safe because preflight verified ownership)
+            if clean_first:
+                if self.process is not None:
+                    terminate_process(self.process)
+                    self.process = None
+                if self.persist_dir.exists():
+                    cleanup_persist_directory(self.persist_dir, run_id=self.run_id, raise_on_error=True)
+                cleanup_env_file(self.env_file)
 
-        # 4. Ingest DDL
-        ingest_d1_ddl(persist_dir=self.persist_dir, port=self.port)
+            # Create run directory and write initial marker
+            self.persist_dir.mkdir(parents=True, exist_ok=True)
+            write_run_marker(self.persist_dir, run_id=self.run_id, pid=None)
 
-        # 5. Launch Worker Bridge
-        self.process = start_d1_bridge(
-            port=self.port,
-            host=self.host,
-            persist_dir=self.persist_dir,
-            env_file=self.env_file,
-            token=self.token,
-            run_id=self.run_id,
-        )
+            # Ingest DDL
+            ingest_d1_ddl(persist_dir=self.persist_dir, port=self.port)
 
-        # 6. Update marker with active PID
-        write_run_marker(self.persist_dir, run_id=self.run_id, pid=self.process.pid)
+            # Launch Worker Bridge
+            self.process = start_d1_bridge(
+                port=self.port,
+                host=self.host,
+                persist_dir=self.persist_dir,
+                env_file=self.env_file,
+                token=self.token,
+                run_id=self.run_id,
+            )
 
-        # 7. Verify destination clean state (17 tables, 0 rows)
-        self.verify_clean()
+            # Update marker with active PID
+            write_run_marker(self.persist_dir, run_id=self.run_id, pid=self.process.pid)
 
-        if self not in _active_harnesses:
-            _active_harnesses.append(self)
-        return self
+            # Verify destination clean state (17 tables, 0 rows)
+            self.verify_clean()
+
+            if self not in _active_harnesses:
+                _active_harnesses.append(self)
+            return self
+        except Exception:
+            # Automatic self-cleanup on any failure during setup
+            try:
+                self.teardown()
+            except Exception:
+                pass
+            raise
 
     def query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
         """Execute query against running bridge."""

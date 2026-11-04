@@ -154,7 +154,8 @@ Theo yêu cầu ưu tiên của Codex:
 9. `8addff6` - `fix(migration): harden pg-to-d1 migration command with comprehensive content reconciliation and safety guards`
 10. `a16aa8d` - `fix(migration): enforce schema-driven canonicalization, preflight validation and clean atomic import`
 11. `83f95c1` - `test(migration): complete local end-to-end rehearsal from real postgresql to local d1 bridge`
-12. `335de67` - `fix(harness): harden process ownership, directory markers, and opt-in lifecycle gating`
+12. `4ab02ae` - `fix(harness): harden process ownership, directory markers, and opt-in lifecycle gating`
+13. *(Commit tiếp theo)* - `fix(harness): enforce foreign preflight, remove bulk cleanup, and self-clean failed setup`
 
 ---
 
@@ -202,22 +203,39 @@ Nhận phản hồi review từ Codex đối với commit `83f95c1`, đã thực
 - **Credentials ngẫu nhiên theo run:** Tự động sinh `admin_user` (`pgadm_{run_id}`), `ro_user` (`pgro_{run_id}`), và mật khẩu ngẫu nhiên qua `secrets.token_urlsafe(16)`. Không hardcode mật khẩu, không in credentials trong `repr()`, `str()` hay error logs.
 - **Token Local Riêng Biệt:** Tự động sinh token ngẫu nhiên độc lập (`secrets.token_urlsafe(32)`), không tái sử dụng token Cloud. File env tạm được phân quyền chặt chẽ `chmod 0600`.
 
+### 8.5. Vá 3 Đường Lỗi Cuối Cùng Theo Review 4ab02ae
+- **Bỏ bulk cleanup khỏi test (P1):** `cleanup_rehearsal_containers` bắt buộc `run_id`, lọc đồng thời `label=assethub.owner=rehearsal` và `label=assethub.run_id={run_id}`. Xóa hoàn toàn lệnh dọn bulk trước test sentinel.
+- **Preflight quyền sở hữu persist_dir & env_file (P1):** Thêm `assert_persist_dir_preflight` và `assert_env_file_preflight` trước mọi thao tác ghi/xóa trong `D1TargetHarness.setup`. Nếu đường dẫn đã tồn tại nhưng không thuộc `run_id`, lập tức ném `RuntimeError`, bảo toàn 100% marker và file sentinel của run khác, tuyệt đối không ghi đè marker.
+- **Tự dọn dẹp khi setup thất bại (P2):** Cả `PGSourceHarness.setup` và `D1TargetHarness.setup` đều bọc toàn bộ các bước khởi tạo trong khối `try...except`. Nếu có lỗi (DDL ingest, process start, readiness, verify), harness tự động gọi `teardown()` dọn dẹp sạch tài nguyên mình vừa tạo và re-raise lỗi gốc.
+
 ---
 
 ## 9. Tổng Hợp Kiểm Thử Xác Minh Sau Khi Sửa (Task 3c)
 
 ### 9.1. Bộ Kiểm Thử Diễn Tập Opt-in (`--rehearsal`)
 Lệnh: `backend/.venv/bin/pytest backend/apps/common/tests/test_harness_pg_source.py backend/apps/common/tests/test_harness_d1_target.py backend/apps/common/tests/test_pg_to_d1_rehearsal.py --rehearsal -v`
-Kết quả: **27 passed in 37.93s (100% PASS)**:
-- `test_harness_pg_source.py`: **10 passed** (sentinel conflict guard, foreign container teardown rejection, random credentials, labels & loopback binding, schema isolation 16 mandatory tables, seed completeness, PBKDF2 Django auth, richness verification, read-only privilege enforcement).
-- `test_harness_d1_target.py`: **5 passed** (safe environment guard, env file 0600 mode, sentinel port kill refusal, marker validation refusal, lifecycle & process group clean termination).
+Kết quả: **32 passed in 38.55s (100% PASS)**:
+- `test_harness_pg_source.py`: **12 passed** (sentinel conflict guard, foreign container on same port not removed, setup failure self-cleanup, foreign container teardown rejection, random credentials, labels & loopback binding, schema isolation 16 mandatory tables, seed completeness, PBKDF2 Django auth, richness verification, read-only privilege enforcement).
+- `test_harness_d1_target.py`: **8 passed** (safe environment guard, env file 0600 mode, sentinel port kill refusal, marker validation refusal, lifecycle & process group clean termination, foreign marker & sentinel never overwritten/deleted, d1 setup failure self-cleanup, foreign env file preflight).
 - `test_pg_to_d1_rehearsal.py`: **12 passed** (teardown reliability regression on failure, preflight checks, dry run 0 writes, real migration & 7-criteria parity, PBKDF2 auth verification, identifier sequences, non-empty target guard, 5 negative defect mutation detections).
 
 ### 9.2. Kiểm Thử Gating Suite Mặc Định (Zero Side-Effects)
 Lệnh: `backend/.venv/bin/pytest backend/apps/common/tests/test_harness_pg_source.py backend/apps/common/tests/test_harness_d1_target.py backend/apps/common/tests/test_pg_to_d1_rehearsal.py`
-Kết quả: **27 skipped in 0.04s (100% CLEAN)**.
+Kết quả: **32 skipped in 0.04s (100% CLEAN)**.
 - 0 container Docker được khởi tạo.
 - 0 tiến trình Worker được spawn.
+- 0 tiến trình ngoài bị ảnh hưởng.
+
+### 9.3. Toàn Bộ Unit Test Suite Khác
+- `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/apps/common/tests/test_d1_migration.py backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py backend/assethub_api/backends/d1/tests/test_isolation_guard.py -v`:
+  **62 passed, 1 skipped in 26.17s (100% PASS)**.
+- `node spikes/cf-d1-spike/bridge-worker/tests/test_worker_regression.mjs`:
+  **8 passed in 98.97ms (100% PASS)**.
+- **Kiểm Tra Trạng Thái Hệ Thống:**
+  - Cổng 5434 và 8787 hoàn toàn giải phóng (`Ports 5434 and 8787 are completely clean`).
+  - Thư mục `/tmp/assethub_rehearsal_d1_*` dọn sạch 100%.
+  - `assethub-db-1` (port 5433) và `pg-test` (port 5432) hoạt động bình thường, không bị gián đoạn.
+  - Quét 0 chuỗi hex token/secret 64 ký tự trong git diff.
 - 0 tiến trình ngoài bị ảnh hưởng.
 
 ### 9.3. Toàn Bộ Unit Test Suite Khác

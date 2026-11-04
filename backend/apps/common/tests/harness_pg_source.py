@@ -954,28 +954,36 @@ class PGSourceHarness:
         }
 
     def setup(self, recreate: bool = False) -> Dict[str, Any]:
-        """Full pipeline setup: start, migrate, verify, setup RO user, seed, verify."""
-        self.start(recreate=recreate)
-        self.apply_django_migrations()
-        self.verify_schema_isolation()
-        self.setup_readonly_user()
-        seed_counts = self.seed_rehearsal_data()
-        verification = self.verify_dataset_richness()
-        if verification["status"] != "PASS":
-            raise RuntimeError(f"Rehearsal dataset verification failed: {verification['errors']}")
+        """Full pipeline setup with automatic self-cleanup on failure."""
+        try:
+            self.start(recreate=recreate)
+            self.apply_django_migrations()
+            self.verify_schema_isolation()
+            self.setup_readonly_user()
+            seed_counts = self.seed_rehearsal_data()
+            verification = self.verify_dataset_richness()
+            if verification["status"] != "PASS":
+                raise RuntimeError(f"Rehearsal dataset verification failed: {verification['errors']}")
 
-        return {
-            "run_id": self.run_id,
-            "container_name": self.container_name,
-            "host": self.host,
-            "port": self.port,
-            "dbname": self.dbname,
-            "admin_user": self.admin_user,
-            "ro_user": self.ro_user,
-            "seed_counts": seed_counts,
-            "verification": verification,
-            "harness": self,
-        }
+            return {
+                "run_id": self.run_id,
+                "container_name": self.container_name,
+                "host": self.host,
+                "port": self.port,
+                "dbname": self.dbname,
+                "admin_user": self.admin_user,
+                "ro_user": self.ro_user,
+                "seed_counts": seed_counts,
+                "verification": verification,
+                "harness": self,
+            }
+        except Exception:
+            # Self-cleanup container created by this run on setup failure
+            try:
+                self.teardown()
+            except Exception:
+                pass
+            raise
 
     def __enter__(self) -> "PGSourceHarness":
         self.setup()
@@ -1029,16 +1037,26 @@ def start_pg_container(recreate: bool = False, timeout: int = 45) -> bool:
     return _default_harness.start(recreate=recreate, timeout=timeout)
 
 
-def cleanup_rehearsal_containers(port: Optional[int] = None) -> List[str]:
+def cleanup_rehearsal_containers(run_id: Optional[str] = None, port: Optional[int] = None) -> List[str]:
     """
-    Safely remove leftover rehearsal containers (strictly filtered by assethub.owner=rehearsal).
-    NEVER touches assethub-db-1, pg-test, or non-rehearsal containers.
+    Safely remove rehearsal containers strictly belonging to the given run_id.
+    NEVER touches assethub-db-1, pg-test, or containers from other runs.
+    Refuses bulk removal if run_id is not provided.
     """
-    res = subprocess.run(
-        ["docker", "ps", "-a", "--filter", "label=assethub.owner=rehearsal", "--format", "{{.ID}} {{.Names}}"],
-        capture_output=True,
-        text=True,
-    )
+    if not run_id:
+        logger.warning("cleanup_rehearsal_containers requires explicit run_id. Refusing bulk removal.")
+        return []
+
+    filters = [
+        "label=assethub.owner=rehearsal",
+        f"label=assethub.run_id={run_id}",
+    ]
+    cmd = ["docker", "ps", "-a"]
+    for f in filters:
+        cmd.extend(["--filter", f])
+    cmd.extend(["--format", "{{.ID}} {{.Names}}"])
+
+    res = subprocess.run(cmd, capture_output=True, text=True)
     removed = []
     if res.returncode == 0 and res.stdout.strip():
         for line in res.stdout.strip().splitlines():
@@ -1060,10 +1078,10 @@ def cleanup_rehearsal_containers(port: Optional[int] = None) -> List[str]:
     return removed
 
 
-def teardown_pg_source(all_rehearsal: bool = False) -> bool:
-    """Clean teardown: stops and removes default container or all rehearsal containers."""
-    if all_rehearsal:
-        cleanup_rehearsal_containers()
+def teardown_pg_source(run_id: Optional[str] = None) -> bool:
+    """Clean teardown: stops and removes default container or container for specific run_id."""
+    if run_id:
+        cleanup_rehearsal_containers(run_id=run_id)
     return _default_harness.teardown()
 
 
