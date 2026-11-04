@@ -567,7 +567,11 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 - [x] **Step 9: Review Độc Lập (Agent D) & Verification Nghiệm Thu Cuối Task 5**
   - Thẩm định độc lập bằng ponytail-review và requesting-code-review: Verdict SHIP.
   - Verification toàn diện: PG baseline (227 tests), storage/AI tests (61 tests), Worker vitest (21 tests), D1 rehearsal song hành cả 2 chiều (28 tests mỗi chiều).
-  - Cập nhật progress report và tạo commit local trên `feat/cloudflare-d1`.
+  - Cập nhật progress report và tạo commit local trên `feat/cloudflare-d1` (commit `8076992`).
+
+- [x] **Step 10: Sửa Điểm Nhỏ DatabaseError Lookup AI Theo Review 8076992**
+  - [x] Agent A: Viết regression test đỏ cho `DatabaseError` tại primary lookup category trong `backend/tests/test_ai_proxy.py`; bỏ catch-all `except (ValueError, OverflowError, Exception)` trong `backend/apps/ai/services.py`; bỏ alias `suggest_category_for_asset` không dùng; chạy suite test AI 32/32 passed.
+  - [x] Agent B: Review độc lập diff và contract của Agent A qua ponytail-review: Verdict SHIP.
 
 ---
 

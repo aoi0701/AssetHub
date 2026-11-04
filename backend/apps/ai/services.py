@@ -329,9 +329,10 @@ class AiProxyService:
             raise
 
     @classmethod
-    def suggest_category(cls, actor, name: str, description: str = "") -> dict:
+    def suggest_category(cls, actor=None, name: str = "", description: str = "", user=None) -> dict:
+        current_actor = actor if actor is not None else user
         # 1. RBAC Check: Only ADMIN
-        if not actor or getattr(actor, "role", None) != User.Role.ADMIN:
+        if not current_actor or getattr(current_actor, "role", None) != User.Role.ADMIN:
             raise PermissionDenied("Only administrators can request AI suggestions.")
 
         # 2. Input validation
@@ -347,7 +348,7 @@ class AiProxyService:
             raise ValidationError({"description": ["Mô tả không được vượt quá 2000 ký tự."]})
 
         # 3. Rate limiting (10 req/min per user)
-        cls.check_rate_limit(getattr(actor, "id", "anonymous"))
+        cls.check_rate_limit(getattr(current_actor, "id", "anonymous"))
 
         request_id = str(uuid.uuid4())
 
@@ -431,12 +432,7 @@ class AiProxyService:
             return cls._heuristic_fallback(request_id=request_id, name=cleaned_name, description=cleaned_description)
 
         parsed_id = parse_positive_int_id(data.get("suggested_category_id"))
-        category = None
-        if parsed_id is not None:
-            try:
-                category = Category.objects.filter(id=parsed_id).first()
-            except (ValueError, OverflowError, Exception):
-                category = None
+        category = Category.objects.filter(id=parsed_id).first() if parsed_id is not None else None
         if not category:
             return cls._heuristic_fallback(request_id=request_id, name=cleaned_name, description=cleaned_description)
 
@@ -449,7 +445,3 @@ class AiProxyService:
             "log_saved": bool(data.get("log_saved", False)),
             "is_fallback": False,
         }
-
-
-# Method alias
-AiProxyService.suggest_category_for_asset = AiProxyService.suggest_category

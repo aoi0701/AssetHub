@@ -3,6 +3,7 @@ import time
 import urllib.error
 from unittest.mock import MagicMock, patch
 
+import django.db
 import pytest
 from rest_framework.test import APIClient
 
@@ -27,11 +28,21 @@ def clean_ai_service_state():
     AiProxyService.reset_rate_limit()
 
 
+class CategoryList(list):
+    def __getitem__(self, item):
+        if isinstance(item, str):
+            for cat in self:
+                if getattr(cat, "name", "").lower() == item.lower():
+                    return cat
+            raise KeyError(item)
+        return super().__getitem__(item)
+
+
 @pytest.fixture
 def sample_categories(db):
     cat1 = Category.objects.create(name="Laptop", description="Máy tính xách tay")
     cat2 = Category.objects.create(name="Màn hình", description="Màn hình máy tính")
-    return [cat1, cat2]
+    return CategoryList([cat1, cat2])
 
 
 @pytest.mark.django_db
@@ -598,3 +609,32 @@ def test_upstream_returns_array_id_triggers_fallback(admin_user, sample_categori
         assert response.data["is_fallback"] is True
         assert response.data["suggested_category_id"] == sample_categories[0].id
         assert response.data["suggested_category_name"] == "Laptop"
+
+
+@pytest.mark.django_db
+def test_db_error_during_category_lookup_raises_database_error_not_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+    mock_worker_response = {
+        "request_id": "test-uuid-db-error",
+        "suggested_category_id": sample_categories["laptop"].id,
+        "suggested_category_name": sample_categories["laptop"].name,
+        "explanation": "Valid category suggestion",
+        "log_saved": True,
+    }
+
+    with patch.object(AiProxyService, "_post_request", return_value=mock_worker_response):
+        with patch.object(
+            Category.objects,
+            "filter",
+            side_effect=django.db.DatabaseError("Simulated primary lookup DB connection crash"),
+        ):
+            # Assert django.db.DatabaseError is raised, NOT swallowed into is_fallback=True / HTTP 200
+            with pytest.raises(django.db.DatabaseError, match="Simulated primary lookup DB connection crash"):
+                AiProxyService.suggest_category(user=admin_user, name="Laptop Dell", description="Core i7")
+
+            with pytest.raises(django.db.DatabaseError):
+                client.post(
+                    "/api/ai/suggest-category/",
+                    data={"name": "Laptop Dell", "description": "Core i7"},
+                    format="json",
+                )

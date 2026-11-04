@@ -585,3 +585,37 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 - Cổng 5434 và 8787 sạch. Các container `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) nguyên vẹn.
 - Working tree sạch sau commit; sẵn sàng chờ Codex kiểm tra trước khi chuyển sang Task 6.
 
+---
+
+## 18. Nghiệm Thu Hoàn Tất Điểm Sửa Nhỏ Cuối Task 5: Không Che Giấu DatabaseError Trong Category Lookup
+
+- **Thời điểm:** 2026-11-04 23:30 (GMT+7)
+- **Trạng thái:** **Task 5 Sửa Dứt Điểm PASS 100% — Đã qua review độc lập Agent B & sẵn sàng để Codex kiểm tra.**
+- **Ranh giới an toàn nghiêm ngặt:**
+  - Không cài đặt/thêm/nâng cấp bất kỳ thư viện, package hay công cụ nào.
+  - Không kéo Docker image mới hay tải model weights.
+  - Không lặp lại toàn bộ kiểm thử lớn không liên quan; chỉ chạy regression mới và test suite AI theo đúng chỉ đạo.
+  - 1 tab AGY, 0 worktree, 0 push/merge trên nhánh `feat/cloudflare-d1`.
+
+### 18.1. Chi Tiết Khắc Phục Lỗi DatabaseError Masking
+1. **Phân tích vấn đề:**
+   - Trong `backend/apps/ai/services.py:438`, khối `try: category = Category.objects.filter(id=parsed_id).first() except (ValueError, OverflowError, Exception): category = None` đã vô tình bắt cả `django.db.DatabaseError` và lỗi lập trình.
+   - Khi DB thật gặp sự cố trong lookup chính, lỗi bị nuốt thành `category = None`, kích hoạt `_heuristic_fallback` trả HTTP 200 `is_fallback=True` giả thay vì ném lỗi DB ra ngoài theo handler chuẩn.
+2. **Khắc phục theo nguyên tắc Ponytail:**
+   - Bỏ hoàn toàn `try ... except (ValueError, OverflowError, Exception)`.
+   - Vì `parse_positive_int_id` đã validate chặt chẽ `parsed_id` là số nguyên dương hợp lệ hoặc `None`, `Category.objects.filter(id=parsed_id).first()` không bao giờ gặp lỗi kiểu dữ liệu.
+   - Nếu xảy ra lỗi CSDL thật (`DatabaseError`), lỗi được truyền trực tiếp ra ngoài cho handler chuẩn xử lý (HTTP 500), không che giấu thành fallback.
+   - Xóa bỏ alias không sử dụng `AiProxyService.suggest_category_for_asset = AiProxyService.suggest_category`.
+   - Bổ sung regression test `test_db_error_during_category_lookup_raises_database_error_not_fallback` trong `backend/tests/test_ai_proxy.py`.
+
+### 18.2. Kết Quả Kiểm Thử AI Liên Quan & Review Độc Lập
+1. **Kiểm thử AI Suite Tập Trung:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_ai_proxy.py -v`
+   - Kết quả: **32 passed in 4.67s (100% PASS, exit code 0)**.
+   - Test hồi quy xác nhận: `DatabaseError` ném thẳng ra caller, không trả 200 / `is_fallback=True`.
+2. **Thẩm Định Độc Lập Ponytail Review (Agent B):**
+   - **Verdict: SHIP**.
+   - Must fix: 0. Should fix: 0.
+   - Không bloat, không thêm middleware/retry không cần thiết.
+
+
