@@ -197,9 +197,9 @@ INSERT INTO assets_assethistorylog (
         update_sql = """
 UPDATE assets_asset
 SET status = %s, assigned_to_user_id = %s, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL
 """.strip()
-        update_params = [Asset.Status.IN_USE, target_user_id, asset.id, Asset.Status.AVAILABLE]
+        update_params = [Asset.Status.IN_USE, target_user_id, asset.id, Asset.Status.AVAILABLE, asset.department_id]
         assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
         audit_stmt = cls._build_audit_statement(
             asset=asset,
@@ -230,9 +230,9 @@ WHERE id = %s AND status = %s
         update_sql = """
 UPDATE assets_asset
 SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s
 """.strip()
-        update_params = [to_status, asset.id, Asset.Status.IN_USE]
+        update_params = [to_status, asset.id, Asset.Status.IN_USE, asset.assigned_to_user_id, asset.department_id]
         assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
         audit_stmt = cls._build_audit_statement(
             asset=asset,
@@ -260,10 +260,16 @@ WHERE id = %s AND status = %s
         """
         update_sql = """
 UPDATE assets_asset
-SET status = %s, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
+WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s
 """.strip()
-        update_params = [Asset.Status.DAMAGED_PENDING_REPAIR, asset.id, Asset.Status.IN_USE]
+        update_params = [
+            Asset.Status.DAMAGED_PENDING_REPAIR,
+            asset.id,
+            Asset.Status.IN_USE,
+            asset.assigned_to_user_id,
+            asset.department_id,
+        ]
         assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
         audit_stmt = cls._build_audit_statement(
             asset=asset,
@@ -316,6 +322,8 @@ WHERE id = %s AND status = %s
                 raise ConflictError(
                     "Tài sản thuộc kho chung công ty chưa phân bổ về phòng ban, không thể cấp phát cho nhân viên."
                 )
+            if actor.role == User.Role.MANAGER and asset.department_id != actor.department_id:
+                raise PermissionDenied("Không có quyền cấp phát tài sản ngoài phạm vi phòng ban.")
             try:
                 user_qs = User.objects
                 if using:
@@ -329,7 +337,15 @@ WHERE id = %s AND status = %s
             if target_user.department_id != asset.department_id:
                 raise ConflictError("Người nhận tài sản phải cùng phòng ban với tài sản.")
 
-            statements = cls.build_allocate_statements(asset, actor, target_user, reason)
+            target_user_id = target_user.id if hasattr(target_user, "id") else int(target_user)
+            target_user_guard = (
+                "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s",
+                [target_user_id, asset.department_id],
+            )
+            user_guard_check = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
+            statements = [target_user_guard, user_guard_check] + cls.build_allocate_statements(
+                asset, actor, target_user, reason
+            )
             return cls._execute_d1_mutation(statements, asset_id, using=using)
 
         with transaction.atomic(using=using):
@@ -485,12 +501,32 @@ WHERE id = %s AND status = %s
                 raise ConflictError(
                     f"Tài sản đang ở trạng thái {asset.status}, chỉ tài sản AVAILABLE tại kho mới có thể báo hỏng trực tiếp."
                 )
-            update_sql = """
+            if asset.assigned_to_user_id is not None:
+                raise ConflictError("Tài sản đang có người giữ, không thể báo hỏng trực tiếp tại kho.")
+
+            if asset.department_id is not None:
+                update_sql = """
 UPDATE assets_asset
 SET status = %s, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL
 """.strip()
-            update_params = [Asset.Status.DAMAGED_PENDING_REPAIR, asset.id, Asset.Status.AVAILABLE]
+                update_params = [
+                    Asset.Status.DAMAGED_PENDING_REPAIR,
+                    asset.id,
+                    Asset.Status.AVAILABLE,
+                    asset.department_id,
+                ]
+            else:
+                update_sql = """
+UPDATE assets_asset
+SET status = %s, updated_at = datetime('now')
+WHERE id = %s AND status = %s AND department_id IS NULL AND assigned_to_user_id IS NULL
+""".strip()
+                update_params = [
+                    Asset.Status.DAMAGED_PENDING_REPAIR,
+                    asset.id,
+                    Asset.Status.AVAILABLE,
+                ]
             assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
             audit_stmt = cls._build_audit_statement(
                 asset=asset,
@@ -617,12 +653,29 @@ WHERE id = %s AND status = %s
                 raise ConflictError(
                     f"Tài sản đang ở trạng thái {asset.status}, chỉ tài sản DAMAGED_PENDING_REPAIR mới có thể gửi đi bảo trì."
                 )
-            update_sql = """
+            if asset.department_id is not None:
+                update_sql = """
 UPDATE assets_asset
 SET status = %s, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+WHERE id = %s AND status = %s AND department_id = %s
 """.strip()
-            update_params = [Asset.Status.UNDER_MAINTENANCE, asset.id, Asset.Status.DAMAGED_PENDING_REPAIR]
+                update_params = [
+                    Asset.Status.UNDER_MAINTENANCE,
+                    asset.id,
+                    Asset.Status.DAMAGED_PENDING_REPAIR,
+                    asset.department_id,
+                ]
+            else:
+                update_sql = """
+UPDATE assets_asset
+SET status = %s, updated_at = datetime('now')
+WHERE id = %s AND status = %s AND department_id IS NULL
+""".strip()
+                update_params = [
+                    Asset.Status.UNDER_MAINTENANCE,
+                    asset.id,
+                    Asset.Status.DAMAGED_PENDING_REPAIR,
+                ]
             assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
             audit_stmt = cls._build_audit_statement(
                 asset=asset,
@@ -711,42 +764,86 @@ WHERE id = %s AND status = %s
                         "Người chịu trách nhiệm trước đó đã chuyển sang phòng ban khác, không thể bàn giao lại."
                     )
 
+                target_user_guard = (
+                    "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s",
+                    [holder.id, asset.department_id],
+                )
+                user_guard_check = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
+
                 update_sql = """
 UPDATE assets_asset
 SET status = %s, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id = %s
 """.strip()
-                update_params = [Asset.Status.IN_USE, asset.id, Asset.Status.UNDER_MAINTENANCE]
-                from_user_id = holder.id
-                to_user_id = holder.id
-                to_status = Asset.Status.IN_USE
+                update_params = [
+                    Asset.Status.IN_USE,
+                    asset.id,
+                    Asset.Status.UNDER_MAINTENANCE,
+                    asset.department_id,
+                    holder.id,
+                ]
+                assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
+                audit_stmt = cls._build_audit_statement(
+                    asset=asset,
+                    actor=actor,
+                    action_type=AssetHistoryLog.ActionType.MAINTENANCE_END,
+                    from_status=Asset.Status.UNDER_MAINTENANCE,
+                    to_status=Asset.Status.IN_USE,
+                    reason=reason,
+                    from_user_id=holder.id,
+                    to_user_id=holder.id,
+                    from_department_id=asset.department_id,
+                    to_department_id=asset.department_id,
+                )
+                statements = [
+                    target_user_guard,
+                    user_guard_check,
+                    (update_sql, update_params),
+                    assert_guard_stmt,
+                    audit_stmt,
+                ]
+                return cls._execute_d1_mutation(statements, asset_id, using=using)
             else:
                 old_holder_id = asset.assigned_to_user_id
-                update_sql = """
+                if asset.department_id is not None:
+                    update_sql = """
 UPDATE assets_asset
 SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+WHERE id = %s AND status = %s AND department_id = %s
 """.strip()
-                update_params = [Asset.Status.AVAILABLE, asset.id, Asset.Status.UNDER_MAINTENANCE]
-                from_user_id = old_holder_id
-                to_user_id = None
-                to_status = Asset.Status.AVAILABLE
+                    update_params = [
+                        Asset.Status.AVAILABLE,
+                        asset.id,
+                        Asset.Status.UNDER_MAINTENANCE,
+                        asset.department_id,
+                    ]
+                else:
+                    update_sql = """
+UPDATE assets_asset
+SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
+WHERE id = %s AND status = %s AND department_id IS NULL
+""".strip()
+                    update_params = [
+                        Asset.Status.AVAILABLE,
+                        asset.id,
+                        Asset.Status.UNDER_MAINTENANCE,
+                    ]
 
-            assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
-            audit_stmt = cls._build_audit_statement(
-                asset=asset,
-                actor=actor,
-                action_type=AssetHistoryLog.ActionType.MAINTENANCE_END,
-                from_status=Asset.Status.UNDER_MAINTENANCE,
-                to_status=to_status,
-                reason=reason,
-                from_user_id=from_user_id,
-                to_user_id=to_user_id,
-                from_department_id=asset.department_id,
-                to_department_id=asset.department_id,
-            )
-            statements = [(update_sql, update_params), assert_guard_stmt, audit_stmt]
-            return cls._execute_d1_mutation(statements, asset_id, using=using)
+                assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
+                audit_stmt = cls._build_audit_statement(
+                    asset=asset,
+                    actor=actor,
+                    action_type=AssetHistoryLog.ActionType.MAINTENANCE_END,
+                    from_status=Asset.Status.UNDER_MAINTENANCE,
+                    to_status=Asset.Status.AVAILABLE,
+                    reason=reason,
+                    from_user_id=old_holder_id,
+                    to_user_id=None,
+                    from_department_id=asset.department_id,
+                    to_department_id=asset.department_id,
+                )
+                statements = [(update_sql, update_params), assert_guard_stmt, audit_stmt]
+                return cls._execute_d1_mutation(statements, asset_id, using=using)
 
         with transaction.atomic(using=using):
             asset = cls._get_locked_asset(asset_id, actor, using=using)
@@ -851,9 +948,15 @@ WHERE id = %s AND status = %s
             update_sql = """
 UPDATE assets_asset
 SET department_id = %s, updated_at = datetime('now')
-WHERE id = %s AND status = %s AND assigned_to_user_id IS NULL
+WHERE id = %s AND status = %s AND assigned_to_user_id IS NULL AND (department_id = %s OR (department_id IS NULL AND %s IS NULL))
 """.strip()
-            update_params = [to_department_id, asset.id, Asset.Status.AVAILABLE]
+            update_params = [
+                to_department_id,
+                asset.id,
+                Asset.Status.AVAILABLE,
+                asset.department_id,
+                asset.department_id,
+            ]
             assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
             audit_stmt = cls._build_audit_statement(
                 asset=asset,
@@ -964,9 +1067,16 @@ WHERE id = %s AND status = %s AND assigned_to_user_id IS NULL
             update_sql = """
 UPDATE assets_asset
 SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+WHERE id = %s AND status = %s AND department_id = %s AND (assigned_to_user_id = %s OR (assigned_to_user_id IS NULL AND %s IS NULL))
 """.strip()
-            update_params = [Asset.Status.PENDING_DISPOSAL, asset.id, asset.status]
+            update_params = [
+                Asset.Status.PENDING_DISPOSAL,
+                asset.id,
+                asset.status,
+                asset.department_id,
+                asset.assigned_to_user_id,
+                asset.assigned_to_user_id,
+            ]
             assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
             audit_stmt = cls._build_audit_statement(
                 asset=asset,
@@ -1055,9 +1165,14 @@ WHERE id = %s AND status = %s
             update_sql = """
 UPDATE assets_asset
 SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
-WHERE id = %s AND status = %s
+WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL
 """.strip()
-            update_params = [Asset.Status.DISPOSED, asset.id, Asset.Status.PENDING_DISPOSAL]
+            update_params = [
+                Asset.Status.DISPOSED,
+                asset.id,
+                Asset.Status.PENDING_DISPOSAL,
+                asset.department_id,
+            ]
             assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
             audit_stmt = cls._build_audit_statement(
                 asset=asset,

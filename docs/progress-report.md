@@ -261,31 +261,35 @@ Kết quả: **32 skipped in 0.04s (100% CLEAN)**.
   - Triển khai SQLite UPSERT RETURNING nguyên tử trên Cloudflare D1:
     `INSERT INTO assets_identifiersequence (kind, year, value) VALUES (%s, %s, 1) ON CONFLICT(kind, year) DO UPDATE SET value = assets_identifiersequence.value + 1 RETURNING value`.
   - Không sleep, không retry lock, chống hoàn toàn trùng lặp mã (`AST-YYYY-NNN`, `REQ-YYYY-NNN`).
+  - Kiểm thử hành vi đa luồng (30 threads, 10 workers) và cách ly sequence giữa các loại mã (AST vs REQ).
 - **Bảo vệ Cập nhật Thông tin Tài sản (`AssetUpdateSerializer`):**
-  - Chuyển sang cập nhật theo danh sách cho phép (allowlist `update_fields`): chỉ cho phép sửa `name`, `specification`, `serial_number`, `purchase_date`, `purchase_cost`, `warranty_expiry_date`, `vendor_id`.
-  - Chặn sửa trực tiếp các trường trạng thái, phòng ban, người giữ tài sản qua endpoint PATCH.
-  - Từ chối cập nhật tài sản đã thanh lý (`DISPOSED`) bằng `ConflictError` (HTTP 409).
+  - Cập nhật ghi có điều kiện (conditional write) ở cấp CSDL: `Asset.objects.filter(pk=...).exclude(status=DISPOSED).update(...)`.
+  - Khóa chặt danh sách trường thực tế cho phép: `name`, `category`, `serial_number`, `specification`, `purchase_date` (không bao gồm các trường không tồn tại).
+  - Kiểm tra phạm vi phòng ban của Manager tại lúc ghi (`filter(department_id=actor.department_id)`).
+  - Chặn đứng hoàn toàn việc stale instance ghi đè tài sản đã thanh lý (`DISPOSED`) hoặc chuyển phòng ban, ném `ConflictError` (HTTP 409) hoặc `PermissionDenied` (HTTP 403).
 - **9 Phương thức Vòng đời Tài sản (`AssetService`):**
   - Toàn bộ 9 phương thức (`allocate`, `revoke`, `mark_damaged`, `confirm_damage_report`, `send_maintenance`, `complete_maintenance`, `transfer`, `propose_disposal`, `confirm_disposal`) được chuyển đổi sang cơ chế Guarded Atomic Batch OCC trên D1.
-  - Cấu trúc batch: `UPDATE assets_asset ... WHERE id = ? AND status = ?` + `INSERT INTO _assert_guard (rows_affected) VALUES (changes())` + `INSERT INTO assets_assethistorylog ...`.
-  - Cung cấp các helper dựng câu lệnh (`build_allocate_statements`, `build_revoke_statements`, `build_confirm_damage_statements`) phục vụ việc ghép batch nguyên tử với `RequestService`.
+  - Guard toàn bộ điều kiện nghiệp vụ cốt lõi tại thời điểm ghi SQL (`WHERE id = ? AND status = ? AND department_id = ? AND assigned_to_user_id = ?`).
+  - Cung cấp các helper dựng câu lệnh (`build_allocate_statements`, `build_revoke_statements`, `build_confirm_damage_statements`) trả về đầy đủ guard department/holder.
 
 ### 11.3. Bảo Vệ Tài Khoản, Phiên Làm Việc & Quyền Quản Trị (`apps/authentication/`)
 - **Cập nhật hồ sơ cá nhân (`ProfileUpdateSerializer`):**
   - Giới hạn allowlist chỉ cho phép cập nhật `full_name`, `email`, `phone`.
-  - Áp dụng bộ lọc `is_active=True`: nếu tài khoản đã bị vô hiệu hóa, mọi yêu cầu PATCH lập tức bị từ chối bằng `PermissionDenied` (HTTP 403), không thể tự kích hoạt lại tài khoản.
+  - Áp dụng bộ lọc `is_active=True` tại câu lệnh ghi: nếu tài khoản đã bị vô hiệu hóa, mọi yêu cầu PATCH lập tức bị từ chối bằng `PermissionDenied` (HTTP 403), không thể tự kích hoạt lại tài khoản.
 - **Đổi mật khẩu an toàn (`ChangePasswordView`):**
   - Áp dụng CAS (Compare-And-Swap) trên `auth_version` kết hợp điều kiện `is_active=True`.
   - Tự động tăng `auth_version` nguyên tử (`F('auth_version') + 1`) để vô hiệu hóa toàn bộ Refresh Token cũ.
   - Ngăn chặn xung đột khi có nhiều phiên đổi mật khẩu hoặc cập nhật tài khoản song song.
-- **Bảo vệ Quản trị viên Cuối cùng (`UserAdminUpdateSerializer`):**
-  - Kiểm tra trước: không cho phép khóa (`is_active=False`) hoặc hạ quyền (`role != ADMIN`) nếu đó là quản trị viên đang hoạt động duy nhất của hệ thống.
-  - Tầng trigger SQLite: trigger `protect_last_admin_before_update` và `protect_last_admin_before_delete` chặn đứng mọi hành vi xóa/sửa trái phép ở cấp CSDL D1.
+- **Bảo vệ Quản trị viên & Chống Bypass CAS (`UserAdminUpdateSerializer`):**
+  - Khắc phục triệt để lỗi bypass CAS khi payload gửi lên trùng giá trị với instance cũ (`is_active`, `role`, `department`): bắt buộc đối chiếu `auth_version=current_version` tại câu lệnh ghi `update()`.
+  - Tăng `auth_version = current_version + 1` khi có bất kỳ trường bảo mật nào trong payload, ngăn chặn hoàn toàn stale Admin PATCH bật lại tài khoản đã bị khóa ở CSDL.
+  - Tầng trigger SQLite: trigger `protect_last_admin_before_update` và `protect_last_admin_before_delete` chặn đứng mọi hành vi xóa/sửa trái phép Admin cuối cùng.
+  - Xóa bỏ việc tự động dò port mạng (5433/5432) tại thời điểm import test.
 
 ### 11.4. Quy Trình Duyệt Phiếu Yêu Cầu Đơn Batch Nguyên Tử (`apps/requests/`)
 - **Nguyên tắc Batch Duy Nhất (Single D1 Batch Contract):**
-  - `RequestService.approve_request`: Ghép nối toàn bộ câu lệnh duyệt phiếu (`requests_assetrequest`), `_assert_guard`, cập nhật tài sản (`assets_asset`), `_assert_guard`, và ghi nhật ký lịch sử (`assets_assethistorylog`) vào duy nhất 1 mảng lệnh `d1_batch`.
-  - Cam kết không có commit riêng lẻ giữa các câu lệnh: nếu tài sản hoặc phiếu bị thay đổi đồng thời, toàn bộ batch bị hủy, 0 bản ghi audit log mồ côi (zero orphan logs).
+  - `RequestService.approve_request`: Ghép nối toàn bộ câu lệnh duyệt phiếu (`requests_assetrequest`), guard người yêu cầu đang hoạt động và cùng phòng ban (`UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s`), cập nhật tài sản (`assets_asset`), `_assert_guard`, và ghi nhật ký lịch sử (`assets_assethistorylog`) vào duy nhất 1 mảng lệnh `d1_batch`.
+  - Cam kết không có commit riêng lẻ giữa các câu lệnh: nếu tài sản, người yêu cầu, hoặc phiếu bị thay đổi đồng thời, toàn bộ batch bị hủy, 0 bản ghi audit log mồ côi (zero orphan logs).
   - `RequestService.reject_request`: Cập nhật trạng thái `REJECTED`, ghi `rejection_reason` qua `_assert_guard`, không thay đổi tài sản và không tạo nhật ký lịch sử tài sản.
 
 ### 11.5. Bộ Adapter D1 Backend (`assethub_api/backends/d1/`)
@@ -295,49 +299,65 @@ Kết quả: **32 skipped in 0.04s (100% CLEAN)**.
 
 ---
 
-## 12. Tổng Hợp Kết Quả Kiểm Thử Toàn Diện (Task 4)
+## 12. Tổng Hợp Kết Quả Kiểm Thử Toàn Diện (Task 4 Fixes)
 
 ### 12.1. Concurrency & Integrity Test Suite Trên D1 Thật (`--rehearsal`)
 Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_business_integrity.py --rehearsal -v`
-Kết quả: **8 passed in 12.08s (100% PASS)**:
-1. `test_concurrent_asset_allocation_race`: Đua cấp phát đồng thời trên cùng tài sản AVAILABLE -> đúng 1 thành công, 1 nhận `ConflictError` qua `_assert_guard`, đúng 1 audit log (0 orphan logs).
-2. `test_concurrent_request_approval_vs_rejection`: Đua duyệt vs từ chối phiếu PENDING đồng thời -> đúng 1 thành công, 1 nhận `ConflictError`.
-3. `test_interleaved_asset_patch_and_disposal`: PATCH tài sản sau khi đã thanh lý (DISPOSED) bị từ chối với `ConflictError` (HTTP 409).
-4. `test_profile_patch_vs_admin_deactivation_race`: PATCH thông tin cá nhân trên tài khoản bị khóa bị từ chối với `PermissionDenied` (HTTP 403).
-5. `test_change_password_auth_version_cas`: CAS trên `auth_version` phát hiện phiên cũ, tăng version nguyên tử.
+Kết quả: **15 passed in 34.90s (100% PASS)**:
+1. `test_concurrent_asset_allocation_race`: Hai thread gọi trực tiếp `AssetService.allocate` trên cùng tài sản AVAILABLE -> đúng 1 thành công, 1 nhận `ConflictError` qua `_assert_guard`, đúng 1 audit log (0 orphan logs).
+2. `test_concurrent_request_approval_vs_rejection`: Hai thread gọi trực tiếp `RequestService.approve_request` và `reject_request` đồng thời -> đúng 1 thành công, 1 nhận `ConflictError`.
+3. `test_interleaved_asset_patch_and_disposal`: Gọi trực tiếp `AssetService.propose_disposal` và `confirm_disposal`, sau đó gọi `AssetUpdateSerializer.save()` -> ném `ConflictError` (HTTP 409), status giữ nguyên DISPOSED.
+4. `test_profile_patch_vs_admin_deactivation_race`: Khóa tài khoản trong DB, gọi `ProfileUpdateSerializer.save()` -> ném `PermissionDenied` (HTTP 403), tài khoản giữ nguyên inactive.
+5. `test_change_password_auth_version_cas`: Gọi trực tiếp `ChangePasswordView` qua APIRequestFactory -> CAS phát hiện phiên cũ, tăng version nguyên tử.
 6. `test_last_admin_protection_trigger`: Chặn hạ quyền/khóa quản trị viên cuối cùng ở cả tầng serializer và trigger DB.
-7. `test_concurrent_identifier_generation`: 8 luồng sinh mã AST/REQ đồng thời -> 0 mã trùng, 0 lỗ hổng, tăng đơn điệu liên tục.
-8. `test_request_approval_atomicity_on_simulated_failure`: Mô phỏng lỗi khi duyệt phiếu -> phiếu giữ nguyên PENDING, tài sản AVAILABLE, 0 audit log.
+7. `test_concurrent_identifier_generation`: 8 luồng gọi trực tiếp `generate_identifier` -> 0 mã trùng, 0 lỗ hổng, tăng đơn điệu liên tục.
+8. `test_real_d1_batch_rollback_on_constraint_violation`: Kiểm tra rollback nguyên tử thực trên D1: mảng batch thực thi câu lệnh UPDATE trước nhưng gặp lỗi CHECK constraint ở câu lệnh sau -> toàn bộ các câu lệnh trước được rollback sạch sẽ trong CSDL D1.
+9. `test_codex_regression_manager_allocates_after_transfer_to_other_department`: Tái hiện lỗi Codex 1: Manager IT cấp phát tài sản sau khi Admin đã chuyển tài sản sang HR -> bị chặn bằng `ConflictError`, tài sản giữ nguyên ở HR, 0 audit log cấp phát.
+10. `test_codex_regression_approve_request_after_requester_deactivated`: Tái hiện lỗi Codex 2: Duyệt phiếu sau khi người yêu cầu bị khóa tài khoản -> bị chặn bằng `ConflictError`, phiếu giữ PENDING, tài sản AVAILABLE, 0 audit log.
+11. `test_codex_regression_stale_admin_patch_reactivates_user`: Tái hiện lỗi Codex 3: Stale Admin PATCH gửi `is_active=True` trùng với instance cũ sau khi DB đã bị khóa -> bị chặn bằng `ConflictError`, tài khoản giữ nguyên bị khóa, không bypass CAS.
+12. `test_codex_regression_stale_asset_patch_updates_name_after_disposal`: Tái hiện lỗi Codex 4: Stale asset PATCH sửa name sau khi tài sản đã thanh lý -> bị chặn bằng `ConflictError`, tên tài sản và trạng thái DISPOSED không bị đổi.
+13. `test_d1_all_asset_service_lifecycle_actions`: Kiểm thử happy-path cho toàn bộ 9 hành động vòng đời của `AssetService` trên D1 local thật.
+14. `test_d1_all_asset_service_invalid_transitions`: Kiểm thử từ chối trạng thái không hợp lệ cho toàn bộ 9 hành động trên D1 local thật.
+15. `test_d1_request_service_workflows_and_invalid_states`: Kiểm thử happy-path và invalid-state cho toàn bộ quy trình `RequestService` (ALLOCATE, RETURN, DAMAGE_REPORT, REJECT) trên D1 local thật.
 
 ### 12.2. Unit Test Suites Cho Nghiệp Vụ D1
-Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_asset_mutations.py backend/apps/requests/tests/test_d1_request_mutations.py backend/apps/authentication/tests/test_d1_auth_integrity.py -v`
-Kết quả: **50 passed in 1.51s (100% PASS)**.
+Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_asset_mutations.py backend/apps/requests/tests/test_d1_request_mutations.py backend/apps/authentication/tests/test_d1_auth_integrity.py -v`
+Kết quả: **57 passed in 3.17s (100% PASS)**:
+- `test_d1_asset_mutations.py`: **25 passed**
+- `test_d1_request_mutations.py`: **22 passed**
+- `test_d1_auth_integrity.py`: **10 passed**
 
-### 12.3. Harness & Migration Rehearsal Suites
+### 12.3. Baseline Suite Kiểm Thử Hệ Thống (PostgreSQL Test)
+Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/ -q`
+Kết quả: **185 passed in 72.65s (100% PASS)** (đã bao gồm các bài kiểm thử hành vi mới cho `generate_identifier`).
+
+### 12.4. Harness & Migration Rehearsal Suites
 Lệnh: `backend/.venv/bin/pytest backend/apps/common/tests/test_harness_pg_source.py backend/apps/common/tests/test_harness_d1_target.py backend/apps/common/tests/test_pg_to_d1_rehearsal.py --rehearsal -v`
-Kết quả: **32 passed in 37.89s (100% PASS)**.
+Kết quả: **32 passed in 72.61s (100% PASS)**.
 
-### 12.4. Gating Test Suite Mặc Định (Zero Side-Effects)
+### 12.5. Gating Test Suite Mặc Định (Zero Side-Effects)
 Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_business_integrity.py backend/apps/common/tests/test_pg_to_d1_rehearsal.py -q`
-Kết quả: **20 skipped in 0.16s (100% CLEAN)**.
+Kết quả: **27 skipped in 0.36s (100% CLEAN)**.
 
-### 12.5. Toàn Bộ Unit Test Suite Khác
-- `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/apps/common/tests/test_d1_migration.py backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py backend/assethub_api/backends/d1/tests/test_isolation_guard.py -q`:
-  **62 passed, 1 skipped in 25.99s (100% PASS)**.
-- `node spikes/cf-d1-spike/bridge-worker/tests/test_worker_regression.mjs`:
-  **8 passed in 95.98ms (100% PASS)**.
-- **Trạng thái Môi trường:**
-  - Cổng 5434 và 8787 sạch 100% (`ss -tulpn` xác nhận).
-  - Containers `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) hoạt động bình thường.
-  - Quét git diff: 0 chuỗi hex secret 64 ký tự.
+### 12.6. Node Bridge Regression Suite
+Lệnh: `node spikes/cf-d1-spike/bridge-worker/tests/test_worker_regression.mjs`
+Kết quả: **8 passed in 138.66ms (100% PASS)**.
+
+### 12.7. Trạng Thái Môi Trường & Hệ Thống
+- Cổng 5434 và 8787: sạch 100% (`ss -tulpn` xác nhận CLEAN).
+- Containers hệ thống: `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) hoạt động bình thường, không bị gián đoạn.
+- Quét git diff: 0 chuỗi hex secret 64 ký tự.
 
 ---
 
 ## 13. Ranh Giới An Toàn & Đề Xuất Nghiệm Thu Task 4
 
-- **Bằng chứng kỹ thuật:** Toàn bộ nghiệp vụ tài sản, yêu cầu, xác thực tài khoản đã hoạt động trơn tru với Cloudflare D1 Atomic Guarded Batch OCC, vượt qua 8 kịch bản kiểm thử concurrency race conditions khắt khe.
-- **Ranh giới:**
+- **Bằng chứng kỹ thuật:**
+  - Toàn bộ 4 lỗi Codex tái hiện (Manager allocate out-of-scope, approve inactive requester, stale Admin PATCH bypass CAS, stale asset PATCH post-disposal) đã được sửa triệt để và có test hồi quy độc lập chứng minh.
+  - 100% test tích hợp chuyển sang gọi trực tiếp code production thật, loại bỏ toàn bộ mock/reimplementation.
+  - Toàn bộ 9 phương thức `AssetService` và 2 phương thức `RequestService` được chứng minh toàn vẹn qua cả happy-path và invalid-state trên D1 local thật.
+- **Ranh giới an toàn:**
   - Ứng dụng chính giữ nguyên cấu hình PostgreSQL (`USE_D1_DATABASE=False`).
   - Chưa chuyển dữ liệu thật lên Cloudflare D1 Cloud.
   - Không push/merge git, không thay đổi DNS, không kích hoạt dịch vụ trả phí.
-- Kính gửi Codex nghiệm thu Task 4 để sẵn sàng chuyển sang Task 5 (Cloudflare R2 Storage & Workers AI Category Suggester).
+- Kính gửi Codex nghiệm thu Task 4 để sẵn sàng chuyển sang Task 5.

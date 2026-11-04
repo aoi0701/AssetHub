@@ -1,5 +1,4 @@
 import os
-import socket
 import sqlite3
 from pathlib import Path
 import pytest
@@ -9,25 +8,6 @@ from django.contrib.auth.hashers import check_password
 from django.db import connections
 from rest_framework import exceptions, serializers
 from rest_framework.test import APIRequestFactory, force_authenticate
-
-# Auto-detect local host / port when running outside docker without DB_HOST env var
-if settings.DATABASES.get('default', {}).get('HOST') == 'db':
-    try:
-        socket.gethostbyname('db')
-    except socket.gaierror:
-        # Check port 5433 (docker port mapping) or 5432
-        for port in (5433, 5432):
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(0.3)
-            if s.connect_ex(('127.0.0.1', port)) == 0:
-                settings.DATABASES['default']['HOST'] = '127.0.0.1'
-                settings.DATABASES['default']['PORT'] = str(port)
-                if 'default' in connections.databases:
-                    connections.databases['default']['HOST'] = '127.0.0.1'
-                    connections.databases['default']['PORT'] = str(port)
-                s.close()
-                break
-            s.close()
 
 from apps.authentication.admin_api import UserAdminUpdateSerializer
 from apps.authentication.authentication import CustomJWTAuthentication
@@ -358,6 +338,48 @@ def test_user_admin_update_cas_auth_version_mismatch_raises_conflict_error(singl
 
     assert exc_info.value.status_code == 409
     assert "Tài khoản đã bị thay đổi bởi phiên khác" in str(exc_info.value)
+
+
+@pytest.mark.django_db
+def test_user_admin_update_stale_instance_is_active_true_raises_conflict(department):
+    """
+    Regression test: Instance fetched with is_active=True and auth_version=1.
+    Concurrently, database changed to is_active=False and auth_version=2.
+    Then admin PATCH {"is_active": True} on stale instance must NOT bypass CAS
+    just because validated_data['is_active'] matches the stale instance's in-memory is_active.
+    It must raise ConflictError, and the account in DB must remain is_active=False.
+    """
+    user = User.objects.create(
+        username="stale_active_user",
+        email="stale_active@assethub.test",
+        role=User.Role.USER,
+        department=department,
+        is_active=True,
+        auth_version=1,
+    )
+
+    # Serializer bound to stale in-memory instance where is_active is True and auth_version is 1
+    serializer = UserAdminUpdateSerializer(
+        user,
+        data={"is_active": True},
+        partial=True,
+    )
+    assert serializer.is_valid(), serializer.errors
+
+    # Concurrent transaction changes DB to inactive and bumps auth_version
+    User.objects.filter(pk=user.pk).update(is_active=False, auth_version=2)
+
+    # Calling save() on stale instance must detect auth_version mismatch
+    with pytest.raises(ConflictError) as exc_info:
+        serializer.save()
+
+    assert exc_info.value.status_code == 409
+    assert "auth_version mismatch" in str(exc_info.value)
+
+    # Ensure DB record was not overwritten and remains inactive with auth_version=2
+    user.refresh_from_db()
+    assert user.is_active is False
+    assert user.auth_version == 2
 
 
 # =========================================================================

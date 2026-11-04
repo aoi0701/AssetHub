@@ -170,12 +170,15 @@ class UserAdminUpdateSerializer(serializers.Serializer):
         return attrs
 
     def update(self, instance, validated_data):
+        db_alias = instance._state.db or 'default'
+        qs = User.objects.using(db_alias)
+
         # 1. Protect last active Admin before applying update
         if instance.role == User.Role.ADMIN and instance.is_active is True:
             is_demoting = 'role' in validated_data and validated_data['role'] != User.Role.ADMIN
             is_deactivating = 'is_active' in validated_data and validated_data['is_active'] is False
             if is_demoting or is_deactivating:
-                has_other_admin = User.objects.filter(
+                has_other_admin = qs.filter(
                     role=User.Role.ADMIN,
                     is_active=True,
                 ).exclude(pk=instance.pk).exists()
@@ -184,11 +187,7 @@ class UserAdminUpdateSerializer(serializers.Serializer):
                         "Không thể vô hiệu hóa hoặc hạ quyền quản trị viên duy nhất đang hoạt động."
                     )
 
-        department_changed = 'department' in validated_data and validated_data['department'] != instance.department
-        role_changed = 'role' in validated_data and validated_data['role'] != instance.role
-        active_changed = 'is_active' in validated_data and validated_data['is_active'] != instance.is_active
-
-        security_changed = department_changed or role_changed or active_changed
+        has_security_field = any(k in validated_data for k in ('department', 'role', 'is_active'))
 
         update_kwargs = {}
         if 'department' in validated_data:
@@ -207,14 +206,16 @@ class UserAdminUpdateSerializer(serializers.Serializer):
         current_version = instance.auth_version
 
         try:
-            if security_changed:
+            if has_security_field:
                 update_kwargs['auth_version'] = current_version + 1
-                rows = User.objects.filter(pk=instance.pk, auth_version=current_version).update(**update_kwargs)
+                rows = qs.filter(pk=instance.pk, auth_version=current_version).update(**update_kwargs)
                 if rows == 0:
                     raise ConflictError("Tài khoản đã bị thay đổi bởi phiên khác (auth_version mismatch).")
             else:
                 if update_kwargs:
-                    User.objects.filter(pk=instance.pk).update(**update_kwargs)
+                    rows = qs.filter(pk=instance.pk, auth_version=current_version).update(**update_kwargs)
+                    if rows == 0:
+                        raise ConflictError("Tài khoản đã bị thay đổi bởi phiên khác (auth_version mismatch).")
         except Exception as exc:
             if "last active Admin" in str(exc):
                 raise serializers.ValidationError(

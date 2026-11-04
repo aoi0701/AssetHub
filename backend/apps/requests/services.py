@@ -153,11 +153,24 @@ class RequestService:
                     f"Duyệt yêu cầu cấp phát {req.request_code}: {req.reason}",
                 )
                 req_stmt = (
-                    "UPDATE requests_assetrequest SET status = %s, reviewed_by_id = %s, reviewed_at = datetime('now'), asset_id = %s WHERE id = %s AND status = %s",
-                    [AssetRequest.Status.APPROVED, actor.id, asset.id, req.id, AssetRequest.Status.PENDING],
+                    "UPDATE requests_assetrequest SET status = %s, reviewed_by_id = %s, reviewed_at = datetime('now'), asset_id = %s WHERE id = %s AND status = %s AND requester_id = %s AND department_id = %s",
+                    [
+                        AssetRequest.Status.APPROVED,
+                        actor.id,
+                        asset.id,
+                        req.id,
+                        AssetRequest.Status.PENDING,
+                        req.requester_id,
+                        req.department_id,
+                    ],
                 )
                 req_guard = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
-                batch = [req_stmt, req_guard] + asset_stmts
+                requester_guard = (
+                    "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s",
+                    [requester.id, req.department_id],
+                )
+                requester_guard_check = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
+                batch = [req_stmt, req_guard, requester_guard, requester_guard_check] + asset_stmts
 
             elif req.request_type == AssetRequest.RequestType.RETURN:
                 received_confirmed = data.get("received_confirmed", False)
@@ -206,8 +219,8 @@ class RequestService:
                     f"Duyệt yêu cầu trả tài sản {req.request_code}: {req.reason}",
                 )
                 req_stmt = (
-                    "UPDATE requests_assetrequest SET status = %s, reviewed_by_id = %s, reviewed_at = datetime('now') WHERE id = %s AND status = %s",
-                    [AssetRequest.Status.APPROVED, actor.id, req.id, AssetRequest.Status.PENDING],
+                    "UPDATE requests_assetrequest SET status = %s, reviewed_by_id = %s, reviewed_at = datetime('now') WHERE id = %s AND status = %s AND requester_id = %s AND department_id = %s",
+                    [AssetRequest.Status.APPROVED, actor.id, req.id, AssetRequest.Status.PENDING, req.requester_id, req.department_id],
                 )
                 req_guard = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
                 batch = [req_stmt, req_guard] + asset_stmts
@@ -246,8 +259,8 @@ class RequestService:
                     f"Xác nhận báo hỏng theo phiếu {req.request_code}: {req.reason}",
                 )
                 req_stmt = (
-                    "UPDATE requests_assetrequest SET status = %s, reviewed_by_id = %s, reviewed_at = datetime('now') WHERE id = %s AND status = %s",
-                    [AssetRequest.Status.APPROVED, actor.id, req.id, AssetRequest.Status.PENDING],
+                    "UPDATE requests_assetrequest SET status = %s, reviewed_by_id = %s, reviewed_at = datetime('now') WHERE id = %s AND status = %s AND requester_id = %s AND department_id = %s",
+                    [AssetRequest.Status.APPROVED, actor.id, req.id, AssetRequest.Status.PENDING, req.requester_id, req.department_id],
                 )
                 req_guard = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
                 batch = [req_stmt, req_guard] + asset_stmts
@@ -466,8 +479,8 @@ class RequestService:
                 )
 
             stmt1 = (
-                "UPDATE requests_assetrequest SET status = %s, rejection_reason = %s, reviewed_by_id = %s, reviewed_at = datetime('now') WHERE id = %s AND status = %s",
-                [AssetRequest.Status.REJECTED, rejection_reason.strip(), actor.id, req.id, AssetRequest.Status.PENDING],
+                "UPDATE requests_assetrequest SET status = %s, rejection_reason = %s, reviewed_by_id = %s, reviewed_at = datetime('now') WHERE id = %s AND status = %s AND requester_id = %s AND department_id = %s",
+                [AssetRequest.Status.REJECTED, rejection_reason.strip(), actor.id, req.id, AssetRequest.Status.PENDING, req.requester_id, req.department_id],
             )
             stmt2 = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
             try:

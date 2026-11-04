@@ -1,8 +1,11 @@
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import NotFound, PermissionDenied
 
 from apps.assets.identifiers import generate_identifier
 from apps.assets.models import Asset, AssetHistoryLog
+from apps.authentication.models import User
 from apps.common.exceptions import ConflictError
 from apps.departments.models import Category, Department
 
@@ -194,26 +197,44 @@ class AssetUpdateSerializer(serializers.Serializer):
         if instance.status == Asset.Status.DISPOSED:
             raise ConflictError("Tài sản đã thanh lý (DISPOSED), không thể chỉnh sửa thông tin.")
 
-        update_fields = []
+        update_data = {}
         if 'name' in validated_data:
             instance.name = validated_data['name'].strip()
-            update_fields.append('name')
+            update_data['name'] = instance.name
         if 'category' in validated_data:
             instance.category = validated_data['category']
-            update_fields.append('category')
+            update_data['category_id'] = instance.category.id
         if 'serial_number' in validated_data:
             instance.serial_number = validated_data['serial_number'].strip()
-            update_fields.append('serial_number')
+            update_data['serial_number'] = instance.serial_number
         if 'specification' in validated_data:
             instance.specification = validated_data['specification']
-            update_fields.append('specification')
+            update_data['specification'] = instance.specification
         if 'purchase_date' in validated_data:
             instance.purchase_date = validated_data['purchase_date']
-            update_fields.append('purchase_date')
+            update_data['purchase_date'] = instance.purchase_date
 
-        if update_fields:
-            update_fields.append('updated_at')
-            instance.save(update_fields=update_fields)
+        if update_data:
+            update_data['updated_at'] = timezone.now()
+            db_alias = getattr(instance, '_state', None) and instance._state.db or 'default'
+            qs = Asset.objects.using(db_alias).filter(pk=instance.pk).exclude(status=Asset.Status.DISPOSED)
+            request = self.context.get('request')
+            actor = getattr(request, 'user', None) if request else None
+            if actor and getattr(actor, 'role', None) == User.Role.MANAGER:
+                qs = qs.filter(department_id=actor.department_id)
+
+            rows = qs.update(**update_data)
+            if rows == 0:
+                current = Asset.objects.using(db_alias).filter(pk=instance.pk).first()
+                if not current:
+                    raise NotFound("Tài sản không tồn tại.")
+                if current.status == Asset.Status.DISPOSED:
+                    raise ConflictError("Tài sản đã thanh lý (DISPOSED), không thể chỉnh sửa thông tin.")
+                if actor and getattr(actor, 'role', None) == User.Role.MANAGER and current.department_id != actor.department_id:
+                    raise PermissionDenied("Không có quyền chỉnh sửa tài sản ngoài phạm vi phòng ban.")
+                raise ConflictError("Tài sản đã bị thay đổi đồng thời bởi phiên khác.")
+
+            instance.updated_at = update_data['updated_at']
         return instance
 
 

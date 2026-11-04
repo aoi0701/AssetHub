@@ -262,7 +262,7 @@ def test_serializer_rejects_disposed_asset():
 
 
 def test_serializer_update_saves_only_allowlisted_fields():
-    """Verify serializer.update uses update_fields and never touches protected fields."""
+    """Verify serializer.update performs conditional update on allowlisted fields and excludes DISPOSED."""
     cat = Category(id=1, name="Laptop")
     asset = Asset(
         id=1,
@@ -273,25 +273,105 @@ def test_serializer_update_saves_only_allowlisted_fields():
         department_id=10,
         assigned_to_user_id=None,
     )
-    saved_calls = []
+    captured_updates = {}
 
-    def fake_save(*args, **kwargs):
-        saved_calls.append(kwargs.get("update_fields"))
+    mock_qs = MagicMock()
+    mock_qs.filter.return_value = mock_qs
+    mock_qs.exclude.return_value = mock_qs
 
-    asset.save = fake_save
+    def fake_update(**kwargs):
+        captured_updates.update(kwargs)
+        return 1
 
+    mock_qs.update = fake_update
+
+    with patch.object(Asset.objects, "using", return_value=mock_qs):
+        serializer = AssetUpdateSerializer()
+        updated = serializer.update(asset, {"name": "Updated Name", "serial_number": "SN-NEW"})
+
+        assert updated.name == "Updated Name"
+        assert updated.serial_number == "SN-NEW"
+        assert "name" in captured_updates
+        assert "serial_number" in captured_updates
+        assert "updated_at" in captured_updates
+        # Protected fields must never be passed to update()
+        for forbidden in ("status", "assigned_to_user", "assigned_to_user_id", "department", "department_id", "asset_code"):
+            assert forbidden not in captured_updates
+
+
+def test_serializer_update_conditional_write_occ_conflict():
+    """Verify serializer.update raises ConflictError if concurrent change causes 0 rows updated."""
+    cat = Category(id=1, name="Laptop")
+    asset = Asset(
+        id=2,
+        asset_code="AST-2026-002",
+        name="Concurrent Laptop",
+        status=Asset.Status.AVAILABLE,
+        category=cat,
+        department_id=10,
+    )
     serializer = AssetUpdateSerializer()
-    updated = serializer.update(asset, {"name": "Updated Name", "serial_number": "SN-NEW"})
+    mock_qs = MagicMock()
+    mock_qs.filter.return_value = mock_qs
+    mock_qs.exclude.return_value = mock_qs
+    mock_qs.update.return_value = 0
+    mock_qs.first.return_value = asset
 
-    assert updated.name == "Updated Name"
-    assert len(saved_calls) == 1
-    update_fields = saved_calls[0]
-    assert update_fields is not None
-    # Must only contain allowlisted fields + updated_at
-    assert set(update_fields).issubset({"name", "category", "serial_number", "specification", "purchase_date", "updated_at"})
-    # Must NEVER contain status, holder, department, or asset_code
-    for forbidden in ("status", "assigned_to_user", "assigned_to_user_id", "department", "department_id", "asset_code"):
-        assert forbidden not in update_fields
+    with patch.object(Asset.objects, "using", return_value=mock_qs):
+        with pytest.raises(ConflictError, match="thay đổi đồng thời"):
+            serializer.update(asset, {"name": "New Name"})
+
+
+def test_serializer_update_conditional_write_disposed():
+    """Verify serializer.update raises ConflictError if asset was concurrently disposed."""
+    cat = Category(id=1, name="Laptop")
+    asset = Asset(
+        id=3,
+        asset_code="AST-2026-003",
+        name="Disposing Laptop",
+        status=Asset.Status.AVAILABLE,
+        category=cat,
+        department_id=10,
+    )
+    serializer = AssetUpdateSerializer()
+    mock_qs = MagicMock()
+    mock_qs.filter.return_value = mock_qs
+    mock_qs.exclude.return_value = mock_qs
+    mock_qs.update.return_value = 0
+    disposed_asset = Asset(id=3, status=Asset.Status.DISPOSED)
+    mock_qs.first.return_value = disposed_asset
+
+    with patch.object(Asset.objects, "using", return_value=mock_qs):
+        with pytest.raises(ConflictError, match="DISPOSED"):
+            serializer.update(asset, {"name": "New Name"})
+
+
+def test_serializer_update_conditional_write_manager_scope():
+    """Verify serializer.update raises PermissionDenied if manager edits outside department."""
+    from rest_framework.exceptions import PermissionDenied
+    cat = Category(id=1, name="Laptop")
+    asset = Asset(
+        id=4,
+        asset_code="AST-2026-004",
+        name="Dept 20 Laptop",
+        status=Asset.Status.AVAILABLE,
+        category=cat,
+        department_id=20,
+    )
+    manager = User(id=5, username="mgr1", role=User.Role.MANAGER, department_id=10)
+    mock_request = MagicMock(user=manager)
+    serializer = AssetUpdateSerializer(context={"request": mock_request})
+
+    mock_qs = MagicMock()
+    mock_qs.filter.return_value = mock_qs
+    mock_qs.exclude.return_value = mock_qs
+    mock_qs.update.return_value = 0
+    current_asset = Asset(id=4, status=Asset.Status.AVAILABLE, department_id=20)
+    mock_qs.first.return_value = current_asset
+
+    with patch.object(Asset.objects, "using", return_value=mock_qs):
+        with pytest.raises(PermissionDenied, match="ngoài phạm vi phòng ban"):
+            serializer.update(asset, {"name": "New Name"})
 
 
 # =============================================================================
@@ -299,7 +379,7 @@ def test_serializer_update_saves_only_allowlisted_fields():
 # =============================================================================
 
 def test_build_allocate_statements():
-    """Verify build_allocate_statements returns [update, assert_guard, audit_log] tuples."""
+    """Verify build_allocate_statements returns [update, assert_guard, audit_log] tuples with department and holder guards."""
     asset = Asset(id=1, asset_code="AST-001", name="Laptop", status=Asset.Status.AVAILABLE, department_id=5)
     actor = User(id=10, username="manager", role=User.Role.MANAGER)
     user = User(id=20, username="employee")
@@ -309,8 +389,8 @@ def test_build_allocate_statements():
 
     update_stmt, guard_stmt, audit_stmt = stmts
     assert "UPDATE assets_asset" in update_stmt[0]
-    assert "WHERE id = %s AND status = %s" in update_stmt[0]
-    assert update_stmt[1] == [Asset.Status.IN_USE, 20, 1, Asset.Status.AVAILABLE]
+    assert "WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL" in update_stmt[0]
+    assert update_stmt[1] == [Asset.Status.IN_USE, 20, 1, Asset.Status.AVAILABLE, 5]
 
     assert "_assert_guard" in guard_stmt[0]
     assert "changes()" in guard_stmt[0]
@@ -321,37 +401,44 @@ def test_build_allocate_statements():
     assert audit_stmt[1][2] == AssetHistoryLog.ActionType.ALLOCATE
     assert audit_stmt[1][4] == Asset.Status.IN_USE
     assert audit_stmt[1][6] == 20  # to_user_id
+    assert audit_stmt[1][7] == 5  # from_department_id
+    assert audit_stmt[1][8] == 5  # to_department_id
 
 
 def test_build_revoke_statements():
-    """Verify build_revoke_statements generates correct update and audit tuples."""
+    """Verify build_revoke_statements generates correct update and audit tuples guarding department and holder."""
     asset = Asset(id=2, asset_code="AST-002", name="Laptop 2", status=Asset.Status.IN_USE, department_id=5, assigned_to_user_id=20)
     actor = User(id=10, username="manager", role=User.Role.MANAGER)
 
     # Condition GOOD -> AVAILABLE
     stmts_good = AssetService.build_revoke_statements(asset, actor, condition="GOOD", reason="Returned intact")
     assert len(stmts_good) == 3
-    assert stmts_good[0][1] == [Asset.Status.AVAILABLE, 2, Asset.Status.IN_USE]
+    assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in stmts_good[0][0]
+    assert stmts_good[0][1] == [Asset.Status.AVAILABLE, 2, Asset.Status.IN_USE, 20, 5]
     assert stmts_good[2][1][2] == AssetHistoryLog.ActionType.RETURN
     assert stmts_good[2][1][4] == Asset.Status.AVAILABLE
+    assert stmts_good[2][1][5] == 20  # from_user_id
+    assert stmts_good[2][1][6] is None  # to_user_id
 
     # Condition DAMAGED -> DAMAGED_PENDING_REPAIR
     stmts_damaged = AssetService.build_revoke_statements(asset, actor, condition="DAMAGED", reason="Returned broken")
-    assert stmts_damaged[0][1] == [Asset.Status.DAMAGED_PENDING_REPAIR, 2, Asset.Status.IN_USE]
+    assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in stmts_damaged[0][0]
+    assert stmts_damaged[0][1] == [Asset.Status.DAMAGED_PENDING_REPAIR, 2, Asset.Status.IN_USE, 20, 5]
     assert stmts_damaged[2][1][4] == Asset.Status.DAMAGED_PENDING_REPAIR
 
 
 def test_build_confirm_damage_statements():
-    """Verify build_confirm_damage_statements preserves holder."""
+    """Verify build_confirm_damage_statements guards department_id and assigned_to_user_id."""
     asset = Asset(id=3, asset_code="AST-003", name="Laptop 3", status=Asset.Status.IN_USE, department_id=5, assigned_to_user_id=20)
     actor = User(id=10, username="manager", role=User.Role.MANAGER)
 
     stmts = AssetService.build_confirm_damage_statements(asset, actor, reason="Confirmed broken screen")
     assert len(stmts) == 3
-    assert stmts[0][1] == [Asset.Status.DAMAGED_PENDING_REPAIR, 3, Asset.Status.IN_USE]
+    assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in stmts[0][0]
+    assert stmts[0][1] == [Asset.Status.DAMAGED_PENDING_REPAIR, 3, Asset.Status.IN_USE, 20, 5]
     assert stmts[2][1][2] == AssetHistoryLog.ActionType.DAMAGE
     assert stmts[2][1][5] == 20  # from_user_id
-    assert stmts[2][1][6] == 20  # to_user_id (retains holder)
+    assert stmts[2][1][6] == 20  # to_user_id (retains holder in audit log)
 
 
 # =============================================================================
@@ -384,8 +471,13 @@ def test_d1_action_allocate(mock_d1_context):
         assert res == asset
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert len(stmts) == 3
-        assert stmts[0][1][0] == Asset.Status.IN_USE
+        # Target user guard + assert_guard + update_asset + assert_guard + audit_log
+        assert len(stmts) == 5
+        assert "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s" in stmts[0][0]
+        assert stmts[0][1] == [2, 10]
+        assert "_assert_guard" in stmts[1][0]
+        assert "WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL" in stmts[2][0]
+        assert stmts[2][1] == [Asset.Status.IN_USE, 2, 100, Asset.Status.AVAILABLE, 10]
 
 
 def test_d1_action_revoke(mock_d1_context):
@@ -397,19 +489,23 @@ def test_d1_action_revoke(mock_d1_context):
         AssetService.revoke(101, admin, received_confirmed=True, condition="GOOD", reason="Returned")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == Asset.Status.AVAILABLE
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.AVAILABLE, 101, Asset.Status.IN_USE, 2, 10]
 
 
 def test_d1_action_mark_damaged(mock_d1_context):
     admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True)
-    asset = Asset(id=102, asset_code="AST-102", name="PC", status=Asset.Status.AVAILABLE, department_id=10)
+    asset = Asset(id=102, asset_code="AST-102", name="PC", status=Asset.Status.AVAILABLE, department_id=10, assigned_to_user_id=None)
 
     with patch.object(AssetService, "_get_locked_asset", return_value=asset), \
          patch.object(Asset.objects, "get", return_value=asset):
         AssetService.mark_damaged(102, admin, "Found broken")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == Asset.Status.DAMAGED_PENDING_REPAIR
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.DAMAGED_PENDING_REPAIR, 102, Asset.Status.AVAILABLE, 10]
 
 
 def test_d1_action_confirm_damage_report(mock_d1_context):
@@ -421,7 +517,9 @@ def test_d1_action_confirm_damage_report(mock_d1_context):
         AssetService.confirm_damage_report(103, admin, "Confirmed report")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == Asset.Status.DAMAGED_PENDING_REPAIR
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.DAMAGED_PENDING_REPAIR, 103, Asset.Status.IN_USE, 2, 10]
 
 
 def test_d1_action_send_maintenance(mock_d1_context):
@@ -433,7 +531,9 @@ def test_d1_action_send_maintenance(mock_d1_context):
         AssetService.send_maintenance(104, admin, "Sent to vendor")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == Asset.Status.UNDER_MAINTENANCE
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND department_id = %s" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.UNDER_MAINTENANCE, 104, Asset.Status.DAMAGED_PENDING_REPAIR, 10]
 
 
 def test_d1_action_complete_maintenance_return_to_user(mock_d1_context):
@@ -446,7 +546,13 @@ def test_d1_action_complete_maintenance_return_to_user(mock_d1_context):
         AssetService.complete_maintenance(105, admin, result="RETURN_TO_USER", reason="Repaired")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == Asset.Status.IN_USE
+        # Target user guard + assert_guard + update_asset + assert_guard + audit_log
+        assert len(stmts) == 5
+        assert "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s" in stmts[0][0]
+        assert stmts[0][1] == [2, 10]
+        assert "_assert_guard" in stmts[1][0]
+        assert "WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id = %s" in stmts[2][0]
+        assert stmts[2][1] == [Asset.Status.IN_USE, 105, Asset.Status.UNDER_MAINTENANCE, 10, 2]
 
 
 def test_d1_action_complete_maintenance_return_to_stock(mock_d1_context):
@@ -458,7 +564,9 @@ def test_d1_action_complete_maintenance_return_to_stock(mock_d1_context):
         AssetService.complete_maintenance(106, admin, result="RETURN_TO_STOCK", reason="Repaired to stock")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == Asset.Status.AVAILABLE
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND department_id = %s" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.AVAILABLE, 106, Asset.Status.UNDER_MAINTENANCE, 10]
 
 
 def test_d1_action_transfer(mock_d1_context):
@@ -472,7 +580,11 @@ def test_d1_action_transfer(mock_d1_context):
         AssetService.transfer(107, admin, to_department_id=20, reason="Reallocated to sales")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == 20  # department_id updated
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND assigned_to_user_id IS NULL AND (department_id = %s OR (department_id IS NULL AND %s IS NULL))" in stmts[0][0]
+        assert stmts[0][1] == [20, 107, Asset.Status.AVAILABLE, 10, 10]
+        assert stmts[2][1][7] == 10  # from_department_id
+        assert stmts[2][1][8] == 20  # to_department_id
 
 
 def test_d1_action_propose_disposal(mock_d1_context):
@@ -484,7 +596,9 @@ def test_d1_action_propose_disposal(mock_d1_context):
         AssetService.propose_disposal(108, admin, "End of life")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == Asset.Status.PENDING_DISPOSAL
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND department_id = %s AND (assigned_to_user_id = %s OR (assigned_to_user_id IS NULL AND %s IS NULL))" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.PENDING_DISPOSAL, 108, Asset.Status.AVAILABLE, 10, None, None]
 
 
 def test_d1_action_confirm_disposal(mock_d1_context):
@@ -496,7 +610,9 @@ def test_d1_action_confirm_disposal(mock_d1_context):
         AssetService.confirm_disposal(109, admin, "Approved scrapping")
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
-        assert stmts[0][1][0] == Asset.Status.DISPOSED
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.DISPOSED, 109, Asset.Status.PENDING_DISPOSAL, 10]
 
 
 # =============================================================================

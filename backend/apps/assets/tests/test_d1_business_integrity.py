@@ -6,38 +6,51 @@ atomic assertion guards (_assert_guard), monotonic versioning (CAS),
 and database trigger protections on local Cloudflare D1 via Worker Bridge.
 
 Comprehensive Concurrency & OCC Integration Scenarios:
-1) test_concurrent_asset_allocation_race: Two threads call AssetService.allocate
-   concurrently on the same AVAILABLE asset -> exactly 1 succeeds, 1 raises ConflictError
-   via _assert_guard, exactly 1 audit log created (zero orphan logs!).
-2) test_concurrent_request_approval_vs_rejection: Two threads call approve_request
+1) test_concurrent_asset_allocation_race: Two threads call real AssetService.allocate
+   concurrently on the same AVAILABLE asset -> exactly 1 succeeds, 1 raises ConflictError,
+   exactly 1 audit log created (zero orphan logs!).
+2) test_concurrent_request_approval_vs_rejection: Two threads call real approve_request
    and reject_request concurrently on the same PENDING request -> exactly 1 succeeds,
    1 raises ConflictError.
 3) test_interleaved_asset_patch_and_disposal: Asset is confirmed disposed;
    concurrent AssetUpdateSerializer PATCH fails with ConflictError; status remains DISPOSED.
 4) test_profile_patch_vs_admin_deactivation_race: User account is deactivated (is_active=False);
    concurrent ProfileUpdateSerializer PATCH fails with PermissionDenied; account remains inactive.
-5) test_change_password_auth_version_cas: Concurrent calls or stale auth_version detected by CAS;
-   auth_version increments monotonically.
+5) test_change_password_auth_version_cas: Real ChangePasswordView via APIRequestFactory;
+   auth_version increments monotonically and detects stale sessions via CAS.
 6) test_last_admin_protection_trigger: Attempting to deactivate or demote the last active admin
    fails at both serializer and database trigger level.
-7) test_concurrent_identifier_generation: Multiple threads generate identifiers concurrently
-   (e.g. AST, REQ) -> zero duplicate codes, zero gaps, monotonically increasing.
-8) test_request_approval_atomicity_on_simulated_failure: If asset update fails,
-   request remains PENDING, 0 audit logs created.
+7) test_concurrent_identifier_generation: 8 threads generate identifiers concurrently
+   via generate_identifier -> zero duplicate codes, zero gaps, monotonically increasing.
+8) test_real_d1_batch_rollback_on_constraint_violation: Atomic D1 batch execution where
+   a later statement violates CHECK constraint rolls back earlier UPDATE statements completely.
+9) test_codex_regression_manager_allocates_after_transfer_to_other_department:
+   Manager allocates asset after asset was transferred to another department -> raises ConflictError / NotFound.
+10) test_codex_regression_approve_request_after_requester_deactivated:
+   Approve request after requester deactivated in D1 -> raises ConflictError.
+11) test_codex_regression_stale_admin_patch_reactivates_user:
+   Stale Admin PATCH with stale auth_version -> raises ConflictError.
+12) test_codex_regression_stale_asset_patch_updates_name_after_disposal:
+   Stale Asset PATCH updating name after disposal -> raises ConflictError.
+13) test_d1_all_asset_service_lifecycle_actions:
+   Full lifecycle happy-path coverage across all 9 AssetService actions.
+14) test_d1_all_asset_service_invalid_transitions:
+   Comprehensive invalid state transition guards across AssetService.
+15) test_d1_request_service_workflows_and_invalid_states:
+   Comprehensive happy-path and invalid state coverage across RequestService actions.
 """
 
 import secrets
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
 
 import pytest
 from django.conf import settings
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password, make_password
 from django.db import DatabaseError, IntegrityError, connections
 from django.utils import timezone
 from apps.common.exceptions import ConflictError
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.assets.identifiers import generate_identifier
@@ -48,6 +61,7 @@ from apps.assets.views import AssetViewSet
 from apps.authentication.admin_api import UserAdminUpdateSerializer
 from apps.authentication.models import User
 from apps.authentication.serializers import ProfileUpdateSerializer
+from apps.authentication.views import ChangePasswordView
 from apps.common.tests.harness_d1_target import D1TargetHarness
 from apps.departments.models import Category, Department
 from apps.requests.models import AssetRequest
@@ -322,13 +336,14 @@ def unblock_db_each_test(django_db_blocker):
 
 
 # ==============================================================================
+# ==============================================================================
 # SCENARIO 1: Concurrent Asset Allocation Race & Assertion Guard
 # ==============================================================================
 
 
 def test_concurrent_asset_allocation_race(d1_env):
     """
-    Scenario 1: Two threads call AssetService.allocate concurrently on the same
+    Scenario 1: Two threads call real AssetService.allocate concurrently on the same
     AVAILABLE asset -> exactly 1 succeeds, 1 raises ConflictError via _assert_guard,
     and exactly 1 audit log created (zero orphan logs!).
     """
@@ -346,67 +361,15 @@ def test_concurrent_asset_allocation_race(d1_env):
     barrier = threading.Barrier(2)
     results = []
 
-    def occ_guarded_allocate(asset_id: int, actor: User, assigned_to_user_id: int, reason: str) -> Asset:
-        """
-        D1 Guarded Allocation implementation:
-        Uses CAS UPDATE with 'WHERE id = ? AND status = AVAILABLE'
-        coupled with '_assert_guard (rows_affected)' and audit log in single atomic batch.
-        """
-        locked_asset = AssetService._get_locked_asset(asset_id, actor)
-        if locked_asset.status != Asset.Status.AVAILABLE:
-            raise ConflictError(
-                f"Tài sản đang ở trạng thái {locked_asset.status}, chỉ tài sản AVAILABLE mới có thể cấp phát."
-            )
-        target_user = User.objects.using(alias).get(pk=assigned_to_user_id)
-        if not target_user.is_active:
-            raise ConflictError("Người nhận tài sản đang bị vô hiệu hóa, không thể cấp phát.")
-        if target_user.department_id != locked_asset.department_id:
-            raise ConflictError("Người nhận tài sản phải cùng phòng ban với tài sản.")
-
-        statements = [
-            (
-                "UPDATE assets_asset SET status = 'IN_USE', assigned_to_user_id = ?, updated_at = datetime('now') "
-                "WHERE id = ? AND status = 'AVAILABLE'",
-                [target_user.id, locked_asset.id],
-            ),
-            ("INSERT INTO _assert_guard (rows_affected) VALUES (changes())", []),
-            (
-                "INSERT INTO assets_assethistorylog ("
-                "asset_id, actor_id, action_type, from_status, to_status, from_user_id, to_user_id, "
-                "from_department_id, to_department_id, reason, asset_code_snapshot, asset_name_snapshot, created_at"
-                ") VALUES (?, ?, 'ALLOCATE', 'AVAILABLE', 'IN_USE', NULL, ?, ?, ?, ?, ?, ?, datetime('now'))",
-                [
-                    locked_asset.id,
-                    actor.id,
-                    target_user.id,
-                    locked_asset.department_id,
-                    locked_asset.department_id,
-                    reason,
-                    locked_asset.asset_code,
-                    locked_asset.name,
-                ],
-            ),
-        ]
-        try:
-            d1_batch(statements, using=alias)
-        except IntegrityError as exc:
-            if "_assert_guard" in str(exc) or "rows_affected" in str(exc):
-                raise ConflictError(
-                    "ConflictError via _assert_guard: Asset status was concurrently modified."
-                ) from exc
-            raise
-
-        locked_asset.refresh_from_db(using=alias)
-        return locked_asset
-
     def worker(target_user_id: int, reason: str):
         try:
             barrier.wait(timeout=5.0)
-            res = occ_guarded_allocate(
+            res = AssetService.allocate(
                 asset_id=asset.id,
                 actor=admin,
                 assigned_to_user_id=target_user_id,
                 reason=reason,
+                using=alias,
             )
             results.append(("SUCCESS", target_user_id, res))
         except Exception as exc:
@@ -414,18 +377,17 @@ def test_concurrent_asset_allocation_race(d1_env):
         finally:
             connections.close_all()
 
-    with patch.object(AssetService, "allocate", side_effect=occ_guarded_allocate):
-        t1 = threading.Thread(target=worker, args=(user1.id, "Allocate to user 1"))
-        t2 = threading.Thread(target=worker, args=(user2.id, "Allocate to user 2"))
+    t1 = threading.Thread(target=worker, args=(user1.id, "Allocate to user 1"))
+    t2 = threading.Thread(target=worker, args=(user2.id, "Allocate to user 2"))
 
-        t1.start()
-        t2.start()
-        t1.join(timeout=10.0)
-        t2.join(timeout=10.0)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10.0)
+    t2.join(timeout=10.0)
 
     connections.close_all()
 
-    # 1. Exactly 1 succeeded, exactly 1 failed with ConflictError via _assert_guard
+    # 1. Exactly 1 succeeded, exactly 1 failed with ConflictError
     successes = [r for r in results if r[0] == "SUCCESS"]
     errors = [r for r in results if r[0] == "ERROR"]
 
@@ -435,7 +397,6 @@ def test_concurrent_asset_allocation_race(d1_env):
     winning_user_id = successes[0][1]
     conflict_exc = errors[0][2]
     assert isinstance(conflict_exc, ConflictError), f"Expected ConflictError, got: {type(conflict_exc)}"
-    assert "_assert_guard" in str(conflict_exc), f"Expected error via _assert_guard, got: {conflict_exc}"
 
     # 2. Asset transitioned to IN_USE and assigned to the winning user
     asset.refresh_from_db(using=alias)
@@ -459,7 +420,7 @@ def test_concurrent_asset_allocation_race(d1_env):
 
 def test_concurrent_request_approval_vs_rejection(d1_env):
     """
-    Scenario 2: Two threads call approve_request and reject_request concurrently
+    Scenario 2: Two threads call real approve_request and reject_request concurrently
     on the same PENDING request -> exactly 1 succeeds, 1 raises ConflictError.
     """
     alias = d1_env["alias"]
@@ -473,97 +434,14 @@ def test_concurrent_request_approval_vs_rejection(d1_env):
     barrier = threading.Barrier(2)
     results = []
 
-    def occ_guarded_approve_request(request_id: int, actor: User, data: dict) -> AssetRequest:
-        req_obj = RequestService._get_locked_request(request_id, actor)
-        if req_obj.status != AssetRequest.Status.PENDING:
-            raise ConflictError(
-                f"Phiếu yêu cầu đã được xử lý trước đó (trạng thái hiện tại: {req_obj.status})."
-            )
-        requester = req_obj.requester
-        if not requester.is_active:
-            raise ConflictError("Người yêu cầu hiện không còn hoạt động, không thể duyệt phiếu.")
-        if requester.department_id != req_obj.department_id:
-            raise ConflictError("Người yêu cầu đã chuyển sang phòng ban khác, không thể duyệt phiếu.")
-
-        selected_asset_id = data.get("selected_asset_id")
-        asset_obj = Asset.objects.using(alias).get(pk=selected_asset_id)
-        if asset_obj.status != Asset.Status.AVAILABLE:
-            raise ConflictError(
-                f"Tài sản đang ở trạng thái {asset_obj.status}, chỉ tài sản AVAILABLE mới có thể cấp phát."
-            )
-
-        statements = [
-            (
-                "UPDATE requests_assetrequest SET status = 'APPROVED', reviewed_by_id = ?, reviewed_at = datetime('now'), asset_id = ? "
-                "WHERE id = ? AND status = 'PENDING'",
-                [actor.id, asset_obj.id, req_obj.id],
-            ),
-            ("INSERT INTO _assert_guard (rows_affected) VALUES (changes())", []),
-            (
-                "UPDATE assets_asset SET status = 'IN_USE', assigned_to_user_id = ?, updated_at = datetime('now') "
-                "WHERE id = ? AND status = 'AVAILABLE'",
-                [requester.id, asset_obj.id],
-            ),
-            ("INSERT INTO _assert_guard (rows_affected) VALUES (changes())", []),
-            (
-                "INSERT INTO assets_assethistorylog ("
-                "asset_id, actor_id, action_type, from_status, to_status, from_user_id, to_user_id, "
-                "from_department_id, to_department_id, reason, asset_code_snapshot, asset_name_snapshot, created_at"
-                ") VALUES (?, ?, 'ALLOCATE', 'AVAILABLE', 'IN_USE', NULL, ?, ?, ?, ?, ?, ?, datetime('now'))",
-                [
-                    asset_obj.id,
-                    actor.id,
-                    requester.id,
-                    req_obj.department_id,
-                    req_obj.department_id,
-                    f"Duyệt yêu cầu cấp phát {req_obj.request_code}: {req_obj.reason}",
-                    asset_obj.asset_code,
-                    asset_obj.name,
-                ],
-            ),
-        ]
-        try:
-            d1_batch(statements, using=alias)
-        except IntegrityError as exc:
-            if "_assert_guard" in str(exc) or "rows_affected" in str(exc):
-                raise ConflictError("Phiếu yêu cầu hoặc tài sản đã được xử lý đồng thời bởi phiên khác.") from exc
-            raise
-
-        req_obj.refresh_from_db(using=alias)
-        return req_obj
-
-    def occ_guarded_reject_request(request_id: int, actor: User, rejection_reason: str) -> AssetRequest:
-        req_obj = RequestService._get_locked_request(request_id, actor)
-        if req_obj.status != AssetRequest.Status.PENDING:
-            raise ConflictError(
-                f"Phiếu yêu cầu đã được xử lý trước đó (trạng thái hiện tại: {req_obj.status})."
-            )
-
-        statements = [
-            (
-                "UPDATE requests_assetrequest SET status = 'REJECTED', rejection_reason = ?, reviewed_by_id = ?, reviewed_at = datetime('now') "
-                "WHERE id = ? AND status = 'PENDING'",
-                [rejection_reason.strip(), actor.id, req_obj.id],
-            ),
-            ("INSERT INTO _assert_guard (rows_affected) VALUES (changes())", []),
-        ]
-        try:
-            d1_batch(statements, using=alias)
-        except IntegrityError as exc:
-            if "_assert_guard" in str(exc) or "rows_affected" in str(exc):
-                raise ConflictError("Phiếu yêu cầu đã được xử lý đồng thời bởi phiên khác.") from exc
-            raise
-
-        req_obj.refresh_from_db(using=alias)
-        return req_obj
-
     def approve_worker():
         try:
             barrier.wait(timeout=5.0)
-            res = occ_guarded_approve_request(
+            res = RequestService.approve_request(
                 request_id=req.id,
                 actor=admin,
                 data={"selected_asset_id": asset.id},
+                using=alias,
             )
             results.append(("APPROVE_SUCCESS", res))
         except Exception as exc:
@@ -574,10 +452,11 @@ def test_concurrent_request_approval_vs_rejection(d1_env):
     def reject_worker():
         try:
             barrier.wait(timeout=5.0)
-            res = occ_guarded_reject_request(
+            res = RequestService.reject_request(
                 request_id=req.id,
                 actor=admin,
                 rejection_reason="Từ chối do nhu cầu không phù hợp",
+                using=alias,
             )
             results.append(("REJECT_SUCCESS", res))
         except Exception as exc:
@@ -585,16 +464,27 @@ def test_concurrent_request_approval_vs_rejection(d1_env):
         finally:
             connections.close_all()
 
-    with patch.object(RequestService, "approve_request", side_effect=occ_guarded_approve_request), \
-         patch.object(RequestService, "reject_request", side_effect=occ_guarded_reject_request):
-        t1 = threading.Thread(target=approve_worker)
-        t2 = threading.Thread(target=reject_worker)
-        t1.start()
-        t2.start()
-        t1.join(timeout=10.0)
-        t2.join(timeout=10.0)
+    t1 = threading.Thread(target=approve_worker)
+    t2 = threading.Thread(target=reject_worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10.0)
+    t2.join(timeout=10.0)
 
     connections.close_all()
+
+    successes = [r for r in results if r[0] in ("APPROVE_SUCCESS", "REJECT_SUCCESS")]
+    errors = [r for r in results if r[0] in ("APPROVE_ERROR", "REJECT_ERROR")]
+
+    assert len(successes) == 1, f"Expected exactly 1 success, got: {results}"
+    assert len(errors) == 1, f"Expected exactly 1 error, got: {results}"
+
+    # The loser must receive ConflictError (409)
+    assert isinstance(errors[0][1], ConflictError)
+
+    # Final state in database is definitive: either APPROVED or REJECTED
+    req.refresh_from_db(using=alias)
+    assert req.status in (AssetRequest.Status.APPROVED, AssetRequest.Status.REJECTED)
 
     successes = [r for r in results if r[0] in ("APPROVE_SUCCESS", "REJECT_SUCCESS")]
     errors = [r for r in results if r[0] in ("APPROVE_ERROR", "REJECT_ERROR")]
@@ -676,6 +566,7 @@ def test_profile_patch_vs_admin_deactivation_race(d1_env):
     """
     Scenario 4: User account is deactivated (is_active=False); concurrent
     ProfileUpdateSerializer PATCH fails with PermissionDenied; account remains inactive.
+    Calls production ProfileUpdateSerializer directly with zero mocks.
     """
     alias = d1_env["alias"]
     seed = seed_business_fixtures(alias)
@@ -683,31 +574,22 @@ def test_profile_patch_vs_admin_deactivation_race(d1_env):
 
     assert user1.is_active is True
 
-    # Admin deactivates user account
+    # Admin deactivates user account in D1
     User.objects.using(alias).filter(id=user1.id).update(is_active=0, auth_version=2)
     user1.refresh_from_db(using=alias)
     assert user1.is_active is False
 
-    # Guarded serializer validation rejecting inactive accounts
-    orig_validate = ProfileUpdateSerializer.validate
+    # Production ProfileUpdateSerializer directly called without mock
+    serializer = ProfileUpdateSerializer(
+        instance=user1,
+        data={"full_name": "Tên Mới Sau Khóa"},
+        partial=True,
+    )
+    assert serializer.is_valid(), serializer.errors
+    with pytest.raises(PermissionDenied) as exc_info:
+        serializer.save()
 
-    def guarded_validate(self, attrs):
-        if not self.instance.is_active:
-            raise PermissionDenied("Tài khoản đã bị vô hiệu hóa, không thể cập nhật thông tin cá nhân.")
-        if callable(orig_validate):
-            return orig_validate(self, attrs)
-        return attrs
-
-    with patch.object(ProfileUpdateSerializer, "validate", guarded_validate):
-        serializer = ProfileUpdateSerializer(
-            instance=user1,
-            data={"full_name": "Tên Mới Sau Khóa"},
-            partial=True,
-        )
-        with pytest.raises(PermissionDenied) as exc_info:
-            serializer.is_valid(raise_exception=True)
-
-        assert "vô hiệu hóa" in str(exc_info.value)
+    assert "vô hiệu hóa" in str(exc_info.value)
 
     # Account remains strictly inactive in D1
     user1.refresh_from_db(using=alias)
@@ -724,6 +606,7 @@ def test_change_password_auth_version_cas(d1_env):
     """
     Scenario 5: Concurrent calls or stale auth_version detected by CAS;
     auth_version increments monotonically.
+    Calls production ChangePasswordView directly via APIRequestFactory.
     """
     alias = d1_env["alias"]
     seed = seed_business_fixtures(alias)
@@ -731,42 +614,38 @@ def test_change_password_auth_version_cas(d1_env):
 
     assert user1.auth_version == 1
 
-    def cas_update_password(user_id: int, expected_version: int, raw_new_password: str) -> int:
-        """Atomic Compare-And-Swap (CAS) update on auth_version."""
-        new_hash = make_password(raw_new_password)
-        with connections[alias].cursor() as cursor:
-            cursor.execute(
-                "UPDATE authentication_user "
-                "SET password = %s, auth_version = auth_version + 1 "
-                "WHERE id = %s AND auth_version = %s",
-                [new_hash, user_id, expected_version],
-            )
-            affected = cursor.rowcount
-            if affected == 0:
-                raise ConflictError(
-                    "ConflictError (CAS): Phiên làm việc đã bị thu hồi hoặc phiên bản không khớp."
-                )
-            return affected
+    factory = APIRequestFactory()
+    view = ChangePasswordView.as_view()
 
-    # Call 1 with expected_version = 1 -> SUCCEEDS, version becomes 2
-    affected1 = cas_update_password(user1.id, expected_version=1, raw_new_password="NewSecurePass#2026_A")
-    assert affected1 == 1
+    # Call 1 with fresh auth_version=1 -> SUCCEEDS, version becomes 2
+    req1 = factory.post(
+        "/api/v1/auth/change-password/",
+        {"old_password": "Staff1P@ssw0rd2026!", "new_password": "NewStaffPass#2026_A"},
+        format="json",
+    )
+    force_authenticate(req1, user=user1)
+    resp1 = view(req1)
+    assert resp1.status_code == 204
 
     user1.refresh_from_db(using=alias)
     assert user1.auth_version == 2
+    assert check_password("NewStaffPass#2026_A", user1.password) is True
 
-    # Call 2 with stale expected_version = 1 -> FAILS with ConflictError (stale CAS detected!)
-    with pytest.raises(ConflictError) as exc_info:
-        cas_update_password(user1.id, expected_version=1, raw_new_password="StalePass#2026_B")
+    # Call 2: simulate concurrent bump in DB (stale auth_version in session)
+    User.objects.using(alias).filter(id=user1.id).update(auth_version=5)
 
-    assert "ConflictError (CAS)" in str(exc_info.value)
-
-    # Call 3 with fresh expected_version = 2 -> SUCCEEDS, version becomes 3
-    affected3 = cas_update_password(user1.id, expected_version=2, raw_new_password="FreshPass#2026_C")
-    assert affected3 == 1
+    req2 = factory.post(
+        "/api/v1/auth/change-password/",
+        {"old_password": "NewStaffPass#2026_A", "new_password": "StalePass#2026_B"},
+        format="json",
+    )
+    force_authenticate(req2, user=user1)  # user1 still has auth_version=2 in Python memory
+    resp2 = view(req2)
+    assert resp2.status_code == 409
+    assert "Tài khoản đã bị thay đổi bởi phiên khác" in str(resp2.data)
 
     user1.refresh_from_db(using=alias)
-    assert user1.auth_version == 3
+    assert user1.auth_version == 5
 
 
 # ==============================================================================
@@ -834,6 +713,7 @@ def test_last_admin_protection_trigger(d1_env):
 def test_concurrent_identifier_generation(d1_env):
     """
     Scenario 7: Multiple threads generate identifiers concurrently (e.g. AST, REQ)
+    calling production generate_identifier directly on D1
     -> zero duplicate codes, zero gaps, monotonically increasing.
     """
     alias = d1_env["alias"]
@@ -844,27 +724,11 @@ def test_concurrent_identifier_generation(d1_env):
     generated_req_codes = []
     errors = []
 
-    def d1_atomic_generate_identifier(kind: str, year: int) -> str:
-        """Atomic SQLite UPSERT RETURNING counter generator on D1."""
-        with connections[alias].cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO assets_identifiersequence (kind, year, value)
-                VALUES (%s, %s, 1)
-                ON CONFLICT(kind, year) DO UPDATE SET value = assets_identifiersequence.value + 1
-                RETURNING value;
-                """,
-                [kind, year],
-            )
-            row = cursor.fetchone()
-            val = row[0]
-            return f"{kind}-{year}-{val:03d}"
-
     def worker():
         try:
             barrier.wait(timeout=5.0)
-            ast_code = d1_atomic_generate_identifier("AST", test_year)
-            req_code = d1_atomic_generate_identifier("REQ", test_year)
+            ast_code = generate_identifier("AST", test_year, using=alias)
+            req_code = generate_identifier("REQ", test_year, using=alias)
             generated_ast_codes.append(ast_code)
             generated_req_codes.append(req_code)
         except Exception as exc:
@@ -904,68 +768,468 @@ def test_concurrent_identifier_generation(d1_env):
 
 
 # ==============================================================================
-# SCENARIO 8: Request Approval Atomicity on Simulated Failure
+# SCENARIO 8: Real Rollback Test on D1
 # ==============================================================================
 
 
-def test_request_approval_atomicity_on_simulated_failure(d1_env):
+def test_real_d1_batch_rollback_on_constraint_violation(d1_env):
     """
-    Scenario 8: If asset update fails, request remains PENDING, 0 audit logs created.
+    Scenario 8: Test atomic batch rollback by executing a batch where the first UPDATE
+    succeeds, but a later statement in the batch fails at D1 execution time
+    (e.g. statement violating CHECK constraint on _assert_guard).
+    Confirm that earlier UPDATEs were rolled back on D1:
+    request stays PENDING, asset stays AVAILABLE, 0 audit logs.
     """
     alias = d1_env["alias"]
     seed = seed_business_fixtures(alias)
     req = seed["req1"]
     asset = seed["asset1"]
     admin = seed["admin_user"]
+    requester = seed["user1"]
 
     assert req.status == AssetRequest.Status.PENDING
+    assert asset.status == Asset.Status.AVAILABLE
     assert AssetHistoryLog.objects.using(alias).filter(asset_id=asset.id).count() == 0
 
-    # Part A: Simulate unexpected failure during asset allocation statement construction
-    def failing_build_allocate(*args, **kwargs):
-        raise RuntimeError("Simulated transient failure during asset allocation statement construction!")
+    # Construct batch:
+    # 1. Update asset to IN_USE
+    stmt1 = (
+        "UPDATE assets_asset SET status = 'IN_USE', assigned_to_user_id = %s, updated_at = datetime('now') WHERE id = %s",
+        [requester.id, asset.id],
+    )
+    # 2. Update request to APPROVED
+    stmt2 = (
+        "UPDATE requests_assetrequest SET status = 'APPROVED', reviewed_by_id = %s, reviewed_at = datetime('now') WHERE id = %s",
+        [admin.id, req.id],
+    )
+    # 3. Violation of CHECK(rows_affected > 0)
+    stmt3 = (
+        "INSERT INTO _assert_guard (rows_affected) VALUES (0)",
+        [],
+    )
 
-    with patch.object(AssetService, "build_allocate_statements", side_effect=failing_build_allocate), \
-         patch.object(AssetService, "allocate", side_effect=failing_build_allocate):
-        with pytest.raises(RuntimeError) as exc_info:
-            RequestService.approve_request(
-                request_id=req.id,
-                actor=admin,
-                data={"selected_asset_id": asset.id},
-                using=alias,
-            )
+    with pytest.raises(DatabaseError) as exc_info:
+        d1_batch([stmt1, stmt2, stmt3], using=alias)
 
-        assert "Simulated transient failure during asset allocation" in str(exc_info.value)
+    assert "CHECK constraint failed" in str(exc_info.value) or "_assert_guard" in str(exc_info.value)
 
-    # 1. Request status MUST remain PENDING
+    # Verify atomic rollback on D1
+    asset.refresh_from_db(using=alias)
+    assert asset.status == Asset.Status.AVAILABLE
+    assert asset.assigned_to_user_id is None
+
     req.refresh_from_db(using=alias)
     assert req.status == AssetRequest.Status.PENDING
     assert req.reviewed_by is None
     assert req.reviewed_at is None
 
-    # 2. Asset MUST remain AVAILABLE
+    assert AssetHistoryLog.objects.using(alias).filter(asset_id=asset.id).count() == 0
+
+
+# ==============================================================================
+# CODEX REGRESSION TESTS
+# ==============================================================================
+
+
+def test_codex_regression_manager_allocates_after_transfer_to_other_department(d1_env):
+    """
+    (1) Manager allocates asset after asset was transferred to another department:
+    Asset AVAILABLE in IT. Manager IT and requester IT.
+    Interleave: Admin transfer moves asset to HR.
+    Manager calls AssetService.allocate: must raise ConflictError / NotFound!
+    Asset remains in HR, AVAILABLE, holder NULL, 0 allocate audit logs.
+    """
+    alias = d1_env["alias"]
+    seed = seed_business_fixtures(alias)
+    asset = seed["asset1"]
+    manager = seed["manager_user"]
+    admin = seed["admin_user"]
+    requester = seed["user1"]
+    dept_hr = seed["dept_hr"]
+
+    assert asset.status == Asset.Status.AVAILABLE
+    assert asset.department_id == seed["dept_it"].id
+
+    # Interleave: Admin transfer moves asset to HR
+    AssetService.transfer(asset.id, admin, dept_hr.id, "Admin chuyển kho sang HR", using=alias)
+    asset.refresh_from_db(using=alias)
+    assert asset.department_id == dept_hr.id
+
+    # Manager calls AssetService.allocate: must reject
+    with pytest.raises((ConflictError, NotFound)):
+        AssetService.allocate(
+            asset_id=asset.id,
+            actor=manager,
+            assigned_to_user_id=requester.id,
+            reason="Manager cố cấp phát tài sản đã chuyển",
+            using=alias,
+        )
+
+    # Asset remains in HR, AVAILABLE, holder NULL, 0 allocate audit logs
+    asset.refresh_from_db(using=alias)
+    assert asset.department_id == dept_hr.id
+    assert asset.status == Asset.Status.AVAILABLE
+    assert asset.assigned_to_user_id is None
+    assert AssetHistoryLog.objects.using(alias).filter(
+        asset_id=asset.id, action_type=AssetHistoryLog.ActionType.ALLOCATE
+    ).count() == 0
+
+
+def test_codex_regression_approve_request_after_requester_deactivated(d1_env):
+    """
+    (2) Approve request after requester deactivated in D1:
+    Request PENDING in IT. Requester active in IT.
+    Interleave: Requester deactivated in D1 (is_active = 0).
+    RequestService.approve_request: must raise ConflictError!
+    Request remains PENDING, asset remains AVAILABLE, 0 audit logs.
+    """
+    alias = d1_env["alias"]
+    seed = seed_business_fixtures(alias)
+    req = seed["req1"]
+    asset = seed["asset1"]
+    admin = seed["admin_user"]
+    requester = seed["user1"]
+
+    assert req.status == AssetRequest.Status.PENDING
+    assert requester.is_active is True
+
+    # Interleave: Requester deactivated in D1
+    User.objects.using(alias).filter(id=requester.id).update(is_active=0)
+
+    # RequestService.approve_request: must raise ConflictError!
+    with pytest.raises(ConflictError) as exc_info:
+        RequestService.approve_request(
+            request_id=req.id,
+            actor=admin,
+            data={"selected_asset_id": asset.id},
+            using=alias,
+        )
+
+    assert "hoạt động" in str(exc_info.value)
+
+    # Request remains PENDING, asset remains AVAILABLE, 0 audit logs
+    req.refresh_from_db(using=alias)
+    assert req.status == AssetRequest.Status.PENDING
+    assert req.reviewed_by is None
+
     asset.refresh_from_db(using=alias)
     assert asset.status == Asset.Status.AVAILABLE
     assert asset.assigned_to_user is None
-
-    # 3. Exactly 0 audit logs created!
     assert AssetHistoryLog.objects.using(alias).filter(asset_id=asset.id).count() == 0
 
-    # Part B: Simulate batch execution failure at D1 level
-    with patch("apps.requests.services.d1_batch", side_effect=DatabaseError("Simulated atomic D1 batch execution error!")):
-        with pytest.raises(DatabaseError) as exc_info_batch:
-            RequestService.approve_request(
-                request_id=req.id,
-                actor=admin,
-                data={"selected_asset_id": asset.id},
-                using=alias,
-            )
 
-        assert "Simulated atomic D1 batch execution error" in str(exc_info_batch.value)
+def test_codex_regression_stale_admin_patch_reactivates_user(d1_env):
+    """
+    (3) Stale Admin PATCH reactivates user with stale auth_version:
+    User instance has is_active=True, auth_version=1.
+    DB user changed to is_active=False, auth_version=2.
+    UserAdminUpdateSerializer(instance, data={"is_active": True}, partial=True).
+    serializer.is_valid(); serializer.save(): must raise ConflictError!
+    DB user remains is_active=False, auth_version=2.
+    """
+    alias = d1_env["alias"]
+    seed = seed_business_fixtures(alias)
+    user2 = seed["user2"]
 
-    # Verify state remains completely uncommitted in D1
-    req.refresh_from_db(using=alias)
-    assert req.status == AssetRequest.Status.PENDING
+    assert user2.is_active is True
+    assert user2.auth_version == 1
+
+    # Interleave: DB user changed to is_active=False, auth_version=2
+    User.objects.using(alias).filter(id=user2.id).update(is_active=0, auth_version=2)
+
+    # User instance has is_active=True, auth_version=1 in memory
+    serializer = UserAdminUpdateSerializer(user2, data={"is_active": True}, partial=True)
+    assert serializer.is_valid(), serializer.errors
+
+    with pytest.raises(ConflictError) as exc_info:
+        serializer.save()
+
+    # DB user remains is_active=False, auth_version=2
+    user2.refresh_from_db(using=alias)
+    assert user2.is_active is False
+    assert user2.auth_version == 2
+
+
+def test_codex_regression_stale_asset_patch_updates_name_after_disposal(d1_env):
+    """
+    (4) Stale asset PATCH updates name after disposal:
+    Asset AVAILABLE instance fetched.
+    ser = AssetUpdateSerializer(instance, data={"name": "Stale Name Post Disposal"}, partial=True).
+    ser.is_valid().
+    Asset disposed via AssetService.propose_disposal + AssetService.confirm_disposal (DB is DISPOSED).
+    ser.save(): must raise ConflictError!
+    DB asset status remains DISPOSED, name remains original!
+    """
+    alias = d1_env["alias"]
+    seed = seed_business_fixtures(alias)
+    asset = seed["asset1"]
+    admin = seed["admin_user"]
+    original_name = asset.name
+
+    ser = AssetUpdateSerializer(instance=asset, data={"name": "Stale Name Post Disposal"}, partial=True)
+    assert ser.is_valid(), ser.errors
+
+    # Asset disposed via AssetService.propose_disposal + AssetService.confirm_disposal
+    AssetService.propose_disposal(asset.id, admin, "Đề xuất thanh lý máy cũ", using=alias)
+    AssetService.confirm_disposal(asset.id, admin, "Xác nhận thanh lý tiêu hủy", using=alias)
+
+    asset_db = Asset.objects.using(alias).get(id=asset.id)
+    assert asset_db.status == Asset.Status.DISPOSED
+
+    with pytest.raises(ConflictError) as exc_info:
+        ser.save()
+
+    # DB asset status remains DISPOSED, name remains original!
+    asset_db.refresh_from_db(using=alias)
+    assert asset_db.status == Asset.Status.DISPOSED
+    assert asset_db.name == original_name
+
+
+# ==============================================================================
+# COMPREHENSIVE 9 ASSETSERVICE + 2 REQUESTSERVICE ACTIONS ON LOCAL D1
+# ==============================================================================
+
+
+def test_d1_all_asset_service_lifecycle_actions(d1_env):
+    """
+    Comprehensive happy-path coverage on real local D1 for all 9 AssetService actions:
+    1. allocate (AVAILABLE -> IN_USE)
+    2. confirm_damage_report (IN_USE -> DAMAGED_PENDING_REPAIR)
+    3. send_maintenance (DAMAGED_PENDING_REPAIR -> UNDER_MAINTENANCE)
+    4. complete_maintenance RETURN_TO_USER (UNDER_MAINTENANCE -> IN_USE)
+    5. revoke condition=GOOD (IN_USE -> AVAILABLE)
+    6. mark_damaged (AVAILABLE -> DAMAGED_PENDING_REPAIR)
+    7. send_maintenance + complete_maintenance RETURN_TO_STOCK (UNDER_MAINTENANCE -> AVAILABLE)
+    8. transfer (AVAILABLE IT -> HR)
+    9. propose_disposal + confirm_disposal (AVAILABLE -> PENDING_DISPOSAL -> DISPOSED)
+    """
+    alias = d1_env["alias"]
+    seed = seed_business_fixtures(alias)
+    asset = seed["asset1"]
+    admin = seed["admin_user"]
+    user1 = seed["user1"]
+    dept_hr = seed["dept_hr"]
+
+    # 1. allocate: AVAILABLE -> IN_USE
+    a1 = AssetService.allocate(asset.id, admin, user1.id, "Cấp phát cho user1", using=alias)
+    assert a1.status == Asset.Status.IN_USE
+    assert a1.assigned_to_user_id == user1.id
+
+    # 2. confirm_damage_report: IN_USE -> DAMAGED_PENDING_REPAIR
+    a2 = AssetService.confirm_damage_report(asset.id, admin, "Báo hỏng bàn phím", using=alias)
+    assert a2.status == Asset.Status.DAMAGED_PENDING_REPAIR
+
+    # 3. send_maintenance: DAMAGED_PENDING_REPAIR -> UNDER_MAINTENANCE
+    a3 = AssetService.send_maintenance(asset.id, admin, "Gửi trung tâm bảo hành", using=alias)
+    assert a3.status == Asset.Status.UNDER_MAINTENANCE
+
+    # Set holder for RETURN_TO_USER test
+    Asset.objects.using(alias).filter(id=asset.id).update(assigned_to_user_id=user1.id)
+
+    # 4. complete_maintenance RETURN_TO_USER: UNDER_MAINTENANCE -> IN_USE
+    a4 = AssetService.complete_maintenance(asset.id, admin, "RETURN_TO_USER", "Đã thay bàn phím mới", using=alias)
+    assert a4.status == Asset.Status.IN_USE
+    assert a4.assigned_to_user_id == user1.id
+
+    # 5. revoke condition=GOOD: IN_USE -> AVAILABLE
+    a5 = AssetService.revoke(asset.id, admin, received_confirmed=True, condition="GOOD", reason="Thu hồi về kho", using=alias)
+    assert a5.status == Asset.Status.AVAILABLE
+    assert a5.assigned_to_user_id is None
+
+    # 6. mark_damaged: AVAILABLE -> DAMAGED_PENDING_REPAIR
+    a6 = AssetService.mark_damaged(asset.id, admin, "Hỏng pin tại kho", using=alias)
+    assert a6.status == Asset.Status.DAMAGED_PENDING_REPAIR
+
+    # 7. send_maintenance + complete_maintenance RETURN_TO_STOCK
+    AssetService.send_maintenance(asset.id, admin, "Gửi sửa pin", using=alias)
+    a7 = AssetService.complete_maintenance(asset.id, admin, "RETURN_TO_STOCK", "Thay pin xong nhập lại kho", using=alias)
+    assert a7.status == Asset.Status.AVAILABLE
+    assert a7.assigned_to_user_id is None
+
+    # 8. transfer: AVAILABLE IT -> HR
+    a8 = AssetService.transfer(asset.id, admin, dept_hr.id, "Điều chuyển sang HR", using=alias)
+    assert a8.status == Asset.Status.AVAILABLE
+    assert a8.department_id == dept_hr.id
+
+    # 9. propose_disposal + confirm_disposal
+    a9_prop = AssetService.propose_disposal(asset.id, admin, "Máy quá cũ đề xuất thanh lý", using=alias)
+    assert a9_prop.status == Asset.Status.PENDING_DISPOSAL
+
+    a9_conf = AssetService.confirm_disposal(asset.id, admin, "Xác nhận tiêu hủy", using=alias)
+    assert a9_conf.status == Asset.Status.DISPOSED
+
+
+def test_d1_all_asset_service_invalid_transitions(d1_env):
+    """
+    Comprehensive invalid-state error handling on real local D1 for AssetService:
+    - allocate rejects already IN_USE
+    - revoke rejects AVAILABLE
+    - mark_damaged rejects IN_USE
+    - confirm_damage_report rejects AVAILABLE
+    - send_maintenance rejects AVAILABLE
+    - complete_maintenance rejects AVAILABLE
+    - transfer rejects IN_USE
+    - propose_disposal rejects DISPOSED
+    - confirm_disposal rejects AVAILABLE
+    """
+    alias = d1_env["alias"]
+    seed = seed_business_fixtures(alias)
+    asset = seed["asset1"]
+    admin = seed["admin_user"]
+    user1 = seed["user1"]
+    dept_hr = seed["dept_hr"]
+
+    # Initial: AVAILABLE
+    with pytest.raises(ConflictError):
+        AssetService.revoke(asset.id, admin, True, "GOOD", "Cannot revoke available", using=alias)
+
+    with pytest.raises(ConflictError):
+        AssetService.confirm_damage_report(asset.id, admin, "Cannot confirm damage on available", using=alias)
+
+    with pytest.raises(ConflictError):
+        AssetService.send_maintenance(asset.id, admin, "Cannot send available to maintenance", using=alias)
+
+    with pytest.raises(ConflictError):
+        AssetService.complete_maintenance(asset.id, admin, "RETURN_TO_STOCK", "Cannot complete maintenance on available", using=alias)
+
+    with pytest.raises(ConflictError):
+        AssetService.confirm_disposal(asset.id, admin, "Cannot confirm disposal on available", using=alias)
+
+    # Allocate -> IN_USE
+    AssetService.allocate(asset.id, admin, user1.id, "Cấp phát", using=alias)
+
+    # In IN_USE:
+    with pytest.raises(ConflictError):
+        AssetService.allocate(asset.id, admin, user1.id, "Cannot allocate in_use", using=alias)
+
+    with pytest.raises(ConflictError):
+        AssetService.mark_damaged(asset.id, admin, "Cannot mark damaged in_use directly", using=alias)
+
+    with pytest.raises(ConflictError):
+        AssetService.transfer(asset.id, admin, dept_hr.id, "Cannot transfer in_use", using=alias)
+
+    # Transition to DISPOSED
+    AssetService.revoke(asset.id, admin, True, "GOOD", "Thu hồi", using=alias)
+    AssetService.propose_disposal(asset.id, admin, "Đề xuất", using=alias)
+    AssetService.confirm_disposal(asset.id, admin, "Xác nhận", using=alias)
+
+    with pytest.raises(ConflictError):
+        AssetService.propose_disposal(asset.id, admin, "Cannot propose already disposed", using=alias)
+
+    with pytest.raises(ConflictError):
+        AssetService.allocate(asset.id, admin, user1.id, "Cannot allocate disposed", using=alias)
+
+
+def test_d1_request_service_workflows_and_invalid_states(d1_env):
+    """
+    Comprehensive happy-path and invalid-state coverage on real local D1 for RequestService:
+    1. approve_request ALLOCATE: PENDING -> APPROVED, asset AVAILABLE -> IN_USE
+    2. approve_request RETURN: PENDING -> APPROVED, asset IN_USE -> AVAILABLE
+    3. approve_request DAMAGE_REPORT: PENDING -> APPROVED, asset IN_USE -> DAMAGED_PENDING_REPAIR
+    4. reject_request: PENDING -> REJECTED
+    5. Invalid transitions: cannot re-approve or re-reject processed requests
+    """
+    alias = d1_env["alias"]
+    seed = seed_business_fixtures(alias)
+    asset = seed["asset1"]
+    admin = seed["admin_user"]
+    user1 = seed["user1"]
+    dept_it = seed["dept_it"]
+    cat_laptop = seed["cat_laptop"]
+
+    # 1. Happy approve ALLOCATE
+    req_alloc = seed["req1"]
+    approved_alloc = RequestService.approve_request(
+        request_id=req_alloc.id,
+        actor=admin,
+        data={"selected_asset_id": asset.id},
+        using=alias,
+    )
+    assert approved_alloc.status == AssetRequest.Status.APPROVED
+    asset.refresh_from_db(using=alias)
+    assert asset.status == Asset.Status.IN_USE
+    assert asset.assigned_to_user_id == user1.id
+
+    # Re-approve attempt fails with ConflictError
+    with pytest.raises(ConflictError):
+        RequestService.approve_request(
+            request_id=req_alloc.id,
+            actor=admin,
+            data={"selected_asset_id": asset.id},
+            using=alias,
+        )
+
+    # 2. Happy approve RETURN
+    req_return = AssetRequest.objects.using(alias).create(
+        id=201,
+        request_code="REQ-2026-201",
+        request_type=AssetRequest.RequestType.RETURN,
+        requester=user1,
+        department=dept_it,
+        asset=asset,
+        reason="Hoàn trả máy khi kết thúc dự án",
+        status=AssetRequest.Status.PENDING,
+    )
+    approved_return = RequestService.approve_request(
+        request_id=req_return.id,
+        actor=admin,
+        data={"received_confirmed": True, "condition": "GOOD"},
+        using=alias,
+    )
+    assert approved_return.status == AssetRequest.Status.APPROVED
     asset.refresh_from_db(using=alias)
     assert asset.status == Asset.Status.AVAILABLE
-    assert AssetHistoryLog.objects.using(alias).filter(asset_id=asset.id).count() == 0
+    assert asset.assigned_to_user_id is None
+
+    # Re-allocate to user1 to test DAMAGE_REPORT
+    AssetService.allocate(asset.id, admin, user1.id, "Cấp phát lại", using=alias)
+
+    # 3. Happy approve DAMAGE_REPORT
+    req_dmg = AssetRequest.objects.using(alias).create(
+        id=202,
+        request_code="REQ-2026-202",
+        request_type=AssetRequest.RequestType.DAMAGE_REPORT,
+        requester=user1,
+        department=dept_it,
+        asset=asset,
+        reason="Máy bị rơi vỡ màn hình",
+        status=AssetRequest.Status.PENDING,
+    )
+    approved_dmg = RequestService.approve_request(
+        request_id=req_dmg.id,
+        actor=admin,
+        data={},
+        using=alias,
+    )
+    assert approved_dmg.status == AssetRequest.Status.APPROVED
+    asset.refresh_from_db(using=alias)
+    assert asset.status == Asset.Status.DAMAGED_PENDING_REPAIR
+
+    # 4. Happy reject_request
+    req_reject = AssetRequest.objects.using(alias).create(
+        id=203,
+        request_code="REQ-2026-203",
+        request_type=AssetRequest.RequestType.ALLOCATE,
+        requester=user1,
+        department=dept_it,
+        requested_category=cat_laptop,
+        reason="Yêu cầu cấp thêm máy phụ",
+        status=AssetRequest.Status.PENDING,
+    )
+    rejected_req = RequestService.reject_request(
+        request_id=req_reject.id,
+        actor=admin,
+        rejection_reason="Chính sách công ty không cấp 2 laptop",
+        using=alias,
+    )
+    assert rejected_req.status == AssetRequest.Status.REJECTED
+    assert rejected_req.rejection_reason == "Chính sách công ty không cấp 2 laptop"
+
+    # Re-reject attempt fails with ConflictError
+    with pytest.raises(ConflictError):
+        RequestService.reject_request(
+            request_id=req_reject.id,
+            actor=admin,
+            rejection_reason="Từ chối lại lần 2",
+            using=alias,
+        )
