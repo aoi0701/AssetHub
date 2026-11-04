@@ -132,8 +132,8 @@ def mock_d1_context():
 def test_approve_allocate_request_d1_single_batch(mock_d1_context):
     """
     Test approve_request for ALLOCATE on D1:
-    - Bundles request update + req guard + requester guard + requester check + asset update + asset guard + audit log into ONE batch.
-    - Batch has exactly 7 statements.
+    - Bundles request update + req guard + requester guard + requester check + category guard + category check + asset update + asset guard + audit log into ONE batch.
+    - Batch has exactly 9 statements.
     - Request status -> APPROVED, reviewed_by recorded, asset_id assigned.
     - Asset status -> IN_USE, assigned_to_user -> requester.
     """
@@ -174,7 +174,7 @@ def test_approve_allocate_request_d1_single_batch(mock_d1_context):
         assert len(mock_d1_context) == 1, "Must execute in exactly ONE single d1_batch call!"
 
         batch = mock_d1_context[0]
-        assert len(batch) == 7, f"Expected 7 statements in batch, got {len(batch)}"
+        assert len(batch) == 9, f"Expected 9 statements in batch, got {len(batch)}"
 
         # 1. Update request statement
         req_stmt, req_params = batch[0]
@@ -200,21 +200,31 @@ def test_approve_allocate_request_d1_single_batch(mock_d1_context):
         assert "INSERT INTO _assert_guard" in requester_check_stmt
         assert "changes()" in requester_check_stmt
 
-        # 5. Update asset statement
-        asset_stmt, asset_params = batch[4]
+        # 5. Asset category guard statement
+        category_guard_stmt, category_guard_params = batch[4]
+        assert "UPDATE assets_asset SET id = id WHERE id = %s AND category_id = %s" in category_guard_stmt
+        assert category_guard_params == [asset.id, req.requested_category_id]
+
+        # 6. Asset category assertion guard check
+        category_check_stmt, category_check_params = batch[5]
+        assert "INSERT INTO _assert_guard" in category_check_stmt
+        assert "changes()" in category_check_stmt
+
+        # 7. Update asset statement
+        asset_stmt, asset_params = batch[6]
         assert "UPDATE assets_asset" in asset_stmt
         assert "status = %s" in asset_stmt
         assert "assigned_to_user_id = %s" in asset_stmt
         assert "WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL" in asset_stmt
         assert asset_params == [Asset.Status.IN_USE, requester.id, asset.id, Asset.Status.AVAILABLE, asset.department_id]
 
-        # 6. Asset assertion guard
-        asset_guard_stmt, asset_guard_params = batch[5]
+        # 8. Asset assertion guard
+        asset_guard_stmt, asset_guard_params = batch[7]
         assert "INSERT INTO _assert_guard" in asset_guard_stmt
         assert "changes()" in asset_guard_stmt
 
-        # 7. Audit log statement
-        audit_stmt, audit_params = batch[6]
+        # 9. Audit log statement
+        audit_stmt, audit_params = batch[8]
         assert "INSERT INTO assets_assethistorylog" in audit_stmt
         assert audit_params[0] == asset.id
         assert audit_params[1] == admin.id
@@ -227,8 +237,9 @@ def test_approve_allocate_request_d1_single_batch(mock_d1_context):
 def test_approve_return_request_condition_good_d1_single_batch(mock_d1_context):
     """
     Test approve_request for RETURN with condition GOOD on D1:
-    - Bundles request update + req guard + asset revoke + asset guard + audit log into ONE batch.
+    - Bundles request update + req guard + requester guard + requester check + asset revoke + asset guard + audit log into ONE batch.
     - Asset status -> AVAILABLE, holder cleared (NULL).
+    - Batch has exactly 7 statements.
     """
     admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True, department_id=10)
     requester = User(id=5, username="requester", role=User.Role.USER, is_active=True, department_id=10)
@@ -268,7 +279,7 @@ def test_approve_return_request_condition_good_d1_single_batch(mock_d1_context):
         assert len(mock_d1_context) == 1
 
         batch = mock_d1_context[0]
-        assert len(batch) == 5
+        assert len(batch) == 7, f"Expected 7 statements in batch, got {len(batch)}"
 
         # 1. Update request statement
         req_stmt, req_params = batch[0]
@@ -280,18 +291,28 @@ def test_approve_return_request_condition_good_d1_single_batch(mock_d1_context):
         assert "INSERT INTO _assert_guard" in req_guard_stmt
         assert "changes()" in req_guard_stmt
 
-        # 3. Update asset statement (condition GOOD -> AVAILABLE, holder cleared)
-        asset_stmt, asset_params = batch[2]
+        # 3. Requester active & department guard statement
+        requester_guard_stmt, requester_guard_params = batch[2]
+        assert "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s" in requester_guard_stmt
+        assert requester_guard_params == [requester.id, req.department_id]
+
+        # 4. Requester assertion guard check
+        requester_check_stmt, requester_check_params = batch[3]
+        assert "INSERT INTO _assert_guard" in requester_check_stmt
+        assert "changes()" in requester_check_stmt
+
+        # 5. Update asset statement (condition GOOD -> AVAILABLE, holder cleared)
+        asset_stmt, asset_params = batch[4]
         assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in asset_stmt
         assert asset_params == [Asset.Status.AVAILABLE, asset.id, Asset.Status.IN_USE, asset.assigned_to_user_id, asset.department_id]
 
-        # 4. Asset assertion guard
-        asset_guard_stmt, asset_guard_params = batch[3]
+        # 6. Asset assertion guard
+        asset_guard_stmt, asset_guard_params = batch[5]
         assert "INSERT INTO _assert_guard" in asset_guard_stmt
         assert "changes()" in asset_guard_stmt
 
-        # 5. Audit log statement
-        audit_stmt, audit_params = batch[4]
+        # 7. Audit log statement
+        audit_stmt, audit_params = batch[6]
         assert audit_params[2] == AssetHistoryLog.ActionType.RETURN
         assert audit_params[3] == Asset.Status.IN_USE
         assert audit_params[4] == Asset.Status.AVAILABLE
@@ -303,6 +324,7 @@ def test_approve_return_request_condition_damaged_d1_single_batch(mock_d1_contex
     """
     Test approve_request for RETURN with condition DAMAGED on D1:
     - Asset status -> DAMAGED_PENDING_REPAIR, holder cleared (NULL).
+    - Batch has exactly 7 statements.
     """
     admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True, department_id=10)
     requester = User(id=5, username="requester", role=User.Role.USER, is_active=True, department_id=10)
@@ -340,20 +362,40 @@ def test_approve_return_request_condition_damaged_d1_single_batch(mock_d1_contex
 
         assert len(mock_d1_context) == 1
         batch = mock_d1_context[0]
-        assert len(batch) == 5
+        assert len(batch) == 7, f"Expected 7 statements in batch, got {len(batch)}"
 
         # 1. Update request statement
         req_stmt, req_params = batch[0]
         assert "WHERE id = %s AND status = %s AND requester_id = %s AND department_id = %s" in req_stmt
         assert req_params == [AssetRequest.Status.APPROVED, admin.id, req.id, AssetRequest.Status.PENDING, req.requester_id, req.department_id]
 
-        # Asset transitions to DAMAGED_PENDING_REPAIR
-        asset_stmt, asset_params = batch[2]
+        # 2. Request assertion guard
+        req_guard_stmt, req_guard_params = batch[1]
+        assert "INSERT INTO _assert_guard" in req_guard_stmt
+        assert "changes()" in req_guard_stmt
+
+        # 3. Requester active & department guard statement
+        requester_guard_stmt, requester_guard_params = batch[2]
+        assert "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s" in requester_guard_stmt
+        assert requester_guard_params == [requester.id, req.department_id]
+
+        # 4. Requester assertion guard check
+        requester_check_stmt, requester_check_params = batch[3]
+        assert "INSERT INTO _assert_guard" in requester_check_stmt
+        assert "changes()" in requester_check_stmt
+
+        # 5. Asset transitions to DAMAGED_PENDING_REPAIR
+        asset_stmt, asset_params = batch[4]
         assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in asset_stmt
         assert asset_params == [Asset.Status.DAMAGED_PENDING_REPAIR, asset.id, Asset.Status.IN_USE, asset.assigned_to_user_id, asset.department_id]
 
-        # Audit log reflects DAMAGED_PENDING_REPAIR
-        audit_stmt, audit_params = batch[4]
+        # 6. Asset assertion guard
+        asset_guard_stmt, asset_guard_params = batch[5]
+        assert "INSERT INTO _assert_guard" in asset_guard_stmt
+        assert "changes()" in asset_guard_stmt
+
+        # 7. Audit log reflects DAMAGED_PENDING_REPAIR
+        audit_stmt, audit_params = batch[6]
         assert audit_params[4] == Asset.Status.DAMAGED_PENDING_REPAIR
 
 
@@ -362,7 +404,7 @@ def test_approve_damage_report_request_d1_single_batch(mock_d1_context):
     Test approve_request for DAMAGE_REPORT on D1:
     - Asset status -> DAMAGED_PENDING_REPAIR.
     - Holder is preserved for accountability!
-    - Bundled into ONE single batch with 5 statements.
+    - Bundled into ONE single batch with 7 statements.
     """
     admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True, department_id=10)
     requester = User(id=5, username="requester", role=User.Role.USER, is_active=True, department_id=10)
@@ -402,7 +444,7 @@ def test_approve_damage_report_request_d1_single_batch(mock_d1_context):
         assert len(mock_d1_context) == 1
 
         batch = mock_d1_context[0]
-        assert len(batch) == 5
+        assert len(batch) == 7, f"Expected 7 statements in batch, got {len(batch)}"
 
         # 1. Update request statement
         req_stmt, req_params = batch[0]
@@ -414,18 +456,28 @@ def test_approve_damage_report_request_d1_single_batch(mock_d1_context):
         assert "INSERT INTO _assert_guard" in req_guard_stmt
         assert "changes()" in req_guard_stmt
 
-        # 3. Update asset statement
-        asset_stmt, asset_params = batch[2]
+        # 3. Requester active & department guard statement
+        requester_guard_stmt, requester_guard_params = batch[2]
+        assert "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s" in requester_guard_stmt
+        assert requester_guard_params == [requester.id, req.department_id]
+
+        # 4. Requester assertion guard check
+        requester_check_stmt, requester_check_params = batch[3]
+        assert "INSERT INTO _assert_guard" in requester_check_stmt
+        assert "changes()" in requester_check_stmt
+
+        # 5. Update asset statement
+        asset_stmt, asset_params = batch[4]
         assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in asset_stmt
         assert asset_params == [Asset.Status.DAMAGED_PENDING_REPAIR, asset.id, Asset.Status.IN_USE, asset.assigned_to_user_id, asset.department_id]
 
-        # 4. Asset assertion guard
-        asset_guard_stmt, asset_guard_params = batch[3]
+        # 6. Asset assertion guard
+        asset_guard_stmt, asset_guard_params = batch[5]
         assert "INSERT INTO _assert_guard" in asset_guard_stmt
         assert "changes()" in asset_guard_stmt
 
-        # 5. Audit log statement: to_user_id remains requester.id
-        audit_stmt, audit_params = batch[4]
+        # 7. Audit log statement: to_user_id remains requester.id
+        audit_stmt, audit_params = batch[6]
         assert audit_params[2] == AssetHistoryLog.ActionType.DAMAGE
         assert audit_params[3] == Asset.Status.IN_USE
         assert audit_params[4] == Asset.Status.DAMAGED_PENDING_REPAIR
@@ -745,6 +797,376 @@ def test_approve_request_occ_conflict_requester_transferred_department_concurren
     assert asset_row[1] is None
 
     cur.execute("SELECT count(*) FROM assets_assethistorylog WHERE asset_id = 301;")
+    assert cur.fetchone()[0] == 0
+
+
+def test_approve_return_request_occ_conflict_requester_deactivated_concurrently(sqlite_occ_conn):
+    """
+    OCC Conflict: Requester was deactivated concurrently before RETURN request batch commit.
+    - requester_guard fails with 0 rows -> requester_guard_check fails.
+    - Transaction rolls back atomically: request remains PENDING, asset remains IN_USE by requester, 0 audit logs.
+    """
+    sqlite_occ_conn.execute(
+        "INSERT INTO requests_assetrequest (id, request_code, request_type, requester_id, department_id, asset_id, reason, status) "
+        "VALUES (20, 'REQ-OCC-020', 'RETURN', 5, 10, 101, 'Return conflict deactivated', 'PENDING');"
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO authentication_user (id, username, role, is_active, department_id) "
+        "VALUES (5, 'requester', 'USER', 0, 10);"  # Deactivated in DB!
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO assets_asset (id, asset_code, name, status, department_id, assigned_to_user_id) "
+        "VALUES (101, 'AST-OCC-101', 'MacBook Air', 'IN_USE', 10, 5);"
+    )
+    sqlite_occ_conn.commit()
+
+    admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True, department_id=10)
+    requester = User(id=5, username="requester", role=User.Role.USER, is_active=True, department_id=10)
+    asset = Asset(id=101, asset_code="AST-OCC-101", name="MacBook Air", status=Asset.Status.IN_USE, department_id=10, assigned_to_user_id=5)
+    req = AssetRequest(
+        id=20,
+        request_code="REQ-OCC-020",
+        request_type=AssetRequest.RequestType.RETURN,
+        requester=requester,
+        requester_id=5,
+        department_id=10,
+        asset=asset,
+        asset_id=101,
+        reason="Return conflict deactivated",
+        status=AssetRequest.Status.PENDING,
+    )
+
+    def d1_batch_sqlite_executor(stmts, using="default", **kwargs):
+        cur = sqlite_occ_conn.cursor()
+        try:
+            for sql, params in stmts:
+                sql_q = sql.replace("%s", "?")
+                cur.execute(sql_q, params)
+            sqlite_occ_conn.commit()
+        except Exception as exc:
+            sqlite_occ_conn.rollback()
+            raise DatabaseError(f"D1 Constraint Conflict: {exc}") from exc
+
+    with patch.object(RequestService, "_is_d1", return_value=True), \
+         patch.object(RequestService, "_get_locked_request", return_value=req), \
+         patch.object(User.objects, "get", return_value=requester), \
+         patch.object(Asset.objects, "get", return_value=asset), \
+         patch("apps.requests.services.d1_batch", side_effect=d1_batch_sqlite_executor):
+
+        with pytest.raises(ConflictError, match="Xung đột xử lý phiếu yêu cầu hoặc tài sản đã thay đổi."):
+            RequestService.approve_request(
+                request_id=20,
+                actor=admin,
+                data={"received_confirmed": True, "condition": "GOOD"},
+            )
+
+    cur = sqlite_occ_conn.cursor()
+    cur.execute("SELECT status FROM requests_assetrequest WHERE id = 20;")
+    assert cur.fetchone()[0] == "PENDING"
+
+    cur.execute("SELECT status, assigned_to_user_id FROM assets_asset WHERE id = 101;")
+    asset_row = cur.fetchone()
+    assert asset_row[0] == "IN_USE"
+    assert asset_row[1] == 5
+
+    cur.execute("SELECT count(*) FROM assets_assethistorylog WHERE asset_id = 101;")
+    assert cur.fetchone()[0] == 0
+
+
+def test_approve_return_request_occ_conflict_requester_transferred_department_concurrently(sqlite_occ_conn):
+    """
+    OCC Conflict: Requester was transferred to another department before RETURN request batch commit.
+    - requester_guard fails with 0 rows -> requester_guard_check fails.
+    - Transaction rolls back atomically: request remains PENDING, asset remains IN_USE by requester, 0 audit logs.
+    """
+    sqlite_occ_conn.execute(
+        "INSERT INTO requests_assetrequest (id, request_code, request_type, requester_id, department_id, asset_id, reason, status) "
+        "VALUES (21, 'REQ-OCC-021', 'RETURN', 5, 10, 101, 'Return conflict transferred', 'PENDING');"
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO authentication_user (id, username, role, is_active, department_id) "
+        "VALUES (5, 'requester', 'USER', 1, 99);"  # Transferred to dept 99 in DB!
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO assets_asset (id, asset_code, name, status, department_id, assigned_to_user_id) "
+        "VALUES (101, 'AST-OCC-101', 'MacBook Air', 'IN_USE', 10, 5);"
+    )
+    sqlite_occ_conn.commit()
+
+    admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True, department_id=10)
+    requester = User(id=5, username="requester", role=User.Role.USER, is_active=True, department_id=10)
+    asset = Asset(id=101, asset_code="AST-OCC-101", name="MacBook Air", status=Asset.Status.IN_USE, department_id=10, assigned_to_user_id=5)
+    req = AssetRequest(
+        id=21,
+        request_code="REQ-OCC-021",
+        request_type=AssetRequest.RequestType.RETURN,
+        requester=requester,
+        requester_id=5,
+        department_id=10,
+        asset=asset,
+        asset_id=101,
+        reason="Return conflict transferred",
+        status=AssetRequest.Status.PENDING,
+    )
+
+    def d1_batch_sqlite_executor(stmts, using="default", **kwargs):
+        cur = sqlite_occ_conn.cursor()
+        try:
+            for sql, params in stmts:
+                sql_q = sql.replace("%s", "?")
+                cur.execute(sql_q, params)
+            sqlite_occ_conn.commit()
+        except Exception as exc:
+            sqlite_occ_conn.rollback()
+            raise DatabaseError(f"D1 Constraint Conflict: {exc}") from exc
+
+    with patch.object(RequestService, "_is_d1", return_value=True), \
+         patch.object(RequestService, "_get_locked_request", return_value=req), \
+         patch.object(User.objects, "get", return_value=requester), \
+         patch.object(Asset.objects, "get", return_value=asset), \
+         patch("apps.requests.services.d1_batch", side_effect=d1_batch_sqlite_executor):
+
+        with pytest.raises(ConflictError, match="Xung đột xử lý phiếu yêu cầu hoặc tài sản đã thay đổi."):
+            RequestService.approve_request(
+                request_id=21,
+                actor=admin,
+                data={"received_confirmed": True, "condition": "GOOD"},
+            )
+
+    cur = sqlite_occ_conn.cursor()
+    cur.execute("SELECT status FROM requests_assetrequest WHERE id = 21;")
+    assert cur.fetchone()[0] == "PENDING"
+
+    cur.execute("SELECT status, assigned_to_user_id FROM assets_asset WHERE id = 101;")
+    asset_row = cur.fetchone()
+    assert asset_row[0] == "IN_USE"
+    assert asset_row[1] == 5
+
+    cur.execute("SELECT count(*) FROM assets_assethistorylog WHERE asset_id = 101;")
+    assert cur.fetchone()[0] == 0
+
+
+def test_approve_damage_report_request_occ_conflict_requester_deactivated_concurrently(sqlite_occ_conn):
+    """
+    OCC Conflict: Requester was deactivated concurrently before DAMAGE_REPORT request batch commit.
+    - requester_guard fails with 0 rows -> requester_guard_check fails.
+    - Transaction rolls back atomically: request remains PENDING, asset remains IN_USE by requester, 0 audit logs.
+    """
+    sqlite_occ_conn.execute(
+        "INSERT INTO requests_assetrequest (id, request_code, request_type, requester_id, department_id, asset_id, reason, status) "
+        "VALUES (22, 'REQ-OCC-022', 'DAMAGE_REPORT', 5, 10, 102, 'Damage conflict deactivated', 'PENDING');"
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO authentication_user (id, username, role, is_active, department_id) "
+        "VALUES (5, 'requester', 'USER', 0, 10);"  # Deactivated in DB!
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO assets_asset (id, asset_code, name, status, department_id, assigned_to_user_id) "
+        "VALUES (102, 'AST-OCC-102', 'ThinkPad', 'IN_USE', 10, 5);"
+    )
+    sqlite_occ_conn.commit()
+
+    admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True, department_id=10)
+    requester = User(id=5, username="requester", role=User.Role.USER, is_active=True, department_id=10)
+    asset = Asset(id=102, asset_code="AST-OCC-102", name="ThinkPad", status=Asset.Status.IN_USE, department_id=10, assigned_to_user_id=5)
+    req = AssetRequest(
+        id=22,
+        request_code="REQ-OCC-022",
+        request_type=AssetRequest.RequestType.DAMAGE_REPORT,
+        requester=requester,
+        requester_id=5,
+        department_id=10,
+        asset=asset,
+        asset_id=102,
+        reason="Damage conflict deactivated",
+        status=AssetRequest.Status.PENDING,
+    )
+
+    def d1_batch_sqlite_executor(stmts, using="default", **kwargs):
+        cur = sqlite_occ_conn.cursor()
+        try:
+            for sql, params in stmts:
+                sql_q = sql.replace("%s", "?")
+                cur.execute(sql_q, params)
+            sqlite_occ_conn.commit()
+        except Exception as exc:
+            sqlite_occ_conn.rollback()
+            raise DatabaseError(f"D1 Constraint Conflict: {exc}") from exc
+
+    with patch.object(RequestService, "_is_d1", return_value=True), \
+         patch.object(RequestService, "_get_locked_request", return_value=req), \
+         patch.object(User.objects, "get", return_value=requester), \
+         patch.object(Asset.objects, "get", return_value=asset), \
+         patch("apps.requests.services.d1_batch", side_effect=d1_batch_sqlite_executor):
+
+        with pytest.raises(ConflictError, match="Xung đột xử lý phiếu yêu cầu hoặc tài sản đã thay đổi."):
+            RequestService.approve_request(
+                request_id=22,
+                actor=admin,
+                data={},
+            )
+
+    cur = sqlite_occ_conn.cursor()
+    cur.execute("SELECT status FROM requests_assetrequest WHERE id = 22;")
+    assert cur.fetchone()[0] == "PENDING"
+
+    cur.execute("SELECT status, assigned_to_user_id FROM assets_asset WHERE id = 102;")
+    asset_row = cur.fetchone()
+    assert asset_row[0] == "IN_USE"
+    assert asset_row[1] == 5
+
+    cur.execute("SELECT count(*) FROM assets_assethistorylog WHERE asset_id = 102;")
+    assert cur.fetchone()[0] == 0
+
+
+def test_approve_damage_report_request_occ_conflict_requester_transferred_department_concurrently(sqlite_occ_conn):
+    """
+    OCC Conflict: Requester was transferred to another department before DAMAGE_REPORT request batch commit.
+    - requester_guard fails with 0 rows -> requester_guard_check fails.
+    - Transaction rolls back atomically: request remains PENDING, asset remains IN_USE by requester, 0 audit logs.
+    """
+    sqlite_occ_conn.execute(
+        "INSERT INTO requests_assetrequest (id, request_code, request_type, requester_id, department_id, asset_id, reason, status) "
+        "VALUES (23, 'REQ-OCC-023', 'DAMAGE_REPORT', 5, 10, 102, 'Damage conflict transferred', 'PENDING');"
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO authentication_user (id, username, role, is_active, department_id) "
+        "VALUES (5, 'requester', 'USER', 1, 99);"  # Transferred to dept 99 in DB!
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO assets_asset (id, asset_code, name, status, department_id, assigned_to_user_id) "
+        "VALUES (102, 'AST-OCC-102', 'ThinkPad', 'IN_USE', 10, 5);"
+    )
+    sqlite_occ_conn.commit()
+
+    admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True, department_id=10)
+    requester = User(id=5, username="requester", role=User.Role.USER, is_active=True, department_id=10)
+    asset = Asset(id=102, asset_code="AST-OCC-102", name="ThinkPad", status=Asset.Status.IN_USE, department_id=10, assigned_to_user_id=5)
+    req = AssetRequest(
+        id=23,
+        request_code="REQ-OCC-023",
+        request_type=AssetRequest.RequestType.DAMAGE_REPORT,
+        requester=requester,
+        requester_id=5,
+        department_id=10,
+        asset=asset,
+        asset_id=102,
+        reason="Damage conflict transferred",
+        status=AssetRequest.Status.PENDING,
+    )
+
+    def d1_batch_sqlite_executor(stmts, using="default", **kwargs):
+        cur = sqlite_occ_conn.cursor()
+        try:
+            for sql, params in stmts:
+                sql_q = sql.replace("%s", "?")
+                cur.execute(sql_q, params)
+            sqlite_occ_conn.commit()
+        except Exception as exc:
+            sqlite_occ_conn.rollback()
+            raise DatabaseError(f"D1 Constraint Conflict: {exc}") from exc
+
+    with patch.object(RequestService, "_is_d1", return_value=True), \
+         patch.object(RequestService, "_get_locked_request", return_value=req), \
+         patch.object(User.objects, "get", return_value=requester), \
+         patch.object(Asset.objects, "get", return_value=asset), \
+         patch("apps.requests.services.d1_batch", side_effect=d1_batch_sqlite_executor):
+
+        with pytest.raises(ConflictError, match="Xung đột xử lý phiếu yêu cầu hoặc tài sản đã thay đổi."):
+            RequestService.approve_request(
+                request_id=23,
+                actor=admin,
+                data={},
+            )
+
+    cur = sqlite_occ_conn.cursor()
+    cur.execute("SELECT status FROM requests_assetrequest WHERE id = 23;")
+    assert cur.fetchone()[0] == "PENDING"
+
+    cur.execute("SELECT status, assigned_to_user_id FROM assets_asset WHERE id = 102;")
+    asset_row = cur.fetchone()
+    assert asset_row[0] == "IN_USE"
+    assert asset_row[1] == 5
+
+    cur.execute("SELECT count(*) FROM assets_assethistorylog WHERE asset_id = 102;")
+    assert cur.fetchone()[0] == 0
+
+
+def test_approve_allocate_request_occ_conflict_category_changed_concurrently(sqlite_occ_conn):
+    """
+    OCC Conflict: Asset category was changed concurrently to another category in DB.
+    - Request expects requested_category_id = 1.
+    - Asset in DB was updated to category_id = 2.
+    - category_guard matches 0 rows (category_id = 1 check fails) -> changes() is 0.
+    - category_guard_check fails with CHECK constraint violation on _assert_guard.
+    - Entire batch is rolled back atomically.
+    - Request remains PENDING, asset remains AVAILABLE with category_id = 2, 0 audit logs.
+    """
+    sqlite_occ_conn.execute(
+        "INSERT INTO requests_assetrequest (id, request_code, request_type, requester_id, department_id, requested_category_id, reason, status) "
+        "VALUES (24, 'REQ-OCC-024', 'ALLOCATE', 5, 10, 1, 'Category conflict test', 'PENDING');"
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO authentication_user (id, username, role, is_active, department_id) "
+        "VALUES (5, 'requester', 'USER', 1, 10);"
+    )
+    sqlite_occ_conn.execute(
+        "INSERT INTO assets_asset (id, asset_code, name, status, department_id, assigned_to_user_id, category_id) "
+        "VALUES (305, 'AST-OCC-305', 'Laptop Category Changed', 'AVAILABLE', 10, NULL, 2);"  # Category 2 in DB!
+    )
+    sqlite_occ_conn.commit()
+
+    admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True, department_id=10)
+    requester = User(id=5, username="requester", role=User.Role.USER, is_active=True, department_id=10)
+    # Stale in-memory asset view having category_id = 1
+    asset = Asset(id=305, asset_code="AST-OCC-305", name="Laptop Category Changed", status=Asset.Status.AVAILABLE, department_id=10, category_id=1)
+    req = AssetRequest(
+        id=24,
+        request_code="REQ-OCC-024",
+        request_type=AssetRequest.RequestType.ALLOCATE,
+        requester=requester,
+        requester_id=5,
+        department_id=10,
+        requested_category_id=1,
+        reason="Category conflict test",
+        status=AssetRequest.Status.PENDING,
+    )
+
+    def d1_batch_sqlite_executor(stmts, using="default", **kwargs):
+        cur = sqlite_occ_conn.cursor()
+        try:
+            for sql, params in stmts:
+                sql_q = sql.replace("%s", "?")
+                cur.execute(sql_q, params)
+            sqlite_occ_conn.commit()
+        except Exception as exc:
+            sqlite_occ_conn.rollback()
+            raise DatabaseError(f"D1 Constraint Conflict: {exc}") from exc
+
+    with patch.object(RequestService, "_is_d1", return_value=True), \
+         patch.object(RequestService, "_get_locked_request", return_value=req), \
+         patch.object(User.objects, "get", return_value=requester), \
+         patch.object(Asset.objects, "get", return_value=asset), \
+         patch("apps.requests.services.d1_batch", side_effect=d1_batch_sqlite_executor):
+
+        with pytest.raises(ConflictError, match="Xung đột xử lý phiếu yêu cầu hoặc tài sản đã thay đổi."):
+            RequestService.approve_request(
+                request_id=24,
+                actor=admin,
+                data={"selected_asset_id": 305},
+            )
+
+    cur = sqlite_occ_conn.cursor()
+    cur.execute("SELECT status FROM requests_assetrequest WHERE id = 24;")
+    assert cur.fetchone()[0] == "PENDING"
+
+    cur.execute("SELECT status, assigned_to_user_id, category_id FROM assets_asset WHERE id = 305;")
+    asset_row = cur.fetchone()
+    assert asset_row[0] == "AVAILABLE"
+    assert asset_row[1] is None
+    assert asset_row[2] == 2
+
+    cur.execute("SELECT count(*) FROM assets_assethistorylog WHERE asset_id = 305;")
     assert cur.fetchone()[0] == 0
 
 

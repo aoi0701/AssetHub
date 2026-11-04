@@ -260,7 +260,7 @@ WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %
         """
         update_sql = """
 UPDATE assets_asset
-SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
+SET status = %s, updated_at = datetime('now')
 WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s
 """.strip()
         update_params = [
@@ -1064,19 +1064,23 @@ WHERE id = %s AND status = %s AND assigned_to_user_id IS NULL AND (department_id
                     }
                 )
 
-            update_sql = """
+            dept_clause = "department_id = %s" if asset.department_id is not None else "department_id IS NULL"
+            user_clause = "assigned_to_user_id = %s" if asset.assigned_to_user_id is not None else "assigned_to_user_id IS NULL"
+
+            update_sql = f"""
 UPDATE assets_asset
 SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
-WHERE id = %s AND status = %s AND department_id = %s AND (assigned_to_user_id = %s OR (assigned_to_user_id IS NULL AND %s IS NULL))
+WHERE id = %s AND status = %s AND {dept_clause} AND {user_clause}
 """.strip()
             update_params = [
                 Asset.Status.PENDING_DISPOSAL,
                 asset.id,
                 asset.status,
-                asset.department_id,
-                asset.assigned_to_user_id,
-                asset.assigned_to_user_id,
             ]
+            if asset.department_id is not None:
+                update_params.append(asset.department_id)
+            if asset.assigned_to_user_id is not None:
+                update_params.append(asset.assigned_to_user_id)
             assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
             audit_stmt = cls._build_audit_statement(
                 asset=asset,
@@ -1162,17 +1166,20 @@ WHERE id = %s AND status = %s AND department_id = %s AND (assigned_to_user_id = 
                     f"Tài sản đang ở trạng thái {asset.status}, chỉ tài sản PENDING_DISPOSAL mới có thể xác nhận thanh lý."
                 )
 
-            update_sql = """
+            dept_clause = "department_id = %s" if asset.department_id is not None else "department_id IS NULL"
+
+            update_sql = f"""
 UPDATE assets_asset
 SET status = %s, assigned_to_user_id = NULL, updated_at = datetime('now')
-WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL
+WHERE id = %s AND status = %s AND {dept_clause} AND assigned_to_user_id IS NULL
 """.strip()
             update_params = [
                 Asset.Status.DISPOSED,
                 asset.id,
                 Asset.Status.PENDING_DISPOSAL,
-                asset.department_id,
             ]
+            if asset.department_id is not None:
+                update_params.append(asset.department_id)
             assert_guard_stmt = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
             audit_stmt = cls._build_audit_statement(
                 asset=asset,

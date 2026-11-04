@@ -484,11 +484,20 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
   ```
   Kết quả: 8/8 PASS 100%. Concurrency và tính toàn vẹn nghiệp vụ được bảo đảm tuyệt đối.
 
-- [x] **Step 5: Commit Task 4**
+- [x] **Step 5: Commit Task 4 Baseline**
   ```bash
   git add backend/apps/assets/ backend/apps/requests/ backend/apps/authentication/ backend/assethub_api/backends/d1/ docs/
   git commit -m "feat(services): implement d1 atomic guarded batch occ for asset and request workflows"
   ```
+
+- [ ] **Step 6: Sửa các lỗi hồi quy Task 4 theo review 458c3a5**
+  - [ ] Agent A: Giữ holder trong `confirm_damage_report`; sửa predicate nullable department ở `propose_disposal` và `confirm_disposal` cho kho chung (`department_id IS NULL`).
+  - [ ] Agent B: Bổ sung guard requester active/cùng phòng cho cả RETURN và DAMAGE_REPORT; bổ sung guard category của asset khớp requested_category tại write trong batch ALLOCATE.
+  - [ ] Agent C: Bỏ hack sửa state giữa workflow trong `test_d1_business_integrity.py`; test disposal kho chung; test interleaving requester/category; test rollback thực của `approve_request` qua D1 trigger test-only.
+
+- [ ] **Step 7: Verification và Commit Task 4 Regressions**
+  - Chạy đầy đủ: unit mock, PG test baseline, và D1 local integration.
+  - Commit: `fix(services): preserve holder on damage confirm, fix pool disposal and guard requester/category at write`.
 
 ---
 

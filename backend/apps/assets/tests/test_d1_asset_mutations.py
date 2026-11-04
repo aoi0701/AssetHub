@@ -428,12 +428,14 @@ def test_build_revoke_statements():
 
 
 def test_build_confirm_damage_statements():
-    """Verify build_confirm_damage_statements guards department_id and assigned_to_user_id."""
+    """Verify build_confirm_damage_statements guards department_id and assigned_to_user_id and retains holder."""
     asset = Asset(id=3, asset_code="AST-003", name="Laptop 3", status=Asset.Status.IN_USE, department_id=5, assigned_to_user_id=20)
     actor = User(id=10, username="manager", role=User.Role.MANAGER)
 
     stmts = AssetService.build_confirm_damage_statements(asset, actor, reason="Confirmed broken screen")
     assert len(stmts) == 3
+    assert "assigned_to_user_id = NULL" not in stmts[0][0]
+    assert "SET status = %s, updated_at = datetime('now')" in stmts[0][0]
     assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in stmts[0][0]
     assert stmts[0][1] == [Asset.Status.DAMAGED_PENDING_REPAIR, 3, Asset.Status.IN_USE, 20, 5]
     assert stmts[2][1][2] == AssetHistoryLog.ActionType.DAMAGE
@@ -514,12 +516,18 @@ def test_d1_action_confirm_damage_report(mock_d1_context):
 
     with patch.object(AssetService, "_get_locked_asset", return_value=asset), \
          patch.object(Asset.objects, "get", return_value=asset):
-        AssetService.confirm_damage_report(103, admin, "Confirmed report")
+        res = AssetService.confirm_damage_report(103, admin, "Confirmed report")
+        assert res == asset
+        assert res.assigned_to_user_id == 2  # Retained, NOT cleared to NULL
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
         assert len(stmts) == 3
+        assert "assigned_to_user_id = NULL" not in stmts[0][0]
+        assert "SET status = %s, updated_at = datetime('now')" in stmts[0][0]
         assert "WHERE id = %s AND status = %s AND assigned_to_user_id = %s AND department_id = %s" in stmts[0][0]
         assert stmts[0][1] == [Asset.Status.DAMAGED_PENDING_REPAIR, 103, Asset.Status.IN_USE, 2, 10]
+        assert stmts[2][1][5] == 2  # from_user_id
+        assert stmts[2][1][6] == 2  # to_user_id (retained)
 
 
 def test_d1_action_send_maintenance(mock_d1_context):
@@ -593,12 +601,33 @@ def test_d1_action_propose_disposal(mock_d1_context):
 
     with patch.object(AssetService, "_get_locked_asset", return_value=asset), \
          patch.object(Asset.objects, "get", return_value=asset):
-        AssetService.propose_disposal(108, admin, "End of life")
+        res = AssetService.propose_disposal(108, admin, "End of life")
+        assert res == asset
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
         assert len(stmts) == 3
-        assert "WHERE id = %s AND status = %s AND department_id = %s AND (assigned_to_user_id = %s OR (assigned_to_user_id IS NULL AND %s IS NULL))" in stmts[0][0]
-        assert stmts[0][1] == [Asset.Status.PENDING_DISPOSAL, 108, Asset.Status.AVAILABLE, 10, None, None]
+        assert "WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.PENDING_DISPOSAL, 108, Asset.Status.AVAILABLE, 10]
+        assert stmts[2][1][7] == 10  # from_department_id
+        assert stmts[2][1][8] == 10  # to_department_id
+
+
+def test_d1_action_propose_disposal_company_pool(mock_d1_context):
+    """Verify propose_disposal for company pool asset (department_id=None, assigned_to_user_id=None)."""
+    admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True)
+    asset = Asset(id=110, asset_code="AST-POOL-1", name="Shared Printer", status=Asset.Status.AVAILABLE, department_id=None, assigned_to_user=None)
+
+    with patch.object(AssetService, "_get_locked_asset", return_value=asset), \
+         patch.object(Asset.objects, "get", return_value=asset):
+        res = AssetService.propose_disposal(110, admin, "Scrap shared pool asset")
+        assert res == asset
+        assert len(mock_d1_context) == 1
+        stmts = mock_d1_context[0]
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND department_id IS NULL AND assigned_to_user_id IS NULL" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.PENDING_DISPOSAL, 110, Asset.Status.AVAILABLE]
+        assert stmts[2][1][7] is None  # from_department_id (company pool)
+        assert stmts[2][1][8] is None  # to_department_id (company pool)
 
 
 def test_d1_action_confirm_disposal(mock_d1_context):
@@ -607,12 +636,86 @@ def test_d1_action_confirm_disposal(mock_d1_context):
 
     with patch.object(AssetService, "_get_locked_asset", return_value=asset), \
          patch.object(Asset.objects, "get", return_value=asset):
-        AssetService.confirm_disposal(109, admin, "Approved scrapping")
+        res = AssetService.confirm_disposal(109, admin, "Approved scrapping")
+        assert res == asset
         assert len(mock_d1_context) == 1
         stmts = mock_d1_context[0]
         assert len(stmts) == 3
         assert "WHERE id = %s AND status = %s AND department_id = %s AND assigned_to_user_id IS NULL" in stmts[0][0]
         assert stmts[0][1] == [Asset.Status.DISPOSED, 109, Asset.Status.PENDING_DISPOSAL, 10]
+        assert stmts[2][1][7] == 10  # from_department_id
+        assert stmts[2][1][8] == 10  # to_department_id
+
+
+def test_d1_action_confirm_disposal_company_pool(mock_d1_context):
+    """Verify confirm_disposal for company pool asset (department_id=None, assigned_to_user_id=None)."""
+    admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True)
+    asset = Asset(id=111, asset_code="AST-POOL-2", name="Shared Server", status=Asset.Status.PENDING_DISPOSAL, department_id=None, assigned_to_user=None)
+
+    with patch.object(AssetService, "_get_locked_asset", return_value=asset), \
+         patch.object(Asset.objects, "get", return_value=asset):
+        res = AssetService.confirm_disposal(111, admin, "Confirm scrap shared pool asset")
+        assert res == asset
+        assert len(mock_d1_context) == 1
+        stmts = mock_d1_context[0]
+        assert len(stmts) == 3
+        assert "WHERE id = %s AND status = %s AND department_id IS NULL AND assigned_to_user_id IS NULL" in stmts[0][0]
+        assert stmts[0][1] == [Asset.Status.DISPOSED, 111, Asset.Status.PENDING_DISPOSAL]
+        assert stmts[2][1][7] is None  # from_department_id (company pool)
+        assert stmts[2][1][8] is None  # to_department_id (company pool)
+
+
+def test_d1_company_pool_disposal_lifecycle_sqlite_occ(sqlite_occ_conn):
+    """Verify propose_disposal and confirm_disposal against SQLite with department_id IS NULL and assigned_to_user_id IS NULL."""
+    # 1. Seed initial company pool asset
+    sqlite_occ_conn.execute(
+        "INSERT INTO assets_asset (id, asset_code, name, status, department_id, assigned_to_user_id) "
+        "VALUES (200, 'AST-POOL-OCC', 'Pool Server', 'AVAILABLE', NULL, NULL);"
+    )
+    sqlite_occ_conn.commit()
+
+    admin = User(id=1, username="admin", role=User.Role.ADMIN, is_active=True)
+    asset = Asset(id=200, asset_code="AST-POOL-OCC", name="Pool Server", status=Asset.Status.AVAILABLE, department_id=None, assigned_to_user=None)
+
+    def d1_batch_sqlite(stmts, using="default", **kwargs):
+        cur = sqlite_occ_conn.cursor()
+        for sql, params in stmts:
+            sql_q = sql.replace("%s", "?")
+            cur.execute(sql_q, params)
+        sqlite_occ_conn.commit()
+        return {"success": True}
+
+    with patch.object(AssetService, "_is_d1", return_value=True), \
+         patch("apps.assets.services.d1_batch", side_effect=d1_batch_sqlite), \
+         patch.object(AssetService, "_get_locked_asset", return_value=asset), \
+         patch.object(Asset.objects, "get", return_value=asset):
+        # 1. Propose disposal
+        res_propose = AssetService.propose_disposal(200, admin, "Propose pool disposal")
+        assert res_propose.id == 200
+
+        # Verify DB state in SQLite
+        cur = sqlite_occ_conn.cursor()
+        cur.execute("SELECT status, department_id, assigned_to_user_id FROM assets_asset WHERE id = 200;")
+        row = cur.fetchone()
+        assert row == ("PENDING_DISPOSAL", None, None)
+
+        # Verify audit log in SQLite
+        cur.execute("SELECT action_type, from_status, to_status, from_department_id, to_department_id FROM assets_assethistorylog WHERE asset_id = 200;")
+        log_row = cur.fetchone()
+        assert log_row == (AssetHistoryLog.ActionType.DISPOSAL_PROPOSE, "AVAILABLE", "PENDING_DISPOSAL", None, None)
+
+        # 2. Confirm disposal
+        asset.status = Asset.Status.PENDING_DISPOSAL
+        res_confirm = AssetService.confirm_disposal(200, admin, "Confirm pool disposal")
+        assert res_confirm.id == 200
+
+        cur.execute("SELECT status, department_id, assigned_to_user_id FROM assets_asset WHERE id = 200;")
+        row = cur.fetchone()
+        assert row == ("DISPOSED", None, None)
+
+        cur.execute("SELECT action_type, from_status, to_status, from_department_id, to_department_id FROM assets_assethistorylog WHERE asset_id = 200 AND to_status = 'DISPOSED';")
+        log_row = cur.fetchone()
+        assert log_row == (AssetHistoryLog.ActionType.DISPOSAL_CONFIRM, "PENDING_DISPOSAL", "DISPOSED", None, None)
 
 
 # =============================================================================

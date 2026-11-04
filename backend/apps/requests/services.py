@@ -170,7 +170,19 @@ class RequestService:
                     [requester.id, req.department_id],
                 )
                 requester_guard_check = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
-                batch = [req_stmt, req_guard, requester_guard, requester_guard_check] + asset_stmts
+                category_guard = (
+                    "UPDATE assets_asset SET id = id WHERE id = %s AND category_id = %s",
+                    [asset.id, req.requested_category_id],
+                )
+                category_guard_check = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
+                batch = [
+                    req_stmt,
+                    req_guard,
+                    requester_guard,
+                    requester_guard_check,
+                    category_guard,
+                    category_guard_check,
+                ] + asset_stmts
 
             elif req.request_type == AssetRequest.RequestType.RETURN:
                 received_confirmed = data.get("received_confirmed", False)
@@ -223,7 +235,12 @@ class RequestService:
                     [AssetRequest.Status.APPROVED, actor.id, req.id, AssetRequest.Status.PENDING, req.requester_id, req.department_id],
                 )
                 req_guard = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
-                batch = [req_stmt, req_guard] + asset_stmts
+                requester_guard = (
+                    "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s",
+                    [requester.id, req.department_id],
+                )
+                requester_guard_check = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
+                batch = [req_stmt, req_guard, requester_guard, requester_guard_check] + asset_stmts
 
             elif req.request_type == AssetRequest.RequestType.DAMAGE_REPORT:
                 if not req.asset_id:
@@ -263,7 +280,12 @@ class RequestService:
                     [AssetRequest.Status.APPROVED, actor.id, req.id, AssetRequest.Status.PENDING, req.requester_id, req.department_id],
                 )
                 req_guard = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
-                batch = [req_stmt, req_guard] + asset_stmts
+                requester_guard = (
+                    "UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s",
+                    [requester.id, req.department_id],
+                )
+                requester_guard_check = ("INSERT INTO _assert_guard (rows_affected) VALUES (changes());", [])
+                batch = [req_stmt, req_guard, requester_guard, requester_guard_check] + asset_stmts
             else:
                 raise ValidationError({"request_type": f"Loại yêu cầu không hợp lệ: {req.request_type}"})
 

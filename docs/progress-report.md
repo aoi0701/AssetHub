@@ -297,39 +297,66 @@ Kết quả: **32 skipped in 0.04s (100% CLEAN)**.
   - Chuyển đổi ký tự placeholder `%s` sang `?` tương thích SQLite/D1.
   - Chuẩn hóa boolean Python (`True` -> `1`, `False` -> `0`).
 
+### 11.6. Khắc Phục Triệt Để 4 Lỗi Hồi Quy Nghiệp Vụ Theo Review 458c3a5
+- **1. Bảo toàn người giữ khi xác nhận báo hỏng (`confirm_damage_report`):**
+  - Trong `build_confirm_damage_statements` và `confirm_damage_report`, loại bỏ hoàn toàn việc gán `assigned_to_user_id = NULL`. Người giữ tài sản được giữ nguyên theo đúng hợp đồng nghiệp vụ PostgreSQL và docstring ("Retains holder for accountability").
+  - Audit log ghi nhận chính xác `from_user_id = to_user_id = asset.assigned_to_user_id`.
+  - Luồng bảo trì hoàn chỉnh chạy trơn tru không ngắt quãng: `allocate` -> `confirm_damage_report` (giữ holder) -> `send_maintenance` (giữ holder) -> `complete_maintenance(RETURN_TO_USER)` (bàn giao lại thành công cho người giữ cũ).
+  - Bỏ hoàn toàn thao tác hack sửa trạng thái giữa luồng trong test (`test_d1_business_integrity.py`).
+- **2. Xử lý predicate kho chung công ty (`department_id IS NULL`):**
+  - Trong `propose_disposal` và `confirm_disposal`: sử dụng biểu thức điều kiện `department_id IS NULL` khi `asset.department_id is None`, tránh so sánh `= NULL` sai cú pháp SQL.
+  - Xử lý tương tự cho `assigned_to_user_id IS NULL` khi tài sản không có người giữ.
+  - Cho phép tài sản thuộc kho chung công ty được đề xuất và xác nhận thanh lý hợp lệ mà không bị vướng assertion guard.
+- **3. Guard người yêu cầu tại thời điểm ghi cho cả RETURN và DAMAGE_REPORT:**
+  - Bổ sung `requester_guard` (`UPDATE authentication_user SET id = id WHERE id = %s AND is_active = 1 AND department_id = %s`) và `requester_guard_check` (`INSERT INTO _assert_guard (rows_affected) VALUES (changes());`) vào batch nguyên tử cho cả 3 loại phiếu (`ALLOCATE`, `RETURN`, `DAMAGE_REPORT`).
+  - Nếu người yêu cầu bị khóa tài khoản hoặc chuyển phòng ban giữa lúc đọc và duyệt phiếu: toàn bộ batch bị hủy, ném `ConflictError`, 0 thay đổi tài sản, 0 audit log.
+- **4. Guard danh mục tài sản tại thời điểm duyệt cấp phát (`ALLOCATE`):**
+  - Bổ sung `category_guard` (`UPDATE assets_asset SET id = id WHERE id = %s AND category_id = %s`) và `category_guard_check` vào batch `ALLOCATE`.
+  - Nếu danh mục tài sản bị thay đổi đồng thời giữa lúc đọc và duyệt: batch bị hủy với `ConflictError`, không thể cấp phát sai danh mục được yêu cầu.
+- **5. Kiểm thử rollback thực tế qua trigger CSDL:**
+  - `test_production_approve_request_rollback_via_trigger`: tạo trigger `test_fail_audit_insert` tạm thời trên D1 local gây lỗi khi chèn audit log sau các câu lệnh UPDATE. Gọi trực tiếp `RequestService.approve_request`.
+  - Chứng minh thực tế CSDL D1 rollback toàn bộ thay đổi trước đó (phiếu giữ `PENDING`, tài sản giữ `AVAILABLE`, 0 audit log). Trigger được dọn dẹp an toàn trong khối `finally`.
+
 ---
 
-## 12. Tổng Hợp Kết Quả Kiểm Thử Toàn Diện (Task 4 Fixes)
+## 12. Tổng Hợp Kết Quả Kiểm Thử Toàn Diện (Task 4 Regressions)
 
-### 12.1. Concurrency & Integrity Test Suite Trên D1 Thật (`--rehearsal`)
+### 12.1. Concurrency, OCC & Rollback Test Suite Trên D1 Thật (`--rehearsal`)
 Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_business_integrity.py --rehearsal -v`
-Kết quả: **15 passed in 34.90s (100% PASS)**:
-1. `test_concurrent_asset_allocation_race`: Hai thread gọi trực tiếp `AssetService.allocate` trên cùng tài sản AVAILABLE -> đúng 1 thành công, 1 nhận `ConflictError` qua `_assert_guard`, đúng 1 audit log (0 orphan logs).
-2. `test_concurrent_request_approval_vs_rejection`: Hai thread gọi trực tiếp `RequestService.approve_request` và `reject_request` đồng thời -> đúng 1 thành công, 1 nhận `ConflictError`.
-3. `test_interleaved_asset_patch_and_disposal`: Gọi trực tiếp `AssetService.propose_disposal` và `confirm_disposal`, sau đó gọi `AssetUpdateSerializer.save()` -> ném `ConflictError` (HTTP 409), status giữ nguyên DISPOSED.
-4. `test_profile_patch_vs_admin_deactivation_race`: Khóa tài khoản trong DB, gọi `ProfileUpdateSerializer.save()` -> ném `PermissionDenied` (HTTP 403), tài khoản giữ nguyên inactive.
-5. `test_change_password_auth_version_cas`: Gọi trực tiếp `ChangePasswordView` qua APIRequestFactory -> CAS phát hiện phiên cũ, tăng version nguyên tử.
-6. `test_last_admin_protection_trigger`: Chặn hạ quyền/khóa quản trị viên cuối cùng ở cả tầng serializer và trigger DB.
-7. `test_concurrent_identifier_generation`: 8 luồng gọi trực tiếp `generate_identifier` -> 0 mã trùng, 0 lỗ hổng, tăng đơn điệu liên tục.
-8. `test_real_d1_batch_rollback_on_constraint_violation`: Kiểm tra rollback nguyên tử thực trên D1: mảng batch thực thi câu lệnh UPDATE trước nhưng gặp lỗi CHECK constraint ở câu lệnh sau -> toàn bộ các câu lệnh trước được rollback sạch sẽ trong CSDL D1.
-9. `test_codex_regression_manager_allocates_after_transfer_to_other_department`: Tái hiện lỗi Codex 1: Manager IT cấp phát tài sản sau khi Admin đã chuyển tài sản sang HR -> bị chặn bằng `ConflictError`, tài sản giữ nguyên ở HR, 0 audit log cấp phát.
-10. `test_codex_regression_approve_request_after_requester_deactivated`: Tái hiện lỗi Codex 2: Duyệt phiếu sau khi người yêu cầu bị khóa tài khoản -> bị chặn bằng `ConflictError`, phiếu giữ PENDING, tài sản AVAILABLE, 0 audit log.
-11. `test_codex_regression_stale_admin_patch_reactivates_user`: Tái hiện lỗi Codex 3: Stale Admin PATCH gửi `is_active=True` trùng với instance cũ sau khi DB đã bị khóa -> bị chặn bằng `ConflictError`, tài khoản giữ nguyên bị khóa, không bypass CAS.
-12. `test_codex_regression_stale_asset_patch_updates_name_after_disposal`: Tái hiện lỗi Codex 4: Stale asset PATCH sửa name sau khi tài sản đã thanh lý -> bị chặn bằng `ConflictError`, tên tài sản và trạng thái DISPOSED không bị đổi.
-13. `test_d1_all_asset_service_lifecycle_actions`: Kiểm thử happy-path cho toàn bộ 9 hành động vòng đời của `AssetService` trên D1 local thật.
-14. `test_d1_all_asset_service_invalid_transitions`: Kiểm thử từ chối trạng thái không hợp lệ cho toàn bộ 9 hành động trên D1 local thật.
-15. `test_d1_request_service_workflows_and_invalid_states`: Kiểm thử happy-path và invalid-state cho toàn bộ quy trình `RequestService` (ALLOCATE, RETURN, DAMAGE_REPORT, REJECT) trên D1 local thật.
+Kết quả: **21 passed in 55.36s (100% PASS)**:
+1. `test_concurrent_asset_allocation_race`: Đua cấp phát đồng thời -> đúng 1 thành công, 1 nhận `ConflictError`, đúng 1 audit log.
+2. `test_concurrent_request_approval_vs_rejection`: Đua duyệt vs từ chối -> đúng 1 thành công, 1 nhận `ConflictError`.
+3. `test_interleaved_asset_patch_and_disposal`: PATCH sau thanh lý bị chặn bằng `ConflictError`.
+4. `test_profile_patch_vs_admin_deactivation_race`: PATCH thông tin trên tài khoản bị khóa bị chặn bằng `PermissionDenied`.
+5. `test_change_password_auth_version_cas`: CAS phát hiện phiên cũ, tăng version nguyên tử.
+6. `test_last_admin_protection_trigger`: Chặn hạ quyền/khóa quản trị viên cuối cùng.
+7. `test_concurrent_identifier_generation`: 8 luồng sinh mã AST/REQ -> 0 mã trùng, tăng đơn điệu liên tục.
+8. `test_real_d1_batch_rollback_on_constraint_violation`: Batch thất bại rollback sạch CSDL D1.
+9. `test_codex_regression_manager_allocates_after_transfer_to_other_department`: Manager IT cấp phát tài sản đã sang HR -> chặn bằng `ConflictError`.
+10. `test_codex_regression_approve_request_after_requester_deactivated`: Duyệt phiếu sau khi requester bị khóa -> chặn bằng `ConflictError`.
+11. `test_codex_regression_stale_admin_patch_reactivates_user`: Stale PATCH gửi `is_active=True` sau khi DB bị khóa -> chặn bằng `ConflictError`.
+12. `test_codex_regression_stale_asset_patch_updates_name_after_disposal`: Stale PATCH sửa name sau khi thanh lý -> chặn bằng `ConflictError`.
+13. `test_d1_all_asset_service_lifecycle_actions`: Happy-path 9 hành động tài sản không cần hack state.
+14. `test_d1_all_asset_service_invalid_transitions`: Từ chối trạng thái không hợp lệ 9 hành động.
+15. `test_d1_request_service_workflows_and_invalid_states`: Happy-path và invalid-states quy trình yêu cầu.
+16. `test_d1_company_pool_disposal_and_maintenance`: Bảo trì và thanh lý kho chung (`department_id IS NULL`) thành công trên D1.
+17. `test_interleaved_requester_state_allocate`: Interleave requester inactive / chuyển phòng khi duyệt ALLOCATE -> rollback.
+18. `test_interleaved_requester_state_return`: Interleave requester inactive / chuyển phòng khi duyệt RETURN -> rollback.
+19. `test_interleaved_requester_state_damage_report`: Interleave requester inactive / chuyển phòng khi duyệt DAMAGE_REPORT -> rollback.
+20. `test_interleaved_category_change_on_allocate_request`: Interleave đổi category tài sản khi duyệt ALLOCATE -> rollback.
+21. `test_production_approve_request_rollback_via_trigger`: Gọi trực tiếp `approve_request` với trigger gây lỗi audit -> rollback toàn bộ.
 
 ### 12.2. Unit Test Suites Cho Nghiệp Vụ D1
-Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_asset_mutations.py backend/apps/requests/tests/test_d1_request_mutations.py backend/apps/authentication/tests/test_d1_auth_integrity.py -v`
-Kết quả: **57 passed in 3.17s (100% PASS)**:
-- `test_d1_asset_mutations.py`: **25 passed**
-- `test_d1_request_mutations.py`: **22 passed**
-- `test_d1_auth_integrity.py`: **10 passed**
+Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_asset_mutations.py backend/apps/requests/tests/test_d1_request_mutations.py backend/apps/authentication/tests/test_d1_auth_integrity.py backend/tests/test_identifiers.py -v`
+Kết quả: **72 passed in 4.41s (100% PASS)**:
+- `test_d1_asset_mutations.py`: **28 passed** (thêm test thanh lý kho chung, giữ holder).
+- `test_d1_request_mutations.py`: **27 passed** (thêm test guard requester cho RETURN/DAMAGE_REPORT và guard category).
+- `test_d1_auth_integrity.py`: **10 passed**.
+- `test_identifiers.py`: **7 passed**.
 
-### 12.3. Baseline Suite Kiểm Thử Hệ Thống (PostgreSQL Test)
+### 12.3. Baseline Suite Hệ Thống (PostgreSQL Test Container)
 Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/ -q`
-Kết quả: **185 passed in 72.65s (100% PASS)** (đã bao gồm các bài kiểm thử hành vi mới cho `generate_identifier`).
+Kết quả: **185 passed in 72.65s (100% PASS)**.
 
 ### 12.4. Harness & Migration Rehearsal Suites
 Lệnh: `backend/.venv/bin/pytest backend/apps/common/tests/test_harness_pg_source.py backend/apps/common/tests/test_harness_d1_target.py backend/apps/common/tests/test_pg_to_d1_rehearsal.py --rehearsal -v`
@@ -337,11 +364,11 @@ Kết quả: **32 passed in 72.61s (100% PASS)**.
 
 ### 12.5. Gating Test Suite Mặc Định (Zero Side-Effects)
 Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_business_integrity.py backend/apps/common/tests/test_pg_to_d1_rehearsal.py -q`
-Kết quả: **27 skipped in 0.36s (100% CLEAN)**.
+Kết quả: **33 skipped in 0.35s (100% CLEAN)**.
 
 ### 12.6. Node Bridge Regression Suite
 Lệnh: `node spikes/cf-d1-spike/bridge-worker/tests/test_worker_regression.mjs`
-Kết quả: **8 passed in 138.66ms (100% PASS)**.
+Kết quả: **8 passed in 149.41ms (100% PASS)**.
 
 ### 12.7. Trạng Thái Môi Trường & Hệ Thống
 - Cổng 5434 và 8787: sạch 100% (`ss -tulpn` xác nhận CLEAN).
@@ -353,11 +380,11 @@ Kết quả: **8 passed in 138.66ms (100% PASS)**.
 ## 13. Ranh Giới An Toàn & Đề Xuất Nghiệm Thu Task 4
 
 - **Bằng chứng kỹ thuật:**
-  - Toàn bộ 4 lỗi Codex tái hiện (Manager allocate out-of-scope, approve inactive requester, stale Admin PATCH bypass CAS, stale asset PATCH post-disposal) đã được sửa triệt để và có test hồi quy độc lập chứng minh.
-  - 100% test tích hợp chuyển sang gọi trực tiếp code production thật, loại bỏ toàn bộ mock/reimplementation.
-  - Toàn bộ 9 phương thức `AssetService` và 2 phương thức `RequestService` được chứng minh toàn vẹn qua cả happy-path và invalid-state trên D1 local thật.
+  - 4 lỗi hồi quy (mất holder khi báo hỏng, thanh lý kho chung bị chặn, RETURN/DAMAGE thiếu guard requester, ALLOCATE thiếu guard category) đã được khắc phục hoàn toàn ở cả tầng production code và test suites.
+  - Reviewer độc lập (Agent D) thẩm định đạt 6/6 tiêu chí kỹ thuật.
+  - Rollback thực tế của `approve_request` được chứng minh trên D1 local bằng trigger kiểm thử.
 - **Ranh giới an toàn:**
   - Ứng dụng chính giữ nguyên cấu hình PostgreSQL (`USE_D1_DATABASE=False`).
   - Chưa chuyển dữ liệu thật lên Cloudflare D1 Cloud.
-  - Không push/merge git, không thay đổi DNS, không kích hoạt dịch vụ trả phí.
-- Kính gửi Codex nghiệm thu Task 4 để sẵn sàng chuyển sang Task 5.
+  - Không push/merge git, không thay đổi DNS, không kích hoạt dịch vụ trả phí, chưa mở Task 5 (R2/AI).
+- Kính gửi Codex nghiệm thu Task 4.
