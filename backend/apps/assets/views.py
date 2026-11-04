@@ -1,8 +1,10 @@
 import os
 import uuid
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.text import get_valid_filename
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import permissions, status, viewsets
@@ -437,11 +439,6 @@ class AssetViewSet(viewsets.ModelViewSet):
     )
     def attachments(self, request, pk=None):
         asset = self.get_object()
-        if asset.status == Asset.Status.DISPOSED:
-            return Response(
-                {"detail": "Không thể tải tệp lên tài sản đã thanh lý."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         kind = request.data.get('kind')
         if not kind or kind not in ('image', 'document'):
@@ -461,17 +458,37 @@ class AssetViewSet(viewsets.ModelViewSet):
 
         storage = AttachmentStorage()
         saved_key = storage.save(key, file_obj)
-        old_key = getattr(asset, kind, '')
+        old_key = getattr(asset, kind, '') or ''
 
         try:
-            with transaction.atomic():
-                setattr(asset, kind, saved_key)
-                asset.save(update_fields=[kind, 'updated_at'])
-                if old_key and old_key != saved_key:
-                    transaction.on_commit(lambda: storage.delete(old_key))
-        except Exception:
-            storage.delete(saved_key)
+            filter_kwargs = {'id': asset.id, kind: old_key}
+            rows = Asset.objects.filter(**filter_kwargs).exclude(status=Asset.Status.DISPOSED).update(
+                **{kind: saved_key, 'updated_at': timezone.now()}
+            )
+        except Exception as exc:
+            if not getattr(exc, 'committed', False):
+                storage.delete(saved_key)
             raise
+
+        if rows == 0:
+            storage.delete(saved_key)
+            if Asset.objects.filter(id=asset.id, status=Asset.Status.DISPOSED).exists():
+                detail = "Không thể tải tệp lên tài sản đã thanh lý."
+            else:
+                detail = "Không thể cập nhật tệp: xung đột sửa đổi đồng thời hoặc tài sản đã thay đổi."
+            return Response(
+                {"detail": detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if old_key and old_key != saved_key:
+            old_to_delete = old_key
+            if transaction.get_connection().in_atomic_block:
+                transaction.on_commit(lambda k=old_to_delete: storage.delete(k))
+            else:
+                storage.delete(old_to_delete)
+
+        setattr(asset, kind, saved_key)
 
         return Response(
             {
@@ -483,7 +500,7 @@ class AssetViewSet(viewsets.ModelViewSet):
         )
 
     @extend_schema(
-        summary="Lấy URL tải xuống tệp đính kèm với chữ ký bảo mật 60s",
+        summary="Lấy URL tải xuống tệp đính kèm với chữ ký bảo mật",
         tags=["assets"],
         parameters=[
             OpenApiParameter(
@@ -492,7 +509,28 @@ class AssetViewSet(viewsets.ModelViewSet):
                 location=OpenApiParameter.PATH,
                 description="Loại tệp ('image' hoặc 'document')",
                 enum=["image", "document"],
-            )
+            ),
+            OpenApiParameter(
+                name="expires_in",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Thời gian hết hạn URL (giây, mặc định 900)",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="expire_seconds",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Thời gian hết hạn URL (giây, alias cho expires_in)",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="attachment",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Bắt buộc tải xuống dưới dạng attachment ('1')",
+                required=False,
+            ),
         ],
         responses={200: OpenApiResponse(description="Presigned download URL thành công")},
     )
@@ -516,19 +554,27 @@ class AssetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        storage = AttachmentStorage()
+        default_ttl = getattr(settings, 'R2_PRESIGNED_URL_EXPIRE_SECONDS', 900)
+        expire_param = request.query_params.get('expires_in') or request.query_params.get('expire_seconds')
+        try:
+            expire_seconds = int(expire_param) if expire_param else default_ttl
+        except (ValueError, TypeError):
+            expire_seconds = default_ttl
+
         as_attachment = (kind == 'document') or (request.query_params.get('attachment') == '1')
+        storage = AttachmentStorage()
         download_url = storage.get_presigned_download_url(
             name=file_key,
-            expire_seconds=60,
+            expire_seconds=expire_seconds,
             filename=os.path.basename(file_key),
             as_attachment=as_attachment,
+            kind=kind,
         )
 
         response = Response(
             {
                 "download_url": download_url,
-                "expires_in": 60,
+                "expires_in": expire_seconds,
                 "kind": kind,
             },
             status=status.HTTP_200_OK,

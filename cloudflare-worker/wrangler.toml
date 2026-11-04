@@ -5,6 +5,9 @@ compatibility_date = "2024-04-01"
 [ai]
 binding = "AI"
 
+[vars]
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "assethub-d1"

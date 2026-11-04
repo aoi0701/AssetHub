@@ -1,13 +1,14 @@
-import pytest
-from unittest.mock import MagicMock, patch
-import urllib.error
 import socket
+import time
+import urllib.error
+from unittest.mock import MagicMock, patch
 
+import pytest
 from rest_framework.test import APIClient
 
+from apps.ai.services import AiProxyService
 from apps.authentication.services import generate_tokens_for_user
 from apps.departments.models import Category
-from apps.ai.services import AiProxyService
 
 
 def auth_client_for(user):
@@ -61,12 +62,13 @@ def test_admin_calls_proxy_success(admin_user, sample_categories):
         assert response.data["suggested_category_name"] == target_category.name
         assert response.data["explanation"] == mock_worker_response["explanation"]
         assert response.data["log_saved"] is True
+        assert response.data["is_fallback"] is False
         assert mock_post.called
 
 
 @pytest.mark.django_db
 def test_non_admin_calls_proxy_forbidden(manager_user, regular_user, api_client):
-    # Manager
+    # Manager -> 403
     manager_client = auth_client_for(manager_user)
     res_mgr = manager_client.post(
         "/api/ai/suggest-category/",
@@ -75,7 +77,7 @@ def test_non_admin_calls_proxy_forbidden(manager_user, regular_user, api_client)
     )
     assert res_mgr.status_code == 403
 
-    # Regular User
+    # Regular User -> 403
     user_client = auth_client_for(regular_user)
     res_user = user_client.post(
         "/api/ai/suggest-category/",
@@ -84,7 +86,7 @@ def test_non_admin_calls_proxy_forbidden(manager_user, regular_user, api_client)
     )
     assert res_user.status_code == 403
 
-    # Unauthenticated
+    # Unauthenticated -> 401
     res_unauth = api_client.post(
         "/api/ai/suggest-category/",
         data={"name": "Dell Latitude"},
@@ -123,6 +125,37 @@ def test_validation_empty_or_oversized(admin_user, sample_categories):
 
 
 @pytest.mark.django_db
+def test_rate_limit_exceeded_returns_429(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+    target_category = sample_categories[0]
+
+    mock_worker_response = {
+        "request_id": "test-uuid-rate-limit",
+        "suggested_category_id": target_category.id,
+        "suggested_category_name": target_category.name,
+        "explanation": "Valid category suggestion",
+        "log_saved": False,
+    }
+
+    with patch.object(AiProxyService, "_post_request", return_value=mock_worker_response):
+        for _ in range(10):
+            res = client.post(
+                "/api/ai/suggest-category/",
+                data={"name": "Dell XPS 13"},
+                format="json",
+            )
+            assert res.status_code == 200
+
+        # 11th request must raise Throttled (429), NOT swallowed by fallback
+        res_throttled = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "Dell XPS 13"},
+            format="json",
+        )
+        assert res_throttled.status_code == 429
+
+
+@pytest.mark.django_db
 def test_worker_returns_401_maps_to_503(admin_user, sample_categories):
     client = auth_client_for(admin_user)
 
@@ -141,10 +174,63 @@ def test_worker_returns_401_maps_to_503(admin_user, sample_categories):
             format="json",
         )
         assert response.status_code == 503
+        assert "authentication failed" in str(response.data)
 
 
 @pytest.mark.django_db
-def test_worker_timeout_maps_to_504(admin_user, sample_categories):
+def test_worker_quota_429_code_3036_triggers_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    http_error = urllib.error.HTTPError(
+        url="http://127.0.0.1:8787/api/suggest-category",
+        code=429,
+        msg="Too Many Requests",
+        hdrs=None,
+        fp=MagicMock(read=lambda: b'{"code": 3036, "error": "Free quota exceeded"}'),
+    )
+
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon", "description": "Laptop doanh nhân"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"
+        assert response.data["log_saved"] is False
+        assert "Gợi ý tự động từ từ khóa phù hợp 'Laptop'" in response.data["explanation"]
+
+
+@pytest.mark.django_db
+def test_worker_capacity_429_code_3040_triggers_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    http_error = urllib.error.HTTPError(
+        url="http://127.0.0.1:8787/api/suggest-category",
+        code=429,
+        msg="Too Many Requests",
+        hdrs=None,
+        fp=MagicMock(read=lambda: b'{"code": 3040, "error": "Capacity constrained"}'),
+    )
+
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "Dell UltraSharp U2723QE", "description": "Màn hình 4K IPS Black"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[1].id
+        assert response.data["suggested_category_name"] == "Màn hình"
+        assert response.data["log_saved"] is False
+        assert "Gợi ý tự động từ từ khóa phù hợp 'Màn hình'" in response.data["explanation"]
+
+
+@pytest.mark.django_db
+def test_worker_timeout_triggers_fallback(admin_user, sample_categories):
     client = auth_client_for(admin_user)
 
     with patch("urllib.request.urlopen", side_effect=socket.timeout("Request timed out")):
@@ -153,7 +239,71 @@ def test_worker_timeout_maps_to_504(admin_user, sample_categories):
             data={"name": "MacBook Air M2"},
             format="json",
         )
-        assert response.status_code == 504
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"
+
+
+@pytest.mark.django_db
+def test_worker_connection_error_triggers_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Connection refused")):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "Màn hình LG 27UP850"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[1].id
+        assert response.data["suggested_category_name"] == "Màn hình"
+
+
+@pytest.mark.django_db
+def test_fallback_with_non_matching_keywords_raises_503(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    http_503_error = urllib.error.HTTPError(
+        url="http://127.0.0.1:8787/api/suggest-category",
+        code=503,
+        msg="Service Unavailable",
+        hdrs=None,
+        fp=MagicMock(read=lambda: b'{"error":"Worker temporarily unavailable"}'),
+    )
+
+    with patch("urllib.request.urlopen", side_effect=http_503_error):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "Vật dụng bí ẩn XYZ-999", "description": "Không rõ danh mục nào"},
+            format="json",
+        )
+        # Must raise controlled 503 ServiceUnavailable, NOT default to categories[0]
+        assert response.status_code == 503
+        assert "Không thể tự động phân loại danh mục. Vui lòng chọn thủ công." in str(response.data)
+
+
+@pytest.mark.django_db
+def test_circuit_breaker_open_uses_fallback_without_calling_urlopen(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    # Trip the circuit breaker
+    AiProxyService._failure_count = 3
+    AiProxyService._tripped_until = time.time() + 30
+    assert AiProxyService.is_circuit_open()
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"
+        assert not mock_urlopen.called
 
 
 @pytest.mark.django_db
@@ -169,27 +319,73 @@ def test_worker_500_and_circuit_breaker(admin_user, sample_categories):
     )
 
     with patch("urllib.request.urlopen", side_effect=http_500_error) as mock_urlopen:
-        # 1st failure -> 503
+        # 1st failure on non-matching keyword -> 503
         r1 = client.post("/api/ai/suggest-category/", data={"name": "Device 1"}, format="json")
         assert r1.status_code == 503
         assert AiProxyService._failure_count == 1
         assert not AiProxyService.is_circuit_open()
 
-        # 2nd failure -> 503
+        # 2nd failure on non-matching keyword -> 503
         r2 = client.post("/api/ai/suggest-category/", data={"name": "Device 2"}, format="json")
         assert r2.status_code == 503
         assert AiProxyService._failure_count == 2
         assert not AiProxyService.is_circuit_open()
 
-        # 3rd failure -> 503 and circuit trips
+        # 3rd failure on non-matching keyword -> 503 and circuit trips
         r3 = client.post("/api/ai/suggest-category/", data={"name": "Device 3"}, format="json")
         assert r3.status_code == 503
         assert AiProxyService._failure_count == 3
         assert AiProxyService.is_circuit_open()
 
-    # 4th call: Circuit is open -> fast fails with 503 without calling urlopen
+    # 4th call: Circuit is open -> immediate fallback on matching keyword without calling urlopen
     with patch("urllib.request.urlopen") as mock_urlopen_trip:
-        r4 = client.post("/api/ai/suggest-category/", data={"name": "Device 4"}, format="json")
-        assert r4.status_code == 503
-        assert "circuit breaker is open" in str(r4.data)
+        r4 = client.post("/api/ai/suggest-category/", data={"name": "MacBook Pro 16"}, format="json")
+        assert r4.status_code == 200
+        assert r4.data["is_fallback"] is True
+        assert r4.data["suggested_category_name"] == "Laptop"
         assert not mock_urlopen_trip.called
+
+    # 5th call: Circuit is open -> non-matching keyword raises controlled 503 without calling urlopen
+    with patch("urllib.request.urlopen") as mock_urlopen_trip_2:
+        r5 = client.post("/api/ai/suggest-category/", data={"name": "Device 4"}, format="json")
+        assert r5.status_code == 503
+        assert "Không thể tự động phân loại danh mục. Vui lòng chọn thủ công." in str(r5.data)
+        assert not mock_urlopen_trip_2.called
+
+
+@pytest.mark.django_db
+def test_empty_categories_in_db_raises_503(admin_user):
+    client = auth_client_for(admin_user)
+    Category.objects.all().delete()
+
+    response = client.post(
+        "/api/ai/suggest-category/",
+        data={"name": "MacBook Pro 16"},
+        format="json",
+    )
+    assert response.status_code == 503
+    assert "Không thể tự động phân loại danh mục. Vui lòng chọn thủ công." in str(response.data)
+
+
+@pytest.mark.django_db
+def test_worker_returns_unrecognized_category_triggers_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    mock_invalid_response = {
+        "request_id": "test-uuid-unrecognized",
+        "suggested_category_id": 999999,  # Non-existent in DB
+        "suggested_category_name": "Ghost Category",
+        "explanation": "Invalid category returned by worker",
+        "log_saved": True,
+    }
+
+    with patch.object(AiProxyService, "_post_request", return_value=mock_invalid_response):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "MacBook Air M2"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"

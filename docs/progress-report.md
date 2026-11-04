@@ -387,4 +387,77 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
   - Ứng dụng chính giữ nguyên cấu hình PostgreSQL (`USE_D1_DATABASE=False`).
   - Chưa chuyển dữ liệu thật lên Cloudflare D1 Cloud.
   - Không push/merge git, không thay đổi DNS, không kích hoạt dịch vụ trả phí, chưa mở Task 5 (R2/AI).
-- Kính gửi Codex nghiệm thu Task 4.
+- Codex đã nghiệm thu commit `bd1fcd2` (21/21 D1 integration tests 44.25s, 250/250 backend + domain unit tests 73.90s).
+
+---
+
+## 14. Báo Cáo Triển Khai Task 5: Cloudflare R2 Storage & Workers AI Proxy (Local/Mock First)
+
+- **Thời điểm:** 2026-11-04 21:05 (GMT+7)
+- **Trạng thái:** **Task 5 PASS 100% — Đã qua review độc lập Ponytail & sẵn sàng để Codex nghiệm thu.**
+- **Ranh giới nghiêm ngặt:** Kiểm thử local/mock hoàn toàn; chưa đụng dữ liệu thật, chưa deploy cloud, không kích hoạt R2 billing, không tiêu quota AI cloud, chưa mở Task 6.
+
+### 14.1. R2 Storage & Presigned URLs 15 Phút (`backend/apps/common/storage_backends.py`, `backend/apps/assets/views.py`)
+- Cấu hình TTL mặc định 900s qua `settings.R2_PRESIGNED_URL_EXPIRE_SECONDS` (default 900), hỗ trợ override qua tham số `expires_in` / `expire_seconds`.
+- Metadata `expires_in` trong response của action `download` trả về đúng 900s (khớp TTL thực tế, không còn hardcode 60s).
+- Disposition: inline cho ảnh, attachment cho tài liệu (`attachment; filename="..."`).
+- Database chỉ lưu relative object key (`assets/{id}/{kind}/{uuid}_{filename}`), tuyệt đối không lưu presigned URL.
+- Conditional write an toàn trên D1/PostgreSQL:
+  - Cập nhật ghi có điều kiện: `Asset.objects.filter(id=asset.id, **{kind: old_key}).exclude(status=Asset.Status.DISPOSED).update(...)`.
+  - Nếu `rows == 0` (tài sản đã DISPOSED hoặc bị thay đổi đồng thời): dọn sạch file mới vừa upload (`storage.delete(saved_key)`), trả về HTTP 400 Bad Request.
+  - Xử lý ngoại lệ commit: nếu `getattr(exc, 'committed', False) is True` (`D1IncompleteBatchError` báo đã committed), tuyệt đối không xóa mù object mới; nếu uncommitted DB failure thì dọn file mới.
+  - Xóa file cũ an toàn: chỉ xóa `old_key` sau khi DB cập nhật thành công (`rows == 1`), thông qua `transaction.on_commit` nếu trong transaction.
+
+### 14.2. Cloudflare Worker AI Proxy (`cloudflare-worker/src/index.js`, `wrangler.toml`, `tests/worker.test.js`)
+- Model cấu hình: `@cf/meta/llama-3.1-8b-instruct-fp8` (qua `env.AI_MODEL || '@cf/meta/llama-3.1-8b-instruct-fp8'`). Đã loại bỏ hoàn toàn model `@cf/meta/llama-3-8b-instruct` đã deprecated.
+- Chuẩn hóa mã lỗi theo tài liệu Cloudflare chính thức:
+  - Quota Free (code 3036 / HTTP 429): trả về HTTP 429 `{ error: 'Quota exceeded', code: 3036 }`.
+  - Capacity constrained (code 3040 / HTTP 429): trả về HTTP 429 `{ error: 'Capacity constrained', code: 3040 }`.
+  - Lỗi 10016 không coi là quota, trả về HTTP 503 `UNAVAILABLE`.
+  - Các lỗi khác: trả về HTTP 503 `{ error: 'AI service unavailable', code: 'UNAVAILABLE' }`.
+- Xác thực danh mục trả về:
+  - Loại bỏ hoàn toàn hành vi tự động chọn `categories[0]`.
+  - Nếu category ID hoặc category name không khớp với danh sách `categories` được phép: trả về HTTP 502 Bad Gateway `{ error: 'Invalid AI suggestion: category not in list', code: 'INVALID_SUGGESTION' }`.
+- Ghi log D1: lưu lịch sử vào bảng `ai_suggestion_logs` kèm `request_id`, trả về `log_saved: true/false` phản ánh đúng thực tế.
+
+### 14.3. AI Backend & Heuristic Keyword Fallback (`backend/apps/ai/services.py`, `serializers.py`, `views.py`)
+- Kích hoạt dự phòng (Heuristic Fallback) khi: upstream trả lỗi 429 (3036/3040), 5xx, timeout (`socket.timeout`), lỗi kết nối (`URLError`), hoặc circuit breaker đang MỞ.
+- Heuristic Keyword Matching:
+  - Phân tích từ khóa không phân biệt hoa thường và dấu tiếng Việt (`remove_accents`).
+  - Chỉ chọn từ các danh mục ĐANG TỒN TẠI trong CSDL (`Category.objects.all()`).
+  - Tuyệt đối không chọn bừa `categories[0]`. Nếu không tìm thấy từ khóa khớp hoặc danh mục CSDL trống, ném ngoại lệ có kiểm soát `ServiceUnavailable` (HTTP 503) để người dùng tự chọn thủ công trên UI.
+  - Phản hồi fallback trả về `is_fallback: True` kèm giải thích rõ ràng; phản hồi thành công từ Worker trả về `is_fallback: False`.
+- Bảo toàn xác thực & phân quyền:
+  - Rate limit người dùng: 10 req/phút/user trả về HTTP 429 `Throttled`.
+  - RBAC: chỉ Admin mới được gọi (HTTP 403 `PermissionDenied`).
+  - Input validation: kiểm tra tên/mô tả (HTTP 400 `ValidationError`).
+  - Các lỗi này không bao giờ bị nuốt thành fallback thành công.
+- Circuit breaker: tự động mở sau 3 lỗi mạng liên tiếp trong 30 giây. Khi mạch mở, trực tiếp sử dụng heuristic fallback mà không gọi mạng.
+
+### 14.4. Tổng Hợp Kết Quả Kiểm Thử Toàn Tuyến Sau Khi Tích Hợp
+1. **Kiểm thử Storage & AI Backend:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_storage.py backend/tests/test_ai_proxy.py backend/apps/assets/tests/test_r2_storage.py -v`
+   - Kết quả: **36 passed in 5.56s (100% PASS)**.
+2. **Kiểm thử Cloudflare Worker Suite:**
+   - Lệnh: `cd cloudflare-worker && npm test`
+   - Kết quả: **13 passed in 311ms (100% PASS)**.
+3. **Kiểm thử D1 Business Integrity & OCC Regression Suite:**
+   - Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_business_integrity.py --rehearsal -v`
+   - Kết quả: **21 passed in 25.22s (100% PASS)**.
+4. **Kiểm thử Baseline Backend Suite (PostgreSQL Test Container):**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/ -q`
+   - Kết quả: **193 passed in 65.93s (100% PASS)**.
+5. **Thẩm định Độc Lập Ponytail Review (Agent D):**
+   - **Verdict: PASS (Approved)**. 16/16 tiêu chí kỹ thuật đạt yêu cầu, tuân thủ nguyên tắc anti-bloat/ponytail.
+
+---
+
+## 15. Ranh Giới An Toàn & Đề Xuất Nghiệm Thu Task 5
+- **Ranh giới an toàn giữ vững 100%:**
+  - Production app tiếp tục vận hành trên PostgreSQL (`USE_D1_DATABASE=False`).
+  - Chưa chuyển dữ liệu thật lên Cloudflare D1 Cloud.
+  - Không deploy lên Cloudflare Pages/Worker production, không mở Cloudflare Tunnel.
+  - Không tạo/xóa bucket R2 cloud, không kích hoạt dịch vụ tính phí.
+  - Không gọi AI cloud tiêu thụ định mức 10.000 Neurons/ngày.
+  - Nhánh `feat/cloudflare-d1`: không worktree, không push/merge lên remote.
+- Kính gửi Codex nghiệm thu Task 5.

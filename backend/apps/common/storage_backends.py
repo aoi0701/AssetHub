@@ -25,14 +25,16 @@ def is_r2_configured():
     return bool(access_key and secret_key and bucket_name and endpoint_url)
 
 
-def generate_local_presigned_url(name, expire_seconds=60, filename=None, as_attachment=False):
+def generate_local_presigned_url(name, expire_seconds=None, filename=None, as_attachment=False):
     """
     Generate an HMAC-signed local download URL expiring in expire_seconds.
     Points to /api/media/download/.
     """
+    if expire_seconds is None:
+        expire_seconds = getattr(settings, 'R2_PRESIGNED_URL_EXPIRE_SECONDS', 900)
     expires_at = int(time.time()) + int(expire_seconds)
     secret = str(getattr(settings, 'SECRET_KEY', 'assethub-secret')).encode('utf-8')
-    raw = f"{name}:{expires_at}:{int(as_attachment)}:{filename or ''}"
+    raw = f"{name}:{expires_at}:{int(bool(as_attachment))}:{filename or ''}"
     sig = hmac.new(secret, raw.encode('utf-8'), hashlib.sha256).hexdigest()
     params = {
         'path': name,
@@ -80,7 +82,7 @@ class AttachmentStorage(Storage):
             return LocalDevAttachmentStorage(*args, **kwargs)
         return super().__new__(cls)
 
-    def get_presigned_download_url(self, name, expire_seconds=60, filename=None, as_attachment=False):
+    def get_presigned_download_url(self, name, expire_seconds=None, filename=None, as_attachment=None, kind=None):
         raise NotImplementedError
 
 
@@ -94,7 +96,15 @@ class LocalDevAttachmentStorage(FileSystemStorage, AttachmentStorage):
             location = getattr(settings, 'MEDIA_ROOT', None)
         super().__init__(location=location, base_url=base_url, *args, **kwargs)
 
-    def get_presigned_download_url(self, name, expire_seconds=60, filename=None, as_attachment=False):
+    def get_presigned_download_url(self, name, expire_seconds=None, filename=None, as_attachment=None, kind=None):
+        if expire_seconds is None:
+            expire_seconds = getattr(settings, 'R2_PRESIGNED_URL_EXPIRE_SECONDS', 900)
+        if as_attachment is None:
+            if kind is None:
+                parts = str(name).split('/')
+                if len(parts) >= 3 and parts[2] in ('image', 'document'):
+                    kind = parts[2]
+            as_attachment = (kind == 'document')
         return generate_local_presigned_url(
             name=name,
             expire_seconds=expire_seconds,
@@ -106,7 +116,7 @@ class LocalDevAttachmentStorage(FileSystemStorage, AttachmentStorage):
 class R2AttachmentStorage(S3Boto3Storage, AttachmentStorage):
     """
     Private storage backend using Cloudflare R2 / S3-compatible object storage.
-    Enforces private ACL and generates presigned S3 URLs expiring in 60s.
+    Enforces private ACL and generates presigned S3 URLs expiring in 900s default.
     """
     default_acl = 'private'
 
@@ -141,7 +151,15 @@ class R2AttachmentStorage(S3Boto3Storage, AttachmentStorage):
     def boto3_client(self, value):
         self._boto3_client = value
 
-    def get_presigned_download_url(self, name, expire_seconds=60, filename=None, as_attachment=False):
+    def get_presigned_download_url(self, name, expire_seconds=None, filename=None, as_attachment=None, kind=None):
+        if expire_seconds is None:
+            expire_seconds = getattr(settings, 'R2_PRESIGNED_URL_EXPIRE_SECONDS', 900)
+        if as_attachment is None:
+            if kind is None:
+                parts = str(name).split('/')
+                if len(parts) >= 3 and parts[2] in ('image', 'document'):
+                    kind = parts[2]
+            as_attachment = (kind == 'document')
         fn = filename or os.path.basename(name)
         disposition = f'attachment; filename="{fn}"' if as_attachment else 'inline'
         params = {
@@ -153,7 +171,7 @@ class R2AttachmentStorage(S3Boto3Storage, AttachmentStorage):
         return client.generate_presigned_url(
             'get_object',
             Params=params,
-            ExpiresIn=expire_seconds,
+            ExpiresIn=int(expire_seconds),
         )
 
 

@@ -272,7 +272,7 @@ def test_download_permissions_admin_manager_user(
     admin_res = admin_client.get(f"/api/assets/{asset_it.id}/attachments/image/download/")
     assert admin_res.status_code == 200
     assert "download_url" in admin_res.data
-    assert admin_res.data["expires_in"] == 60
+    assert admin_res.data["expires_in"] == 900
     assert admin_res.headers.get("Cache-Control") == "no-store"
 
     # 2. Manager receives 200 for own dept, 403/404 for other dept
@@ -310,7 +310,7 @@ def test_orphan_file_cleaned_up_if_database_save_fails(admin_user, available_ass
     storage = AttachmentStorage()
     img_file = make_real_image(filename="orphan_test.png")
 
-    with patch.object(Asset, 'save', side_effect=RuntimeError("Database crashed during save")):
+    with patch('django.db.models.query.QuerySet.update', side_effect=RuntimeError("Database crashed during save")):
         with pytest.raises(RuntimeError):
             client.post(
                 f"/api/assets/{available_asset.id}/attachments/",

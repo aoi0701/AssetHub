@@ -75,7 +75,7 @@ export default {
     const systemPrompt = `Bạn là trợ lý phân loại tài sản thiết bị. Hãy chọn danh mục phù hợp nhất từ danh sách sau:\n${categoryListStr}\nChỉ trả về JSON hợp lệ theo đúng cấu trúc: {"suggested_category_id": <id>, "explanation": "<giải thích ngắn gọn>"}`;
     const userPrompt = `Tên tài sản: ${name}\nMô tả: ${description || 'Không có mô tả'}`;
 
-    const model = env.AI_MODEL || '@cf/meta/llama-3-8b-instruct';
+    const model = env.AI_MODEL || '@cf/meta/llama-3.1-8b-instruct-fp8';
     let aiOutput;
     try {
       aiOutput = await env.AI.run(model, {
@@ -85,10 +85,42 @@ export default {
         ],
       });
     } catch (err) {
-      return new Response(JSON.stringify({ error: 'AI service unavailable' }), {
-        status: 503,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      const errStr = `${String(err)} ${err?.message || ''}`;
+      const errCode = err && typeof err === 'object' ? err.code : undefined;
+      const is10016 = errCode === 10016 || String(errCode) === '10016' || errStr.includes('10016');
+
+      if (
+        !is10016 &&
+        (errCode === 3036 ||
+          String(errCode).includes('3036') ||
+          errStr.includes('3036') ||
+          /quota/i.test(errStr))
+      ) {
+        return new Response(JSON.stringify({ error: 'Quota exceeded', code: 3036 }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (
+        errCode === 3040 ||
+        String(errCode).includes('3040') ||
+        errStr.includes('3040') ||
+        /capacity/i.test(errStr)
+      ) {
+        return new Response(JSON.stringify({ error: 'Capacity constrained', code: 3040 }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({ error: 'AI service unavailable', code: 'UNAVAILABLE' }),
+        {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
     }
 
     let suggestedId = null;
@@ -113,7 +145,10 @@ export default {
       // JSON parsing fallback
     }
 
-    let matchedCategory = categories.find((c) => Number(c.id) === Number(suggestedId));
+    let matchedCategory = null;
+    if (suggestedId !== null && !isNaN(suggestedId)) {
+      matchedCategory = categories.find((c) => Number(c.id) === Number(suggestedId));
+    }
     if (!matchedCategory) {
       // Fallback matching by category name
       matchedCategory = categories.find(
@@ -121,9 +156,19 @@ export default {
           typeof rawResponse === 'string' &&
           rawResponse.toLowerCase().includes(c.name.toLowerCase())
       );
-      if (!matchedCategory) {
-        matchedCategory = categories[0];
-      }
+    }
+
+    if (!matchedCategory) {
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid AI suggestion: category not in list',
+          code: 'INVALID_SUGGESTION',
+        }),
+        {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
     }
 
     const finalCategoryId = matchedCategory.id;

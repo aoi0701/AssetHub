@@ -134,10 +134,12 @@ R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID')
 R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY')
 R2_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME')
 R2_ENDPOINT_URL = os.environ.get('R2_ENDPOINT_URL')
+R2_PRESIGNED_URL_EXPIRE_SECONDS = int(os.environ.get('R2_PRESIGNED_URL_EXPIRE_SECONDS', '900'))
 
 # Cloudflare Worker AI microservice configuration
 AI_SERVICE_TOKEN = os.environ.get('AI_SERVICE_TOKEN', 'dev-ai-secret-token-2026')
 AI_WORKER_URL = os.environ.get('AI_WORKER_URL', 'http://127.0.0.1:8787')
+AI_MODEL = os.environ.get('AI_MODEL', '@cf/meta/llama-3.1-8b-instruct-fp8')
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

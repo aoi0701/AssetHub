@@ -148,7 +148,7 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 | `backend/apps/assets/tests/test_d1_business_integrity.py` | **Task 4** | Test OCC, `_assert_guard`, sinh mã, concurrency races, chống orphan log |
 | `backend/apps/common/storage_backends.py` | **Task 5 (Modify)** | Sửa backend R2 S3 hiện tại, cấu hình 900s, bảo toàn 13 passing unit tests |
 | `backend/apps/ai/services.py` | **Task 5** | AI Proxy service kết nối Workers AI kèm 3 tầng Fallback |
-| `cloudflare-worker/ai/src/index.js` | **Task 5** | Worker AI Proxy service (Llama 3.1 8B Instruct FP8) |
+| `cloudflare-worker/src/index.js` | **Task 5** | Worker AI Proxy service (Llama 3.1 8B Instruct FP8) & DB Logging |
 | `backend/apps/assets/tests/test_r2_storage.py` | **Task 5** | Test R2 upload, presigned download và fallback AI |
 | `frontend/public/_headers` & `frontend/public/_redirects` | **Task 6** | Cấu hình bảo mật CDN và SPA rewrite cho Pages |
 | `frontend/vite.config.js` | **Task 6** | Cấu hình build Vite cho Cloudflare Pages |
@@ -490,65 +490,64 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
   git commit -m "feat(services): implement d1 atomic guarded batch occ for asset and request workflows"
   ```
 
-- [ ] **Step 6: Sửa các lỗi hồi quy Task 4 theo review 458c3a5**
-  - [ ] Agent A: Giữ holder trong `confirm_damage_report`; sửa predicate nullable department ở `propose_disposal` và `confirm_disposal` cho kho chung (`department_id IS NULL`).
-  - [ ] Agent B: Bổ sung guard requester active/cùng phòng cho cả RETURN và DAMAGE_REPORT; bổ sung guard category của asset khớp requested_category tại write trong batch ALLOCATE.
-  - [ ] Agent C: Bỏ hack sửa state giữa workflow trong `test_d1_business_integrity.py`; test disposal kho chung; test interleaving requester/category; test rollback thực của `approve_request` qua D1 trigger test-only.
+- [x] **Step 6: Sửa các lỗi hồi quy Task 4 theo review 458c3a5**
+  - [x] Agent A: Giữ holder trong `confirm_damage_report`; sửa predicate nullable department ở `propose_disposal` và `confirm_disposal` cho kho chung (`department_id IS NULL`).
+  - [x] Agent B: Bổ sung guard requester active/cùng phòng cho cả RETURN và DAMAGE_REPORT; bổ sung guard category của asset khớp requested_category tại write trong batch ALLOCATE.
+  - [x] Agent C: Bỏ hack sửa state giữa workflow trong `test_d1_business_integrity.py`; test disposal kho chung; test interleaving requester/category; test rollback thực của `approve_request` qua D1 trigger test-only.
 
-- [ ] **Step 7: Verification và Commit Task 4 Regressions**
-  - Chạy đầy đủ: unit mock, PG test baseline, và D1 local integration.
-  - Commit: `fix(services): preserve holder on damage confirm, fix pool disposal and guard requester/category at write`.
+- [x] **Step 7: Verification và Commit Task 4 Regressions**
+  - Chạy đầy đủ: unit mock, PG test baseline, và D1 local integration. Codex đã nghiệm thu độc lập commit `bd1fcd2` (21/21 D1 integration tests 44.25s, 250/250 backend + domain unit tests 73.90s).
+  - Commit: `bd1fcd2` `fix(services): retain holder on damage confirm, support pool disposal, and guard write-time requester and category`.
 
 ---
 
-### Task 5: Cloudflare R2 Storage & Workers AI Category Suggester
+### Task 5: Cloudflare R2 Storage & Workers AI Category Suggester (Local/Mock First)
 
-> **Mục tiêu:** Tùy biến `backend/apps/common/storage_backends.py` hiện có (bảo toàn 13 passing unit tests và local fallback), cấu hình Presigned URL 15 phút (900s), tích hợp Workers AI với model `@cf/meta/llama-3.1-8b-instruct-fp8` (fallback `@cf/meta/llama-3-8b-instruct`) kèm kiến trúc dự phòng 3 tầng (3-Tier Resilience Architecture) bảo đảm không làm gián đoạn UI khi cạn kiệt định mức 10.000 Neurons/ngày. Ranh giới nghiêm ngặt: kiểm thử mock/local song song; không checkout R2 trả phí, không đột biến bucket production, không sửa bản ghi DNS.
+> **Mục tiêu:** Mở rộng `backend/apps/common/storage_backends.py` hiện có, cấu hình Presigned URL 15 phút (900s qua `R2_PRESIGNED_URL_EXPIRE_SECONDS`), `expires_in` metadata trả về khớp TTL thực; xử lý an toàn upload/replace trên D1 bằng conditional write `exclude(status=DISPOSED)` + OCC, không xóa file cũ trước khi DB commit thành công, dọn file mới khi DB thất bại rõ ràng và không xóa mù khi `D1IncompleteBatchError(committed=True)`. Tích hợp Workers AI tại `cloudflare-worker/src/index.js` (dùng model `@cf/meta/llama-3.1-8b-instruct-fp8`, phân biệt 3036 Quota và 3040 Capacity theo tài liệu Cloudflare chính thức, ghi log `ai_suggestion_logs`), kèm backend `AiProxyService` có heuristic keyword fallback (chỉ chọn category ID tồn tại trong DB, không chọn bừa `categories[0]`, trả `is_fallback: True/False`).
+> Ranh giới nghiêm ngặt: Kiểm thử local/mock trước; không checkout R2 trả phí, không gọi AI cloud tiêu quota, không sửa DNS/Pages domain.
 > 
-> **Điều kiện tiên quyết:** Có thể thực hiện độc lập hoặc song song với Task 3 & 4.
+> **Điều kiện tiên quyết:** Task 4 đã được Codex nghiệm thu.
 
 **Files:**
+- Modify: `backend/assethub_api/settings.py` & `.env.example`
 - Modify: `backend/apps/common/storage_backends.py`
 - Modify: `backend/apps/assets/views.py`
-- Modify: `backend/apps/ai/services.py`
-- Create: `cloudflare-worker/ai/src/index.js`
-- Create: `backend/apps/assets/tests/test_r2_storage.py`
+- Create/Modify: `backend/apps/assets/tests/test_r2_storage.py` & `backend/tests/test_storage.py`
+- Modify: `backend/apps/ai/services.py`, `backend/apps/ai/serializers.py`, `backend/apps/ai/views.py`
+- Modify: `backend/tests/test_ai_proxy.py`
+- Modify: `cloudflare-worker/src/index.js`, `cloudflare-worker/wrangler.toml`, `cloudflare-worker/tests/worker.test.js`
 
 **Interfaces:**
-- Consumes: Cấu hình R2 S3 credentials, binding `env.AI` trong Worker.
-- Produces: Endpoint tải file có chữ ký SigV4, endpoint gợi ý danh mục AI kèm `is_fallback: True`.
+- Consumes: Cấu hình R2 S3 credentials, binding `env.AI` và `env.DB` trong Worker.
+- Produces: Endpoint tải/upload file presigned URL SigV4 900s, endpoint gợi ý danh mục AI kèm `is_fallback: True/False` và Worker logging `ai_suggestion_logs`.
 
-- [ ] **Step 1: Viết failing test cho R2 Presigned URLs và AI 3-Tier Fallback**
-  Trong `backend/apps/assets/tests/test_r2_storage.py`:
-  - Test sinh presigned URL 15 phút (mặc định 900s, cho phép override tham số) với tham số `ResponseContentDisposition` tương ứng cho ảnh (`inline`) và tài liệu (`attachment`).
-  - Test bảo toàn 13 tests hiện có trong `backend/tests/test_storage.py` (LocalDev fallback, validation Pillow/pypdf).
-  - Test AI Proxy Service kích hoạt dự phòng 3 tầng:
-    - **Tầng 1 (Circuit Breaker & Throttling):** Giới hạn tốc độ 10 requests/phút/user; ngắt tạm thời 30 giây khi gặp 3 lỗi mạng liên tiếp.
-    - **Tầng 2 (Quota Exhaustion Trap):** Worker bắt lỗi `env.AI.run()` (code 10016 / limit exceeded) trả về `HTTP 429 QUOTA_EXHAUSTED`.
-    - **Tầng 3 (Heuristic Keyword Matching):** Khi gặp 429 hoặc lỗi mạng, tự động phân tích từ khóa theo `CATEGORY_KEYWORDS` và trả về kết quả kèm `is_fallback: True`, không ném exception làm hỏng UI.
+- [x] **Step 1: Cấu hình Settings và Phân công Song song A / B / C**
+  - Coordinator: Khai báo `R2_PRESIGNED_URL_EXPIRE_SECONDS = 900` và `AI_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8'` trong `settings.py` và `.env.example`.
+  - Phân công file độc lập:
+    - Agent A: Storage & Attachments (`storage_backends.py`, `assets/views.py`, `test_r2_storage.py`, `test_storage.py`).
+    - Agent B: AI Backend & Heuristic Fallback (`apps/ai/services.py`, `serializers.py`, `views.py`, `test_ai_proxy.py`).
+    - Agent C: Cloudflare Worker AI & Logging (`cloudflare-worker/src/index.js`, `wrangler.toml`, `cloudflare-worker/tests/worker.test.js`).
 
-- [ ] **Step 2: Chạy kiểm thử để xác nhận thất bại (Red)**
-  ```bash
-  docker compose exec backend pytest apps/assets/tests/test_r2_storage.py -v
-  ```
-  Mong đợi: FAIL.
+- [x] **Step 2: Agent A — R2 Presigned URLs, TTL 900s & D1 Safe Upload/Replace**
+  - `storage_backends.py`: Đọc `R2_PRESIGNED_URL_EXPIRE_SECONDS` (default 900s), SigV4, inline cho ảnh, attachment cho tài liệu. Giữ `LocalDevAttachmentStorage` fallback và tham số override.
+  - `apps/assets/views.py`: Action `download` trả `expires_in: 900` khớp TTL. Action `attachments` dùng conditional write `exclude(status=DISPOSED)` + OCC; chỉ dọn file mới nếu DB fail chắc chắn; chỉ xóa file cũ sau khi DB commit thành công; không xóa mù khi `D1IncompleteBatchError` báo đã committed.
+  - Viết unit tests mock S3 client và D1 integration tests: verify 900s TTL, inline vs attachment, conditional update, dọn rác đúng ngữ nghĩa.
 
-- [ ] **Step 3: Cập nhật `storage_backends.py` và `AiProxyService` với 3 Tầng Dự Phòng**
-  - Cập nhật `backend/apps/common/storage_backends.py`: bổ sung `R2_PRESIGNED_EXPIRATION_SECONDS` (mặc định 900s), giữ nguyên `AttachmentStorage` factory và `LocalDevAttachmentStorage`.
-  - Cập nhật action `download` trong `apps/assets/views.py` sinh URL có chữ ký qua `boto3`.
-  - Cập nhật `AiProxyService` trong `apps/ai/services.py`: Cài đặt bộ đếm lỗi circuit breaker, bắt mã lỗi HTTP 429 từ Worker AI Proxy, và phân loại theo bảng từ khóa `CATEGORY_KEYWORDS`.
-  - Tạo `cloudflare-worker/ai/src/index.js` sử dụng model `@cf/meta/llama-3.1-8b-instruct-fp8`, bọc `env.AI.run()` trong try/catch để chuyển đổi mã lỗi 10016 thành HTTP 429.
+- [x] **Step 3: Agent B — AI Backend, Error Mapping & Heuristic Fallback**
+  - `apps/ai/services.py`: Nhận diện mã 3036 (Quota) và 3040 (Capacity) từ Worker; circuit breaker 3 lỗi -> 30s; rate limit 10 req/min/user (HTTP 429).
+  - Khi upstream lỗi hoặc circuit breaker mở: Heuristic keyword fallback trên danh mục thực tế trong DB; không chọn `categories[0]`; nếu không khớp trả controlled error.
+  - `serializers.py`: Thêm `is_fallback: bool` và `explanation: str`.
+  - Viết unit tests: test success (`is_fallback=False`), quota/capacity fallback (`is_fallback=True`), breaker trip & recovery, auth/validation preservation.
 
-- [ ] **Step 4: Chạy kiểm thử xác nhận thành công (Green)**
-  ```bash
-  docker compose exec backend pytest apps/assets/tests/test_r2_storage.py tests/test_storage.py -v
-  ```
-  Mong đợi: PASS 100%.
+- [x] **Step 4: Agent C — Cloudflare Worker AI & DB Logging**
+  - `cloudflare-worker/src/index.js`: Model `@cf/meta/llama-3.1-8b-instruct-fp8`; bọc `env.AI.run()` bắt lỗi 3036 (Quota) và 3040 (Capacity) trả HTTP 429 rõ ràng; validate gợi ý thuộc danh mục hợp lệ (không fallback về item đầu tiên); log vào `ai_suggestion_logs` kèm `request_id`.
+  - `wrangler.toml`: Cập nhật `AI_MODEL`.
+  - `cloudflare-worker/tests/worker.test.js`: Mock `env.AI` và `env.DB` test auth, input validation, quota, capacity, invalid output, logging success/failure.
 
-- [ ] **Step 5: Commit Task 5**
-  ```bash
-  git add backend/apps/common/storage_backends.py backend/apps/assets/views.py backend/apps/ai/services.py cloudflare-worker/ai/ backend/apps/assets/tests/test_r2_storage.py
-  git commit -m "feat(edge): integrate cloudflare r2 private presigned storage and workers ai with 3-tier heuristic fallback"
+- [x] **Step 5: Review Độc Lập D & Coordinator Tích Hợp Verification**
+  - Agent D độc lập review diff và kết nối production code: R2 cleanup lifecycle, B↔C contract, không tạo file dư thừa.
+  - Coordinator chạy kiểm thử tổng hợp (storage, AI backend, worker tests, D1 business integrity regression).
+  - Cập nhật `docs/progress-report.md`, commit local `feat(r2-ai): implement r2 private presigned storage and workers ai with heuristic fallback`.
   ```
 
 ---

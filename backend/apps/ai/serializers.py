@@ -17,3 +17,4 @@ class AiCategorySuggestResponseSerializer(serializers.Serializer):
     suggested_category_name = serializers.CharField()
     explanation = serializers.CharField(allow_blank=True)
     log_saved = serializers.BooleanField()
+    is_fallback = serializers.BooleanField(default=False)
