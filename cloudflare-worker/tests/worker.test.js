@@ -413,4 +413,170 @@ describe('Cloudflare AI Worker', () => {
       expect.any(String)
     );
   });
+
+  it('rejects AI output with suggested_category_id: 1.9 with 502 INVALID_SUGGESTION and no DB log', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: JSON.stringify({
+        suggested_category_id: 1.9,
+        explanation: 'Float ID test',
+      }),
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(502);
+    const data = await res.json();
+    expect(data).toEqual({
+      error: 'Invalid AI suggestion: category not in list',
+      code: 'INVALID_SUGGESTION',
+    });
+    expect(env.DB.prepare).not.toHaveBeenCalled();
+  });
+
+  it('rejects AI output with suggested_category_id: Infinity with 502 INVALID_SUGGESTION and no DB log', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: {
+        suggested_category_id: Infinity,
+        explanation: 'Infinity test',
+      },
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(502);
+    const data = await res.json();
+    expect(data).toEqual({
+      error: 'Invalid AI suggestion: category not in list',
+      code: 'INVALID_SUGGESTION',
+    });
+    expect(env.DB.prepare).not.toHaveBeenCalled();
+  });
+
+  it('rejects AI output with suggested_category_id: true with 502 INVALID_SUGGESTION and no DB log', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: JSON.stringify({
+        suggested_category_id: true,
+        explanation: 'Boolean test',
+      }),
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(502);
+    const data = await res.json();
+    expect(data).toEqual({
+      error: 'Invalid AI suggestion: category not in list',
+      code: 'INVALID_SUGGESTION',
+    });
+    expect(env.DB.prepare).not.toHaveBeenCalled();
+  });
+
+  it('rejects AI output with suggested_category_id: [1] with 502 INVALID_SUGGESTION and no DB log', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: JSON.stringify({
+        suggested_category_id: [1],
+        explanation: 'Array test',
+      }),
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(502);
+    const data = await res.json();
+    expect(data).toEqual({
+      error: 'Invalid AI suggestion: category not in list',
+      code: 'INVALID_SUGGESTION',
+    });
+    expect(env.DB.prepare).not.toHaveBeenCalled();
+  });
+
+  it('accepts AI output with suggested_category_id: "1" (valid string integer) with 200, category 1', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: JSON.stringify({
+        suggested_category_id: '1',
+        explanation: 'String integer test',
+      }),
+    });
+
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    const bindMock = vi.fn().mockReturnValue({ run: runMock });
+    env.DB.prepare = vi.fn().mockReturnValue({ bind: bindMock });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.suggested_category_id).toBe(1);
+    expect(data.suggested_category_name).toBe('Laptop');
+    expect(env.DB.prepare).toHaveBeenCalled();
+  });
+
+  it('accepts AI output with suggested_category_id: 1 (valid integer) with 200, category 1', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: JSON.stringify({
+        suggested_category_id: 1,
+        explanation: 'Valid integer test',
+      }),
+    });
+
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    const bindMock = vi.fn().mockReturnValue({ run: runMock });
+    env.DB.prepare = vi.fn().mockReturnValue({ bind: bindMock });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.suggested_category_id).toBe(1);
+    expect(data.suggested_category_name).toBe('Laptop');
+    expect(env.DB.prepare).toHaveBeenCalled();
+  });
 });

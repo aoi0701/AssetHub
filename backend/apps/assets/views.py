@@ -474,24 +474,11 @@ class AssetViewSet(viewsets.ModelViewSet):
                 # State 2: Definitely uncommitted -> Safe to delete saved_key
                 storage.delete(saved_key)
             else:
-                # State 3: Unknown commit state (committed is None / missing)
-                try:
-                    persisted_key = (
-                        Asset.objects.filter(id=asset.id)
-                        .values_list(kind, flat=True)
-                        .first()
-                    )
-                    if persisted_key == saved_key:
-                        # DB actually committed! DO NOT delete saved_key!
-                        if old_key and old_key != saved_key:
-                            storage.delete(old_key)
-                    else:
-                        # DB definitely did NOT record saved_key. Clean up.
-                        storage.delete(saved_key)
-                except Exception:
-                    # Readback itself raised an exception; state remains completely unknown.
-                    # Retain saved_key (temporary orphan) to prevent active reference with missing file.
-                    pass
+                # State 3: Unknown commit state (committed is None / missing, e.g. timeout / network lost ack).
+                # DO NOT delete saved_key and DO NOT delete old_key!
+                # Readback seeing old key is NOT proof that the mutation will not commit later (late commit).
+                # Preserving both files as temporary orphans guarantees zero data loss (no dangling pointer).
+                pass
             raise
 
         if rows == 0:

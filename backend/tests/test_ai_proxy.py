@@ -510,3 +510,91 @@ def test_invalid_suggested_category_id_types_non_matching_raises_503(admin_user,
         # Never raises ValueError / HTTP 500, raises controlled 503
         assert response.status_code == 503
         assert "Không thể tự động phân loại danh mục. Vui lòng chọn thủ công." in str(response.data)
+
+
+@pytest.mark.django_db
+def test_upstream_returns_float_id_triggers_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+    mock_worker_response = {
+        "request_id": "test-float-1.9",
+        "suggested_category_id": 1.9,
+        "suggested_category_name": "Laptop",
+        "explanation": "Float 1.9 id from upstream",
+        "log_saved": False,
+    }
+    with patch.object(AiProxyService, "_post_request", return_value=mock_worker_response):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon", "description": "Laptop doanh nhân"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"
+
+
+@pytest.mark.django_db
+def test_upstream_returns_inf_id_triggers_fallback_no_overflow_error(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+    mock_worker_response = {
+        "request_id": "test-inf-id",
+        "suggested_category_id": float("inf"),
+        "suggested_category_name": "Laptop",
+        "explanation": "Infinity id from upstream",
+        "log_saved": False,
+    }
+    with patch.object(AiProxyService, "_post_request", return_value=mock_worker_response):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon", "description": "Laptop doanh nhân"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"
+
+
+@pytest.mark.django_db
+def test_upstream_returns_boolean_id_triggers_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+    mock_worker_response = {
+        "request_id": "test-bool-true",
+        "suggested_category_id": True,
+        "suggested_category_name": "Laptop",
+        "explanation": "Boolean True id from upstream",
+        "log_saved": False,
+    }
+    with patch.object(AiProxyService, "_post_request", return_value=mock_worker_response):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon", "description": "Laptop doanh nhân"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"
+
+
+@pytest.mark.django_db
+def test_upstream_returns_array_id_triggers_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+    mock_worker_response = {
+        "request_id": "test-array-id",
+        "suggested_category_id": [1],
+        "suggested_category_name": "Laptop",
+        "explanation": "Array [1] id from upstream",
+        "log_saved": False,
+    }
+    with patch.object(AiProxyService, "_post_request", return_value=mock_worker_response):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon", "description": "Laptop doanh nhân"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"

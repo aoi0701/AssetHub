@@ -300,6 +300,9 @@ def d1_env(django_db_blocker):
         settings.DATABASE_ROUTERS = [
             "apps.assets.tests.test_d1_business_integrity.D1BusinessTestRouter"
         ]
+        from django.db import router
+        router._routers = None
+        router.__dict__.pop("routers", None)
 
         seed_business_fixtures(ALIAS)
 
@@ -321,12 +324,19 @@ def d1_env(django_db_blocker):
                             connections[a].close()
                         except Exception:
                             pass
+                        try:
+                            del connections[a]
+                        except Exception:
+                            pass
                 settings.DATABASES.pop(ALIAS, None)
                 connections.databases.pop(ALIAS, None)
                 if orig_default:
                     settings.DATABASES["default"] = orig_default
                     connections.databases["default"] = orig_default
                 settings.DATABASE_ROUTERS = orig_routers
+                from django.db import router
+                router._routers = None
+                router.__dict__.pop("routers", None)
 
 
 @pytest.fixture(autouse=True)

@@ -1,3 +1,17 @@
+function parsePositiveInteger(val) {
+  if (typeof val === 'number') {
+    return (Number.isInteger(val) && Number.isFinite(val) && val > 0 && Number.isSafeInteger(val)) ? val : null;
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const num = Number(trimmed);
+      return (Number.isSafeInteger(num) && num > 0) ? num : null;
+    }
+  }
+  return null;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -127,28 +141,38 @@ export default {
     let explanation = '';
     let parsedObj = null;
 
-    const rawResponse =
-      typeof aiOutput === 'string'
-        ? aiOutput
-        : aiOutput?.response || (typeof aiOutput === 'object' ? JSON.stringify(aiOutput) : '');
+    if (
+      typeof aiOutput === 'object' &&
+      aiOutput !== null &&
+      typeof aiOutput.response === 'object' &&
+      aiOutput.response !== null
+    ) {
+      parsedObj = aiOutput.response;
+    } else {
+      const rawResponse =
+        typeof aiOutput === 'string'
+          ? aiOutput
+          : aiOutput?.response || (typeof aiOutput === 'object' ? JSON.stringify(aiOutput) : '');
 
-    try {
-      const jsonMatch = typeof rawResponse === 'string' ? rawResponse.match(/\{[\s\S]*\}/) : null;
-      parsedObj = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(rawResponse);
-      const rawId = parsedObj?.suggested_category_id ?? parsedObj?.category_id;
-      if (rawId !== undefined && rawId !== null) {
-        suggestedId = Number(rawId);
+      try {
+        const jsonMatch = typeof rawResponse === 'string' ? rawResponse.match(/\{[\s\S]*\}/) : null;
+        parsedObj = jsonMatch ? JSON.parse(jsonMatch[0]) : (typeof rawResponse === 'string' ? JSON.parse(rawResponse) : null);
+      } catch {
+        // JSON parsing fallback
       }
+    }
+
+    if (parsedObj && typeof parsedObj === 'object') {
+      const rawId = parsedObj?.suggested_category_id ?? parsedObj?.category_id;
+      suggestedId = parsePositiveInteger(rawId);
       if (parsedObj?.explanation) {
         explanation = String(parsedObj.explanation);
       }
-    } catch {
-      // JSON parsing fallback
     }
 
     let matchedCategory = null;
-    if (suggestedId !== null && !isNaN(suggestedId)) {
-      matchedCategory = categories.find((c) => Number(c.id) === Number(suggestedId));
+    if (suggestedId !== null) {
+      matchedCategory = categories.find((c) => Number(c.id) === suggestedId);
     }
     if (!matchedCategory && parsedObj && typeof parsedObj === 'object') {
       const catNameProp =

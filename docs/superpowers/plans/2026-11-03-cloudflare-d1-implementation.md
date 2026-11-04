@@ -557,8 +557,17 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 - [x] **Step 7: Verification và Commit Task 5 Fixes**
   - Chạy đầy đủ: unit mock, PG test baseline, D1 local rehearsal attachments, Worker vitest.
   - Reviewer độc lập D thẩm định diff và 5 ca hồi quy.
-  - Commit: `fix(r2-ai): resolve upload unknown commit cleanup, download ttl validation, ai auth breaker and category parsing`.
-  ```
+  - Commit: `ac29b29` `fix(r2-ai): resolve upload unknown commit cleanup, download ttl validation, ai auth breaker and category parsing`.
+
+- [x] **Step 8: Hoàn Tất Sửa Task 5 Theo Review ac29b29 (Unknown Commit Cleanup, Strict Integer ID & D1 Fixture Isolation)**
+  - [x] Agent A: Bảo vệ pending/late commit khi trạng thái commit chưa biết (unknown state) trong `views.py` — giữ cả tệp mới và tệp cũ, không xóa mù khi readback thấy key cũ; cập nhật unit tests trong `test_r2_storage.py` tuân thủ hợp đồng bảo toàn dữ liệu.
+  - [x] Agent B: Validate số nguyên dương trước mọi ép kiểu số trong `cloudflare-worker/src/index.js` và `backend/apps/ai/services.py`; từ chối float (`1.9`), non-finite (`Infinity`), boolean (`true`), array (`[1]`); Worker trả 502 `INVALID_SUGGESTION` (không ghi log); Backend kích hoạt heuristic fallback an toàn không gây `OverflowError`/500; bổ sung tests trong `worker.test.js` và `test_ai_proxy.py`.
+  - [x] Agent C: Khôi phục trọn vẹn router lifecycle (`router._routers = None`, `router.__dict__.pop('routers', None)`) và connection cache trong `test_d1_attachment_storage.py` & `test_d1_business_integrity.py`; bổ sung regression test late commit với timing hook; chứng minh 2 test suite pass trong cùng tiến trình ở cả 2 thứ tự chạy.
+
+- [x] **Step 9: Review Độc Lập (Agent D) & Verification Nghiệm Thu Cuối Task 5**
+  - Thẩm định độc lập bằng ponytail-review và requesting-code-review: Verdict SHIP.
+  - Verification toàn diện: PG baseline (227 tests), storage/AI tests (61 tests), Worker vitest (21 tests), D1 rehearsal song hành cả 2 chiều (28 tests mỗi chiều).
+  - Cập nhật progress report và tạo commit local trên `feat/cloudflare-d1`.
 
 ---
 

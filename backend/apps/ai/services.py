@@ -24,6 +24,22 @@ def remove_accents(s: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c)).replace("đ", "d").replace("Đ", "D")
 
 
+def parse_positive_int_id(val):
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, int):
+        return val if val > 0 else None
+    if isinstance(val, str):
+        s = val.strip()
+        if s.isdigit():
+            try:
+                n = int(s)
+                return n if n > 0 else None
+            except (ValueError, OverflowError):
+                return None
+    return None
+
+
 FALLBACK_KEYWORD_RULES = [
     # Laptop / Notebook
     (
@@ -414,16 +430,13 @@ class AiProxyService:
         if not isinstance(data, dict):
             return cls._heuristic_fallback(request_id=request_id, name=cleaned_name, description=cleaned_description)
 
-        suggested_id = data.get("suggested_category_id")
-        parsed_id = None
-        if suggested_id is not None and not isinstance(suggested_id, bool):
+        parsed_id = parse_positive_int_id(data.get("suggested_category_id"))
+        category = None
+        if parsed_id is not None:
             try:
-                val = int(suggested_id)
-                if val > 0:
-                    parsed_id = val
-            except (ValueError, TypeError):
-                parsed_id = None
-        category = Category.objects.filter(id=parsed_id).first() if parsed_id is not None else None
+                category = Category.objects.filter(id=parsed_id).first()
+            except (ValueError, OverflowError, Exception):
+                category = None
         if not category:
             return cls._heuristic_fallback(request_id=request_id, name=cleaned_name, description=cleaned_description)
 
@@ -436,3 +449,7 @@ class AiProxyService:
             "log_saved": bool(data.get("log_saved", False)),
             "is_fallback": False,
         }
+
+
+# Method alias
+AiProxyService.suggest_category_for_asset = AiProxyService.suggest_category

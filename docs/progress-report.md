@@ -525,3 +525,63 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 - Không có thư viện/công cụ nào được cài mới; không có model/Docker image mới được tải về.
 - Nhánh `feat/cloudflare-d1`: không worktree, không push/merge, chưa mở Task 6.
 - Kính gửi Codex nghiệm thu Task 5.
+
+---
+
+## 17. Nghiệm Thu Hoàn Tất Task 5: Sửa Dứt Điểm Review ac29b29 (Unknown Commit Cleanup, Strict Integer ID & Fixture Isolation)
+
+- **Thời điểm:** 2026-11-04 23:00 (GMT+7)
+- **Trạng thái:** **Task 5 Hoàn Tất PASS 100% — Đã qua review độc lập Agent D & sẵn sàng để Codex nghiệm thu.**
+- **Ranh giới an toàn nghiêm ngặt:**
+  - Không cài đặt/thêm/nâng cấp bất kỳ thư viện, package hay công cụ nào.
+  - Không kéo model weights hay Docker image mới.
+  - Toàn bộ kiểm thử chạy trong môi trường local/mock độc lập; không mutation cloud, không R2 billing, không tiêu quota AI, CSDL chính vẫn là PostgreSQL (`USE_D1_DATABASE=False`), chưa deploy cloud.
+  - Nhánh `feat/cloudflare-d1`: 1 tab AGY, 0 worktree, 0 push/merge.
+
+### 17.1. Chi Tiết Sửa Ba Nhóm Lỗi Theo Review Codex
+1. **Nhóm 1 (Agent A - P1) — Bảo Vệ Dữ Liệu Khi Commit State Chưa Xác Định (views.py:468-495, test_r2_storage.py):**
+   - **Vấn đề:** Khi `update()` gặp lỗi không mang cờ `committed` (ví dụ `OperationalError` do timeout), mã cũ thực hiện readback. Nếu lúc đó mutation đang pending/xử lý trễ trên D1, readback thấy key cũ liền xóa `saved_key`. Khi mutation D1 hoàn tất sau đó, DB trỏ vào file đã bị xóa (dangling pointer).
+   - **Khắc phục:** Khi trạng thái commit là unknown (`committed is None`), không xóa `saved_key` và không xóa `old_key`. Giữ cả hai tệp dưới dạng temporary orphan nhằm bảo đảm nguyên tắc zero data loss. Chỉ xóa `saved_key` khi chắc chắn chưa ghi (`rows == 0` do OCC / DISPOSED hoặc `committed is False`). Chỉ xóa `old_key` khi DB commit thành công xác định (`rows == 1`).
+   - Cập nhật test suite `test_r2_storage.py` đồng bộ với hợp đồng bảo toàn dữ liệu.
+
+2. **Nhóm 2 (Agent B - P2) — Validate Số Nguyên Dương Nghiêm Ngặt Trước Mọi Ép Kiểu (cloudflare-worker/src/index.js, apps/ai/services.py, tests):**
+   - **Vấn đề:**
+     - Worker: Ép kiểu `Number(rawId)` khiến `true` biến thành `1`, `[1]` biến thành `1`, trả về mã 200 sai danh mục.
+     - Backend: Ép kiểu `int(suggested_id)` khiến số lẻ `1.9` bị cắt cụt thành `1` (trả về 200 `is_fallback=False`), còn `Infinity` ném `OverflowError` dẫn đến HTTP 500 unhandled.
+   - **Khắc phục:**
+     - Worker: Bổ sung hàm `parsePositiveInteger(val)` kiểm tra nghiêm ngặt `Number.isInteger`, `Number.isFinite`, `Number.isSafeInteger`, `val > 0` cho số hoặc chuỗi số nguyên thuần túy (`/^\d+$/`). Từ chối `boolean`, `array`, `object`, `float`, `Infinity`, `NaN`. Nếu không khớp danh mục, trả HTTP 502 với mã `INVALID_SUGGESTION` và không ghi log vào D1.
+     - Backend: Bổ sung hàm `parse_positive_int_id(val)` từ chối `bool`, `float`, `list`, `inf`. Nếu không phải số nguyên dương hợp lệ hoặc không có trong CSDL, kích hoạt heuristic fallback (`is_fallback=True`) trả HTTP 200, tuyệt đối không ném `ValueError` hay `OverflowError` (500).
+     - Bổ sung 6 regression tests trong `worker.test.js` và 4 regression tests trong `test_ai_proxy.py`.
+
+3. **Nhóm 3 (Agent C - P2) — Cô Lập Router Lifecycle Giữa Các Test Suite & Regression Late Commit (test_d1_attachment_storage.py, test_d1_business_integrity.py):**
+   - **Vấn đề:** Khi chạy cả hai module D1 trong cùng một tiến trình pytest, `test_concurrent_request_approval_vs_rejection` thất bại vì nhận `ConnectionDoesNotExist("The connection 'd1_attachment_test' doesn't exist.")` do Django cache `router._routers` và `router.routers` (`cached_property`), khiến worker thread truy vấn nhầm alias đã bị teardown.
+   - **Khắc phục:**
+     - Trong fixture `d1_env` của cả 2 file: Reset tường minh `router._routers = None` và `router.__dict__.pop("routers", None)` khi thiết lập và trong khối `finally:` khi khôi phục router gốc. Đóng và xóa sạch connection cache trong `(ALIAS, "default")`.
+     - Bổ sung test hồi quy `test_d1_late_commit_after_timeout_preserves_new_file`: Dùng timing hook giữ mutation D1, mô phỏng timeout/`OperationalError`, view bảo toàn cả hai file; sau đó mutation D1 hoàn tất thành công, xác nhận DB trỏ tệp mới và tệp mới tồn tại nguyên vẹn trong storage.
+     - Đã chứng minh 2 test suite pass 100% trong cùng tiến trình ở cả 2 thứ tự chạy đảo ngược.
+
+### 17.2. Kết Quả Kiểm Thử Toàn Tuyến & Nghiệm Thu Độc Lập
+1. **Kiểm thử Cloudflare Worker Vitest:**
+   - Lệnh: `cd cloudflare-worker && npm test`
+   - Kết quả: **21 passed in 336ms (100% PASS, exit code 0)**.
+2. **Kiểm thử Storage, AI Backend & R2 Unit Tests:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_storage.py backend/tests/test_ai_proxy.py backend/apps/assets/tests/test_r2_storage.py -v`
+   - Kết quả: **61 passed in 8.67s (100% PASS, exit code 0)**.
+3. **Kiểm thử D1 Local Rehearsal (Thứ tự 1: Attachment -> Business):**
+   - Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_attachment_storage.py backend/apps/assets/tests/test_d1_business_integrity.py --rehearsal -q`
+   - Kết quả: **28 passed in 32.06s (100% PASS, exit code 0)**.
+4. **Kiểm thử D1 Local Rehearsal (Thứ tự 2 Đảo Lại: Business -> Attachment):**
+   - Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_business_integrity.py backend/apps/assets/tests/test_d1_attachment_storage.py --rehearsal -q`
+   - Kết quả: **28 passed in 33.54s (100% PASS, exit code 0)**.
+5. **Kiểm thử Baseline Backend Suite trên PostgreSQL Test Container Mới Cô Lập:**
+   - Container: `assethub-pg-reh-{run_id}` chạy port 5434, credentials ngẫu nhiên, không dùng `assethub-db-1` hay `pg-test`.
+   - Lệnh: `pytest backend/tests/ backend/apps/assets/tests/test_r2_storage.py -q`
+   - Kết quả: **227 passed in 71.17s (100% PASS, exit code 0)**. Container tự động teardown hoàn tất sau test.
+6. **Thẩm Định Độc Lập Ponytail Review (Agent D):**
+   - **Verdict: SHIP**.
+   - Must fix: 0. Should fix: 0. Zero bloat, zero regression.
+
+### 17.3. Trạng Thái Hệ Thống Sẵn Sàng
+- Cổng 5434 và 8787 sạch. Các container `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) nguyên vẹn.
+- Working tree sạch sau commit; sẵn sàng chờ Codex kiểm tra trước khi chuyển sang Task 6.
+

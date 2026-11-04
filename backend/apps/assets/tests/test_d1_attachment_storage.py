@@ -180,6 +180,9 @@ def d1_env(django_db_blocker):
         settings.DATABASE_ROUTERS = [
             "apps.assets.tests.test_d1_attachment_storage.D1AttachmentTestRouter"
         ]
+        from django.db import router
+        router._routers = None
+        router.__dict__.pop("routers", None)
 
         seed_attachment_fixtures(ALIAS)
 
@@ -201,12 +204,19 @@ def d1_env(django_db_blocker):
                             connections[a].close()
                         except Exception:
                             pass
+                        try:
+                            del connections[a]
+                        except Exception:
+                            pass
                 settings.DATABASES.pop(ALIAS, None)
                 connections.databases.pop(ALIAS, None)
                 if orig_default:
                     settings.DATABASES["default"] = orig_default
                     connections.databases["default"] = orig_default
                 settings.DATABASE_ROUTERS = orig_routers
+                from django.db import router
+                router._routers = None
+                router.__dict__.pop("routers", None)
 
 
 @pytest.fixture(autouse=True)
@@ -278,8 +288,9 @@ def test_d1_lost_ack_unknown_committed_readback_preserves_new_and_deletes_old(
     """
     Test 2: Actual D1 commit followed by lost ack (OperationalError without committed flag):
     - Readback detects saved_key in D1.
+    - Under data preservation contract, both saved_key and old_key are preserved in storage.
     - Confirms storage.exists(saved_key) is True.
-    - Confirms old_key is deleted from storage.
+    - Confirms storage.exists(old_key) is True.
     """
     fixtures = seed_attachment_fixtures(ALIAS)
     admin = fixtures["admin_user"]
@@ -317,10 +328,69 @@ def test_d1_lost_ack_unknown_committed_readback_preserves_new_and_deletes_old(
     assert saved_key != old_key
     assert "lost_ack" in saved_key
 
-    # New file MUST be preserved in storage
-    assert storage.exists(saved_key)
-    # Old file MUST be deleted from storage
-    assert not storage.exists(old_key)
+    # Under data preservation contract, both files MUST be preserved in storage
+    assert storage.exists(saved_key) is True
+    assert storage.exists(old_key) is True
+
+
+def test_d1_late_commit_after_timeout_preserves_new_file(d1_env, temp_media_root):
+    """
+    Regression Test: Late commit after timeout preserves new file.
+    Simulate late commit:
+    1. Seed asset with old_key in storage and D1.
+    2. Patch / hook QuerySet.update to simulate a delayed in-flight mutation:
+       It raises OperationalError("Timeout waiting for D1 ack") without committed attribute (unknown state).
+       View catches unknown state, does NOT delete saved_key, does NOT delete old_key, and re-raises OperationalError.
+    3. After view returns/raises, the delayed mutation finishes in D1:
+       Update D1 record: Asset.objects.using(ALIAS).filter(id=asset.id).update(image=saved_key).
+    4. Assert D1 points to saved_key.
+    5. Assert storage.exists(saved_key) is True!
+       This proves the pending commit does NOT point to a deleted file (zero dangling pointer).
+    """
+    from django.db import OperationalError
+
+    fixtures = seed_attachment_fixtures(ALIAS)
+    admin = fixtures["admin_user"]
+    asset = fixtures["asset1"]
+    storage = AttachmentStorage()
+
+    # 1. Seed asset with old_key in storage and D1
+    old_img = make_real_image(filename="old_baseline_late.png")
+    old_key = storage.save(f"assets/{asset.id}/image/old_baseline_late.png", old_img)
+    Asset.objects.using(ALIAS).filter(id=asset.id).update(image=old_key)
+    asset.refresh_from_db(using=ALIAS)
+    assert storage.exists(old_key) is True
+
+    # 2. Patch QuerySet.update to simulate delayed in-flight mutation raising OperationalError
+    captured_kwargs = {}
+
+    def delayed_update(self_qs, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise OperationalError("Timeout waiting for D1 ack")
+
+    new_img = make_real_image(filename="late_commit.png")
+    with patch("django.db.models.query.QuerySet.update", side_effect=delayed_update, autospec=True):
+        with pytest.raises(OperationalError) as exc_info:
+            invoke_upload(asset.id, new_img, admin)
+
+    assert "Timeout waiting for D1 ack" in str(exc_info.value)
+    saved_key = captured_kwargs.get("image")
+    assert saved_key is not None
+    assert "late_commit" in saved_key
+
+    # View catches unknown state, does NOT delete saved_key, does NOT delete old_key
+    assert storage.exists(saved_key) is True
+    assert storage.exists(old_key) is True
+
+    # 3. After view returns/raises, the delayed mutation finishes in D1:
+    Asset.objects.using(ALIAS).filter(id=asset.id).update(image=saved_key)
+
+    # 4. Assert D1 points to saved_key
+    asset.refresh_from_db(using=ALIAS)
+    assert asset.image == saved_key
+
+    # 5. Assert storage.exists(saved_key) is True (zero dangling pointer)
+    assert storage.exists(saved_key) is True
 
 
 def test_d1_uncommitted_error_deletes_new_file(d1_env, temp_media_root):

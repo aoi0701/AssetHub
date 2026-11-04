@@ -389,9 +389,9 @@ def test_database_exception_unknown_committed_readback_matches_retains_new_and_d
     admin_user, test_asset, temp_media_root
 ):
     """
-    [INTEGRATION TEST - State 3: Unknown Commit State with Successful Readback Match]
+    [INTEGRATION TEST - State 3: Unknown Commit State Preserves Both Files]
     If update raises an exception without 'committed' attr (e.g. timeout after commit),
-    readback finds saved_key in DB -> retains new file and deletes old file.
+    the commit state is unknown: both new file and old file are retained to guarantee zero data loss.
     """
     from django.db import connection
 
@@ -424,25 +424,31 @@ def test_database_exception_unknown_committed_readback_matches_retains_new_and_d
     # Verify new file is retained
     new_files = list(temp_media_root.rglob("*unknown_state_match*"))
     assert len(new_files) == 1
-    # Verify old file was deleted
-    assert not storage.exists(old_key)
+    # Verify old file is also retained (unknown commit state preserves both files)
+    assert storage.exists(old_key) is True
 
 
 @pytest.mark.django_db
-def test_database_exception_unknown_committed_readback_mismatch_deletes_new(
+def test_database_exception_unknown_committed_preserves_new_and_old_files(
     admin_user, test_asset, temp_media_root
 ):
     """
-    [INTEGRATION TEST - State 3: Unknown Commit State with Readback Mismatch]
-    If update raises an exception without 'committed' attr, and readback shows
-    saved_key was NOT saved in DB -> cleans up new file.
+    [INTEGRATION TEST - State 3: Unknown Commit State Preserves Files]
+    If update raises an OperationalError without 'committed' attr, state is unknown.
+    Both new file (as temporary orphan) and old file are retained.
     """
     client = auth_client_for(admin_user)
+    storage = AttachmentStorage()
+
+    # Seed old file
+    old_key = storage.save(f"assets/{test_asset.id}/image/old_file.png", io.BytesIO(b"\x89PNG\r\n\x1a\nold"))
+    test_asset.image = old_key
+    test_asset.save()
 
     class OperationalError(Exception):
         pass
 
-    img_file = make_real_image(filename="unknown_state_mismatch.png")
+    img_file = make_real_image(filename="unknown_state_preserve.png")
     with patch('django.db.models.query.QuerySet.update', side_effect=OperationalError("Network drop before commit")):
         with pytest.raises(OperationalError):
             client.post(
@@ -451,9 +457,11 @@ def test_database_exception_unknown_committed_readback_mismatch_deletes_new(
                 format='multipart',
             )
 
-    # Verify new file was cleaned up
-    new_files = list(temp_media_root.rglob("*unknown_state_mismatch*"))
-    assert len(new_files) == 0
+    # Verify new file is retained as temporary orphan
+    new_files = list(temp_media_root.rglob("*unknown_state_preserve*"))
+    assert len(new_files) == 1
+    # Verify old file is also retained
+    assert storage.exists(old_key) is True
 
 
 @pytest.mark.django_db
