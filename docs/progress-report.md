@@ -681,5 +681,74 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 - Cổng 5434 và 8787 sạch. Các container `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) giữ nguyên trạng.
 - Sẵn sàng commit local và trình bày kế hoạch deploy chi tiết cho Codex duyệt trước khi publish.
 
+---
+
+## 20. Nghiệm Thu Khắc Phục Toàn Diện 6 Điểm Review Từ Codex Tại 39ec16c (Task 6 Pre-Deployment Package Polish)
+
+- **Thời điểm:** 2026-11-05 00:52 (GMT+7)
+- **Trạng thái:** **Task 6 Pre-Deployment Package Polish PASS 100% — Đã qua review độc lập Ponytail Agent D (Verdict: SHIP) & sẵn sàng để Codex kiểm tra.**
+- **Ranh giới an toàn nghiêm ngặt:**
+  - Chưa deploy/ghi cloud, mở public Tunnel, đổi DNS/billing, gọi AI cloud, đổi runtime đang phục vụ hay restart container (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+  - Không cài thêm/nâng cấp package, không kéo image mới, không cài Llama local.
+  - 1 tab AGY, 0 worktree, 0 push/merge trên nhánh `feat/cloudflare-d1`.
+  - Không xóa hay thay đổi dữ liệu thật; toàn bộ kiểm thử dùng dữ liệu giả riêng biệt.
+
+### 20.1. Chi Tiết Khắc Phục 6 Điểm Review
+1. **P1: Alias `postgres` Trong D1 Mode Được Ép Quyền Read-Only Triệt Để:**
+   - Trong `backend/assethub_api/settings.py`: Loại bỏ hoàn toàn fallback sang `DB_USER`/`DB_PASSWORD`.
+   - Nếu `POSTGRES_RO_USER` hoặc `POSTGRES_RO_PASSWORD` thiếu/rỗng: Bỏ hoàn toàn alias `postgres` khỏi `DATABASES`, loại trừ tuyệt đối nguy cơ leo thang quyền ghi.
+   - Khi được cấu hình: Gán `'OPTIONS': {'options': '-c default_transaction_read_only=on'}` tại cấp độ session kết nối PostgreSQL.
+   - Kiểm thử thực tế trên PostgreSQL: Unit test chứng minh lệnh `SELECT` thành công, trong khi `INSERT`, `UPDATE`, `DELETE` bị chặn và ném lỗi `InternalError: cannot execute ... in a read-only transaction`. Chế độ PG dev mặc định (`USE_D1_DATABASE=False`) vẫn đọc-ghi bình thường.
+2. **P2: Siết Chặt CORS Origin Regex Chặn Attacker Project:**
+   - Trong `backend/assethub_api/settings.py`: Đổi regex thành `r"^https:\/\/(?:[a-z0-9-]+\.)?assethub\.pages\.dev$"`.
+   - Loại bỏ hậu tố `(?:-[a-z0-9-]+)?` đã từng cho phép các tên miền giả mạo như `https://assethub-attacker.pages.dev`.
+   - Kiểm thử qua test client/middleware thật: Chấp nhận `https://assethub.pages.dev` và preview branch `https://preview-123.assethub.pages.dev`, từ chối dứt điểm `https://assethub-attacker.pages.dev` và các domain lạ.
+3. **P3: Khởi Tạo Docker Compose Demo Độc Lập & Chuẩn Hóa Đường Dẫn:**
+   - Tạo file cấu hình độc lập `deploy/docker-compose.demo.yml` với project name `assethub-demo`.
+   - Chạy trên port riêng biệt `127.0.0.1:${DEMO_BACKEND_PORT:-8001}:8000`, không va chạm hay đụng độ với container `assethub-backend-1` (port 8000).
+   - Loại bỏ phụ thuộc `depends_on: db` trong chế độ D1.
+   - Chuẩn hóa build context và volume mounts; kiểm tra lệnh `docker compose -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo.example config` chạy từ repo root thành công 100% với exit code 0.
+4. **P4: Đồng Bộ API Origin, AI Worker URL & Siết Chặt CSP Headers:**
+   - Tách biệt rõ ràng URL của Worker AI (`cloudflare-worker/src/index.js`) khỏi D1 Worker Bridge trong `deploy/.env.demo.example`.
+   - Trong `frontend/public/_headers`: Loại bỏ wildcard nguy hiểm `https:` trong `connect-src`, chỉ cho phép `'self' https://*.trycloudflare.com https://*.pages.dev https://*.r2.cloudflarestorage.com http://127.0.0.1:8001 http://127.0.0.1:8000;`.
+   - Cập nhật `frontend/vite.config.js` linh hoạt theo port demo.
+5. **P5: Bảo Đảm An Toàn Tuyệt Đối Cho Smoke Test (Không Sửa Admin Sẵn Có / Không Phá Guard):**
+   - Xóa bỏ triệt để dòng code tự nới lỏng allowlist `ALLOWED_TEST_BRIDGE_ENDPOINTS.add(...)`.
+   - Trong `test_06`: Tuyệt đối không deactive hay thay đổi bất kỳ tài khoản Admin nào có sẵn trong DB.
+   - Cơ chế dọn dẹp (Teardown): Lưu trữ ID cụ thể và tiền tố duy nhất `f"SMK_{run_id}"`. Chỉ xóa đúng các thực thể do run tạo; kiểm tra xác nhận sau khi xóa và không dùng `except: pass` che giấu lỗi.
+6. **P6: Kiểm Thử Khói Đường Truyền HTTP Thực Tế & Gating An Toàn:**
+   - Sử dụng yêu cầu HTTP thực tế (`make_real_http_request`) tới `CLOUD_API_BASE_URL` cho toàn bộ luồng Auth, Asset, Request, R2 và AI.
+   - R2 smoke tải byte thực tế để đối chiếu hash/nội dung; Workers AI kiểm tra phân loại phản hồi chặt chẽ, không đánh đồng lỗi mạng/auth 503 thành pass.
+   - Bảo vệ bằng cờ opt-in `RUN_CLOUD_SMOKE=1`: Mặc định bỏ qua 7 bước kiểm thử khói trong 0.03s khi chạy local, không gửi bất kỳ request mạng hay ghi dữ liệu nào. 2 unit test kiểm tra an toàn guard và admin protection luôn chạy và đạt 100%.
+
+### 20.2. Kết Quả Kiểm Thử Toàn Tuyến & Nghiệm Thu Độc Lập
+1. **Frontend Production Build:**
+   - Lệnh: `npm --prefix frontend run build`
+   - Kết quả: **Exit code 0, 2255 modules transformed, dist/ sinh đầy đủ `_headers` (CSP đã siết chặt) và `_redirects`**.
+2. **Docker Compose Demo Config Validation:**
+   - Lệnh: `docker compose -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo.example config`
+   - Kết quả: **Exit code 0, không có lỗi resolve đường dẫn context hay volumes**.
+3. **Backend Runtime, CORS, Storage & Smoke Safety Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_settings_runtime.py backend/tests/test_cors.py backend/apps/assets/tests/test_r2_storage.py backend/tests/test_storage.py backend/tests/e2e/test_d1_cloud_smoke.py -v`
+   - Kết quả: **63 passed, 7 skipped in 4.79s (100% PASS, exit code 0)**.
+4. **Cloudflare Worker Vitest Suite:**
+   - Lệnh: `npm --prefix cloudflare-worker test`
+   - Kết quả: **21 passed in 298ms (100% PASS, exit code 0)**.
+5. **AI Proxy Service Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_ai_proxy.py -v`
+   - Kết quả: **32 passed in 4.42s (100% PASS, exit code 0)**.
+6. **D1 Backend Unit & Isolation Guard Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/assethub_api/backends/d1/tests/ -v`
+   - Kết quả: **21 passed, 21 skipped in 0.22s (100% PASS, exit code 0)**.
+7. **Thẩm Định Độc Lập Ponytail Review (Agent D):**
+   - **Verdict: SHIP**.
+   - Must fix: 0. Should fix: 0 (đã chuẩn hóa `POSTGRES_RO_USER` default rỗng).
+   - Zero bloat, mã nguồn tối giản, tuân thủ đúng yêu cầu.
+
+### 20.3. Trạng Thái Hệ Thống Sẵn Sàng
+- Cổng 5434 và 8787 sạch. Các container `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) nguyên vẹn.
+- Sẵn sàng commit local và chờ Codex kiểm duyệt gói chuẩn bị deploy.
+
+
 
 

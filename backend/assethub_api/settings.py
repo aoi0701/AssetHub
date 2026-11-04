@@ -112,15 +112,21 @@ if USE_D1_DATABASE:
             'AUTOCOMMIT': True,
             'ATOMIC_REQUESTS': False,
         },
-        'postgres': {
+    }
+    postgres_ro_user = os.environ.get('POSTGRES_RO_USER')
+    postgres_ro_password = os.environ.get('POSTGRES_RO_PASSWORD')
+    if postgres_ro_user and postgres_ro_password:
+        DATABASES['postgres'] = {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.environ.get('POSTGRES_DB', os.environ.get('DB_NAME', 'assethub')),
-            'USER': os.environ.get('POSTGRES_RO_USER', os.environ.get('DB_USER', 'assethub_user')),
-            'PASSWORD': os.environ.get('POSTGRES_RO_PASSWORD', os.environ.get('DB_PASSWORD', 'assethub_password')),
+            'USER': postgres_ro_user,
+            'PASSWORD': postgres_ro_password,
             'HOST': os.environ.get('POSTGRES_HOST', os.environ.get('DB_HOST', 'db')),
             'PORT': os.environ.get('POSTGRES_PORT', os.environ.get('DB_PORT', '5432')),
-        },
-    }
+            'OPTIONS': {
+                'options': '-c default_transaction_read_only=on',
+            },
+        }
 else:
     DATABASES = {
         'default': {
@@ -245,7 +251,7 @@ CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in cors_origins_env.split(',') if origin.strip()
 ]
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https:\/\/(?:[a-z0-9-]+\.)?assethub(?:-[a-z0-9-]+)?\.pages\.dev$",
+    r"^https:\/\/(?:[a-z0-9-]+\.)?assethub\.pages\.dev$",
 ]
 cors_extra_regex = os.environ.get('CORS_EXTRA_REGEX')
 if cors_extra_regex:

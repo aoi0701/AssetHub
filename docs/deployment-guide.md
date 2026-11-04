@@ -99,21 +99,25 @@ Hệ thống AssetHub được thiết kế tối ưu để có thể vận hàn
    ```
    *(Hoặc môi trường phát triển cục bộ: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`)*
 
-3. **Chạy Migration và nạp dữ liệu mẫu**:
+   Đối với môi trường chạy thử nghiệm Edge Demo độc lập (không xung đột port 8000 của dev stack):
    ```bash
-   # Áp dụng migration CSDL
-   docker compose exec backend python manage.py migrate
+   docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d
+   ```
+   *Lưu ý an toàn:* Khi `USE_D1_DATABASE=True`, backend kết nối trực tiếp Cloudflare D1 qua Worker Bridge; không yêu cầu container PostgreSQL `db` phải chạy hay healthy.
 
-   # Nạp dữ liệu danh mục và tài sản mẫu ban đầu
-   docker compose exec backend python manage.py seed_data
+3. **Khởi tạo D1 Schema & Nạp Dữ Liệu Demo Cách Ly**:
+   *Cảnh báo nghiêm ngặt:* Tuyệt đối KHÔNG chạy `manage.py migrate` hay `manage.py seed_data` lên D1 hoặc database đang hoạt động.
+   ```bash
+   # Schema D1 (19 bảng, 2 triggers, check constraints) đã được định nghĩa trong schema.sql:
+   # npx wrangler d1 execute assethub-test-d1 --file=./spikes/cf-d1-spike/schema.sql --remote
 
-   # Tạo tài khoản quản trị viên tối cao (nếu cần)
-   docker compose exec backend python manage.py createsuperuser
+   # Nạp dữ liệu giả biệt lập cho demo (bằng script đối soát đã duyệt hoặc tạo tài khoản demo giả lập riêng):
+   # python spikes/cf-d1-spike/migrate_pg_to_d1.py --d1-url=$D1_BRIDGE_URL --d1-token=$D1_BRIDGE_SECRET_TOKEN
    ```
 
 4. **Kiểm tra trạng thái sẵn sàng**:
    ```bash
-   curl -f http://127.0.0.1:8000/api/health/
+   curl -f http://127.0.0.1:8001/api/health/
    # Kết quả mong đợi: {"status": "ok", "db": "ok"}
    ```
 
@@ -121,43 +125,22 @@ Hệ thống AssetHub được thiết kế tối ưu để có thể vận hàn
 
 ### Bước 2: Thiết Lập Cloudflare Tunnel (`cloudflared`)
 
-1. **Cài đặt tiện ích `cloudflared` trên máy chủ**:
-   ```bash
-   # Trên Ubuntu / Debian:
-   curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-   sudo dpkg -i cloudflared.deb
-   ```
+AssetHub hỗ trợ 2 phương thức Ingress qua Cloudflare Tunnel:
+- **Phương án 1 (Khuyến nghị cho Demo): Quick Tunnel qua binary host `/usr/local/bin/cloudflared` (đã có sẵn trên máy)**
+  Không cần mua tên miền, không cần cấu hình DNS hay chứng thực phức tạp:
+  ```bash
+  /usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8001
+  ```
+  Lệnh sẽ in ra URL HTTPS tạm thời dạng `https://<random-id>.trycloudflare.com`.
+  Dùng URL này để gán vào `VITE_API_BASE_URL` khi build frontend và khai báo vào `CORS_ALLOWED_ORIGINS` của backend.
 
-2. **Đăng nhập và xác thực tài khoản Cloudflare**:
-   ```bash
-   cloudflared tunnel login
-   # Trình duyệt sẽ mở URL để bạn cấp quyền cho tên miền quản lý trên Cloudflare.
-   ```
+- **Phương án 2: Named Tunnel với tên miền riêng (Tùy chọn cho Production)**
+  Nếu có tên miền quản trị trên Cloudflare, sử dụng file cấu hình `deploy/cloudflared/config.yml`:
+  ```bash
+  cloudflared tunnel --config deploy/cloudflared/config.yml run
+  ```
 
-3. **Tạo Tunnel mới cho AssetHub**:
-   ```bash
-   cloudflared tunnel create assethub-tunnel
-   ```
-   Lệnh sẽ tạo một Tunnel UUID (ví dụ: `abcd1234-5678-90ab-cdef-1234567890ab`) và file chứng thực tại `~/.cloudflared/<UUID>.json`.
-
-4. **Đặt file thông tin xác thực vào dự án**:
-   Sao chép file chứng thực JSON vào vị trí cấu hình bảo mật:
-   ```bash
-   mkdir -p deploy/cloudflared
-   cp ~/.cloudflared/<UUID>.json deploy/cloudflared/credentials.json
-   chmod 600 deploy/cloudflared/credentials.json
-   ```
-
-5. **Định tuyến bản ghi DNS**:
-   Gắn tên miền API phụ tới Tunnel:
-   ```bash
-   cloudflared tunnel route dns assethub-tunnel api.assethub.example.com
-   ```
-
-6. **Cập nhật cấu hình Ingress**:
-   Chỉnh sửa `deploy/cloudflared/config.yml` hoặc truyền biến môi trường:
-   ```yaml
-   tunnel: abcd1234-5678-90ab-cdef-1234567890ab
+---
    credentials-file: /etc/cloudflared/credentials.json
 
    ingress:

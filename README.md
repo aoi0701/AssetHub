@@ -170,6 +170,13 @@ Executes realistic user journey in headless Chromium against live services:
 npm --prefix frontend run test:e2e
 ```
 
+### 8. Cloudflare Edge Demo Runtime & E2E Smoke Gating Tests
+Validates runtime D1 settings, strict CORS validation, storage presigned URLs, and smoke test safety gating:
+```bash
+DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_settings_runtime.py backend/tests/test_cors.py backend/apps/assets/tests/test_r2_storage.py backend/tests/test_storage.py backend/tests/e2e/test_d1_cloud_smoke.py -v
+```
+*Note: Live cloud smoke tests are strictly gated with `RUN_CLOUD_SMOKE=1`. In default local test runs, cloud tests cleanly skip.*
+
 ---
 
 ## 📡 API Endpoints Summary

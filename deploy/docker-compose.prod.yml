@@ -1,3 +1,5 @@
+name: assethub-prod
+
 services:
   backend:
     build:
@@ -18,7 +20,7 @@ services:
       D1_TIMEOUT: ${D1_TIMEOUT:-45.0}
       # Read-only PostgreSQL Source (Optional reconciliation alias)
       POSTGRES_DB: ${POSTGRES_DB:-assethub}
-      POSTGRES_RO_USER: ${POSTGRES_RO_USER:-assethub_ro_user}
+      POSTGRES_RO_USER: ${POSTGRES_RO_USER:-}
       POSTGRES_RO_PASSWORD: ${POSTGRES_RO_PASSWORD:-}
       POSTGRES_HOST: ${POSTGRES_HOST:-127.0.0.1}
       POSTGRES_PORT: ${POSTGRES_PORT:-5434}
@@ -36,7 +38,7 @@ services:
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-}
       AI_MODEL: ${AI_MODEL:-@cf/meta/llama-3.1-8b-instruct-fp8}
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/health/"]
       interval: 10s

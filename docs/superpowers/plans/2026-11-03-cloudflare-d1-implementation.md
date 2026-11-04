@@ -624,7 +624,26 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
   - Thẩm định chéo diff qua `ponytail:ponytail-review` và `superpowers:requesting-code-review`.
   - Build frontend Vite `npm --prefix frontend run build`.
   - Chạy backend test settings và smoke gating test.
-  - Cập nhật progress-report.md và commit local Task 6 preparation.
+  - Cập nhật progress-report.md và commit local Task 6 preparation (`39ec16c`).
+
+- [x] **Step 4: Khắc Phục Triệt Để 6 Điểm Review Từ Codex Tại 39ec16c (Agent A, B, C)**
+  - **Agent A (P1/P2):**
+    - Sửa alias `postgres` trong `backend/assethub_api/settings.py`: không fallback sang `DB_USER`/`DB_PASSWORD`; nếu không có `POSTGRES_RO_USER`/`PASSWORD` thì không tạo alias `postgres`; nếu có thì cấu hình connection read-only (`OPTIONS: {'options': '-c default_transaction_read_only=on'}`); viết unit test kiểm chứng SELECT được nhưng INSERT/UPDATE bị từ chối; giữ PG dev mode không đổi.
+    - Sửa CORS regex trong `settings.py`: loại bỏ prefix `assethub-*` cho phép attacker project; chỉ cho phép origin từ env hoặc project Pages chính xác; kiểm thử bằng test client/middleware thật từ chối `https://assethub-attacker.pages.dev`.
+  - **Agent B (P1/P2):**
+    - Sửa Compose demo isolation & paths: tạo cấu hình demo riêng `deploy/docker-compose.demo.yml` hoặc chuẩn hóa paths trong `deploy/docker-compose.prod.yml` không bị resolve sai đường dẫn cha; dùng project name riêng `assethub-demo`, port riêng (8001:8000), không phụ thuộc `db` healthy khi D1 mode; validate config bằng env giả.
+    - Đồng bộ API origin & AI Worker: tách bạch URL AI Worker riêng khỏi D1 Bridge Worker trong `deploy/.env.demo.example`; siết chặt CSP `connect-src` trong `frontend/public/_headers` (bỏ `https:` wildcard); ghi rõ hướng dẫn rebuild frontend với API origin thực.
+  - **Agent C (P1/P2):**
+    - Smoke safety: xóa bỏ hoàn toàn `ALLOWED_TEST_BRIDGE_ENDPOINTS.add(...)` tại runtime; chặn mọi endpoint ngoài allowlist trước khi gửi network request; tuyệt đối không sửa hay deactive Admin có sẵn; teardown chỉ xóa dữ liệu do run sở hữu (theo run_id/tracking IDs), kiểm tra xác nhận sau cleanup.
+    - Nâng cấp smoke test: kiểm thử HTTP thực tế tới API_BASE_URL (thay vì in-process factory); test R2 upload/download byte thật; test AI với category thật; duy trì cờ opt-in `RUN_CLOUD_SMOKE=1` mặc định skip cleanly khi chạy local.
+
+- [x] **Step 5: Thẩm Định Độc Lập Ponytail Review (Agent D) & Verification**
+  - Review độc lập chéo diff và contract qua `ponytail:ponytail-review` + `superpowers:requesting-code-review`.
+  - Kiểm tra frontend build, test runtime settings, CORS, storage, smoke gating và isolation safety.
+
+- [x] **Step 6: Coordinator Tích Hợp Tài Liệu & Commit Local**
+  - Cập nhật `README.md`, `docs/deployment-guide.md`, `docs/progress-report.md`.
+  - Commit local chuẩn Conventional Commits trên nhánh `feat/cloudflare-d1`.
 
 ---
 
