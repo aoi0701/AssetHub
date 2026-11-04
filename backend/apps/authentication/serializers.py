@@ -143,6 +143,24 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Email này đã được sử dụng bởi tài khoản khác.')
         return value
 
+    def update(self, instance, validated_data):
+        fields_to_update = {k: v for k, v in validated_data.items() if k in self.ALLOWED_FIELDS}
+
+        # Enforce is_active=True condition in write
+        if not User.objects.filter(pk=instance.pk, is_active=True).exists():
+            raise exceptions.PermissionDenied("Tài khoản đã bị vô hiệu hóa hoặc không tồn tại.")
+
+        if fields_to_update:
+            updated_rows = User.objects.filter(
+                pk=instance.pk,
+                is_active=True,
+            ).update(**fields_to_update)
+            if updated_rows == 0:
+                raise exceptions.PermissionDenied("Tài khoản đã bị vô hiệu hóa hoặc không tồn tại.")
+
+        instance.refresh_from_db()
+        return instance
+
 
 class ChangePasswordSerializer(serializers.Serializer):
     """Serializer for changing current user password."""

@@ -203,8 +203,8 @@ def cleanup_persist_directory(
     return True
 
 
-def cleanup_env_file(env_file: Optional[Path]) -> bool:
-    """Safely unlink temporary rehearsal env file under /tmp."""
+def cleanup_env_file(env_file: Optional[Path], run_id: Optional[str] = None) -> bool:
+    """Safely unlink temporary rehearsal env file under /tmp owned by run_id."""
     if env_file is None:
         return False
     path = Path(env_file).resolve()
@@ -222,6 +222,10 @@ def cleanup_env_file(env_file: Optional[Path]) -> bool:
 
     name = path.name
     if not (name.startswith("assethub_rehearsal_d1_") or name.startswith("wrangler")):
+        return False
+
+    # Ownership check: If run_id is provided, must contain run_id
+    if run_id and run_id not in name:
         return False
 
     try:
@@ -699,6 +703,7 @@ class D1TargetHarness:
             if env_file is not None
             else Path(f"/tmp/assethub_rehearsal_d1_{self.run_id}.env")
         )
+        self._created_env_file: bool = False
         self.token = token or DEFAULT_TOKEN
         self.process: Optional[subprocess.Popen] = proc
         self.base_url = f"http://{self.host}:{self.port}"
@@ -741,6 +746,7 @@ class D1TargetHarness:
             ingest_d1_ddl(persist_dir=self.persist_dir, port=self.port)
 
             # Launch Worker Bridge
+            self._created_env_file = True
             self.process = start_d1_bridge(
                 port=self.port,
                 host=self.host,
@@ -788,8 +794,10 @@ class D1TargetHarness:
         # Clean only our own directory after verifying marker
         cleanup_persist_directory(self.persist_dir, run_id=self.run_id)
 
-        # Clean only our own env file
-        cleanup_env_file(self.env_file)
+        # Clean only our own env file if it was created by this harness or clearly owned by run_id
+        if self._created_env_file or (self.run_id and self.run_id in self.env_file.name):
+            cleanup_env_file(self.env_file, run_id=self.run_id)
+            self._created_env_file = False
 
     def close(self) -> None:
         """Alias for teardown."""

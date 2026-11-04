@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -21,6 +22,7 @@ from apps.authentication.services import (
     generate_tokens_for_user,
     revoke_all_user_sessions,
 )
+from apps.common.exceptions import ConflictError
 
 User = get_user_model()
 
@@ -218,6 +220,7 @@ class ChangePasswordView(APIView):
             204: OpenApiResponse(description='Đổi mật khẩu thành công, cần đăng nhập lại.'),
             400: OpenApiResponse(description='Mật khẩu cũ sai hoặc mật khẩu mới không thỏa mãn chính sách.'),
             401: OpenApiResponse(description='Chưa xác thực.'),
+            409: OpenApiResponse(description='Xung đột phiên làm việc hoặc tài khoản đã thay đổi.'),
         },
     )
     def post(self, request):
@@ -228,8 +231,20 @@ class ChangePasswordView(APIView):
         serializer.is_valid(raise_exception=True)
 
         new_password = serializer.validated_data['new_password']
-        request.user.set_password(new_password)
-        request.user.auth_version += 1
-        request.user.save()
+        hashed_pw = make_password(new_password)
+        user = request.user
+        current_version = user.auth_version
 
+        updated = User.objects.filter(
+            pk=user.pk,
+            is_active=True,
+            auth_version=current_version,
+        ).update(
+            password=hashed_pw,
+            auth_version=current_version + 1,
+        )
+        if updated == 0:
+            raise ConflictError("Tài khoản đã bị thay đổi bởi phiên khác hoặc đã bị vô hiệu hóa.")
+
+        user.refresh_from_db()
         return Response(status=status.HTTP_204_NO_CONTENT)

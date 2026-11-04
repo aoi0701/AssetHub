@@ -295,8 +295,9 @@ def test_d1_setup_failure_self_cleans_resources():
 
 def test_foreign_env_file_preflight_refuses_overwrite():
     """
-    Regression Test 2b (Env File):
+    Regression Test 2b & P2 (Env File):
     Preflight check refuses to overwrite an environment file that does not belong to run_id.
+    Calling teardown() (even multiple times) NEVER deletes the foreign file, preserving its contents.
     """
     foreign_run_id = "foreign_env_run_123"
     our_run_id = "our_env_run_456"
@@ -311,6 +312,16 @@ def test_foreign_env_file_preflight_refuses_overwrite():
 
         # Foreign env file contents must be preserved
         assert foreign_env.exists()
+        assert "foreign_secret_token_value_32ch" in foreign_env.read_text(encoding="utf-8")
+
+        # Calling teardown() once must NOT delete foreign env
+        harness.teardown()
+        assert foreign_env.exists(), "Foreign env file was deleted by teardown()!"
+        assert "foreign_secret_token_value_32ch" in foreign_env.read_text(encoding="utf-8")
+
+        # Calling teardown() a second time (idempotency) must STILL not delete foreign env
+        harness.teardown()
+        assert foreign_env.exists(), "Foreign env file was deleted by second teardown()!"
         assert "foreign_secret_token_value_32ch" in foreign_env.read_text(encoding="utf-8")
     finally:
         if foreign_env.exists():

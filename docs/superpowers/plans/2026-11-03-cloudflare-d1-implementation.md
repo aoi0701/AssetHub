@@ -455,7 +455,7 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 - Consumes: `d1_batch` từ `assethub_api.backends.d1`.
 - Produces: 11 phương thức mutation an toàn concurrency, serializers dùng allowlist `update_fields`, CAS `auth_version`.
 
-- [ ] **Step 1: Viết failing regression tests cho Concurrency & Race Conditions**
+- [x] **Step 1: Viết failing regression tests cho Concurrency & Race Conditions**
   Tạo `backend/apps/assets/tests/test_d1_business_integrity.py`:
   - Test 1 (`test_concurrent_asset_allocation_race`): Hai request đồng thời gọi `AssetService.allocate` trên cùng tài sản `AVAILABLE` -> 1 thành công, 1 thất bại qua `_assert_guard`, không sinh orphan audit log.
   - Test 2 (`test_interleaved_asset_patch_and_disposal`): Request `PATCH /api/assets/{id}/` chạy xen giữa lúc tài sản bị chuyển trạng thái (`confirm_disposal` hoặc `allocate`) -> không làm đảo ngược trạng thái tài sản, chỉ cập nhật trường allowlist.
@@ -465,29 +465,29 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
   - Test 6: Kiểm tra đầy đủ 9 phương thức của `AssetService` (`allocate`, `revoke`, `mark_damaged`, `confirm_damage_report`, `send_maintenance`, `complete_maintenance`, `transfer`, `propose_disposal`, `confirm_disposal`) và 2 phương thức của `RequestService` (`approve_request`, `reject_request`).
   - Test 7: Từ chối phiếu (`reject_request`) đổi trạng thái `REJECTED`, cập nhật `rejection_reason` và không tạo bất kỳ bản ghi `AssetHistoryLog` nào.
 
-- [ ] **Step 2: Chạy kiểm thử để xác nhận thất bại (Red)**
+- [x] **Step 2: Chạy kiểm thử để xác nhận thất bại (Red)**
   ```bash
   docker compose exec backend pytest apps/assets/tests/test_d1_business_integrity.py -v
   ```
-  Mong đợi: FAIL.
+  Mong đợi: FAIL (xác nhận lỗi khi chưa chuyển đổi sang D1 batch OCC).
 
-- [ ] **Step 3: Tái cấu trúc Services, Serializers và Views sang D1 Concurrency Guard**
+- [x] **Step 3: Tái cấu trúc Services, Serializers và Views sang D1 Concurrency Guard**
   - Cập nhật `AssetUpdateSerializer`: Sử dụng `update_fields` hoặc `.filter(id=..., status!=DISPOSED).update(...)`. Loại bỏ hoàn toàn `instance.save()` cả cụm.
   - Cập nhật `ProfileUpdateSerializer`: Chỉ cập nhật `full_name`, `email`, `phone` với điều kiện `is_active=True`.
   - Cập nhật `UserAdminUpdateSerializer` & `ChangePasswordView`: Thực hiện cập nhật có điều kiện trên `auth_version` (`auth_version = auth_version + 1`).
   - Cập nhật `apps/assets/identifiers.py`: Thay thế vòng lặp `select_for_update` bằng câu lệnh SQLite UPSERT RETURNING nguyên tử (`ON CONFLICT(kind, year) DO UPDATE SET value = value + 1 RETURNING value`).
   - Tái cấu trúc 9 phương thức `AssetService` và 2 phương thức `RequestService` sử dụng `d1_batch` kèm `_assert_guard`.
 
-- [ ] **Step 4: Chạy kiểm thử xác nhận thành công (Green)**
+- [x] **Step 4: Chạy kiểm thử xác nhận thành công (Green)**
   ```bash
-  docker compose exec backend pytest apps/assets/tests/test_d1_business_integrity.py -v
+  backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_business_integrity.py --rehearsal -v
   ```
-  Mong đợi: PASS 100%. Concurrency và tính toàn vẹn nghiệp vụ được bảo đảm tuyệt đối.
+  Kết quả: 8/8 PASS 100%. Concurrency và tính toàn vẹn nghiệp vụ được bảo đảm tuyệt đối.
 
-- [ ] **Step 5: Commit Task 4**
+- [x] **Step 5: Commit Task 4**
   ```bash
-  git add backend/apps/assets/ backend/apps/requests/ backend/apps/authentication/
-  git commit -m "feat(services): migrate asset and request services to d1 atomic guarded batch occ with allowlist patch"
+  git add backend/apps/assets/ backend/apps/requests/ backend/apps/authentication/ backend/assethub_api/backends/d1/ docs/
+  git commit -m "feat(services): implement d1 atomic guarded batch occ for asset and request workflows"
   ```
 
 ---

@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from apps.assets.identifiers import generate_identifier
 from apps.assets.models import Asset, AssetHistoryLog
+from apps.common.exceptions import ConflictError
 from apps.departments.models import Category, Department
 
 
@@ -158,6 +159,9 @@ class AssetUpdateSerializer(serializers.Serializer):
     purchase_date = serializers.DateField(required=False, allow_null=True)
 
     def validate(self, attrs):
+        if self.instance and self.instance.status == Asset.Status.DISPOSED:
+            raise ConflictError("Tài sản đã thanh lý (DISPOSED), không thể chỉnh sửa thông tin.")
+
         allowed_fields = {
             'name',
             'category_id',
@@ -187,18 +191,29 @@ class AssetUpdateSerializer(serializers.Serializer):
         return attrs
 
     def update(self, instance, validated_data):
+        if instance.status == Asset.Status.DISPOSED:
+            raise ConflictError("Tài sản đã thanh lý (DISPOSED), không thể chỉnh sửa thông tin.")
+
+        update_fields = []
         if 'name' in validated_data:
             instance.name = validated_data['name'].strip()
+            update_fields.append('name')
         if 'category' in validated_data:
             instance.category = validated_data['category']
+            update_fields.append('category')
         if 'serial_number' in validated_data:
             instance.serial_number = validated_data['serial_number'].strip()
+            update_fields.append('serial_number')
         if 'specification' in validated_data:
             instance.specification = validated_data['specification']
+            update_fields.append('specification')
         if 'purchase_date' in validated_data:
             instance.purchase_date = validated_data['purchase_date']
+            update_fields.append('purchase_date')
 
-        instance.save()
+        if update_fields:
+            update_fields.append('updated_at')
+            instance.save(update_fields=update_fields)
         return instance
 
 

@@ -32,17 +32,28 @@ def d1_batch(statements, using="default", idempotency_key=None, **kwargs):
                         "Only 'assethub-test-d1' is authorized for test execution."
                     )
 
-        # Apply date trunc replacement if statements contain django date trunc calls
+        # Apply date trunc replacement and %s to ? conversion for SQLite/D1
         formatted_stmts = []
         for st in statements:
             if isinstance(st, (tuple, list)):
                 raw_sql = replace_date_trunc_in_sql(st[0])
-                formatted_stmts.append((raw_sql, st[1]) if len(st) > 1 else (raw_sql,))
+                if "%s" in raw_sql:
+                    raw_sql = raw_sql.replace("%s", "?")
+                params = st[1] if len(st) > 1 else []
+                clean_params = [1 if p is True else (0 if p is False else p) for p in params] if params else []
+                formatted_stmts.append((raw_sql, clean_params) if len(st) > 1 else (raw_sql,))
             elif isinstance(st, dict):
                 raw_sql = replace_date_trunc_in_sql(st["sql"])
-                formatted_stmts.append({**st, "sql": raw_sql})
+                if "%s" in raw_sql:
+                    raw_sql = raw_sql.replace("%s", "?")
+                params = st.get("params", [])
+                clean_params = [1 if p is True else (0 if p is False else p) for p in params] if params else []
+                formatted_stmts.append({**st, "sql": raw_sql, "params": clean_params})
             elif isinstance(st, str):
-                formatted_stmts.append(replace_date_trunc_in_sql(st))
+                raw_sql = replace_date_trunc_in_sql(st)
+                if "%s" in raw_sql:
+                    raw_sql = raw_sql.replace("%s", "?")
+                formatted_stmts.append(raw_sql)
             else:
                 formatted_stmts.append(st)
 
