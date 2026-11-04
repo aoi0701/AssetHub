@@ -400,12 +400,37 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 - **Agent C (Kiểm thử & Reviewer Độc Lập):** Soạn kịch bản diễn tập, chạy xác nhận tiền kiểm, `--dry-run`, migration thật, đối soát 1:1, kiểm tra mật khẩu qua Django auth, kiểm tra non-empty guard, và chạy kịch bản đối chứng cố tình gây lỗi.
 - **Coordinator:** Điều phối, cấu hình settings test, thực thi end-to-end, cleanup tài nguyên và commit.
 
-- [ ] **Step 1: Khởi động Agent A & Agent B song song (Dựng 2 đầu harness)**
-- [ ] **Step 2: Nạp schema & seed dữ liệu giả vào PostgreSQL test; nạp DDL vào D1 local**
-- [ ] **Step 3: Thực hiện kiểm thử tiền kiểm & `--dry-run` (0 ghi)**
-- [ ] **Step 4: Chạy migration thật từ PostgreSQL test sang D1 local (không `--allow-non-empty`)**
-- [ ] **Step 5: Đối soát 1:1, kiểm tra mật khẩu bằng Django auth, kiểm tra non-empty guard & negative tests**
-- [ ] **Step 6: Dọn dẹp tài nguyên diễn tập local (container/volume/persist dir tạm) & commit kết quả**
+- [x] **Step 1: Khởi động Agent A & Agent B song song (Dựng 2 đầu harness)**
+- [x] **Step 2: Nạp schema & seed dữ liệu giả vào PostgreSQL test; nạp DDL vào D1 local**
+- [x] **Step 3: Thực hiện kiểm thử tiền kiểm & `--dry-run` (0 ghi)**
+- [x] **Step 4: Chạy migration thật từ PostgreSQL test sang D1 local (không `--allow-non-empty`)**
+- [x] **Step 5: Đối soát 1:1, kiểm tra mật khẩu bằng Django auth, kiểm tra non-empty guard & negative tests**
+- [x] **Step 6: Dọn dẹp tài nguyên diễn tập local (container/volume/persist dir tạm) & commit kết quả**
+  - Commit 83f95c1: 11/11 bài diễn tập PG -> D1 local PASS.
+
+---
+
+### Task 3c: Chuẩn Hóa Lifecycle, Process Ownership & Gating Diễn Tập (P1/P2 Fixes)
+
+> **Mục tiêu:** Khắc phục triệt để các rủi ro cleanup và lifecycle được Codex phát hiện trong review 83f95c1:
+> 1. (P1) Gỡ bỏ hoàn toàn việc kill process theo port / lsof / pkill / fuser; không leo cây process cha; chỉ quản lý process Popen thuộc run context. Port bận thì fail trước khi thực hiện mutation.
+> 2. (P1) Thư mục persist, env file và PID file cô lập theo run_id với marker ownership; cleanup kiểm tra marker trước khi xóa.
+> 3. (P1) Test suite mặc định không tự tạo Docker/Worker; cấu hình `@pytest.mark.rehearsal` và flag opt-in rõ ràng (`--rehearsal` hoặc `ASSETHUB_RUN_REHEARSAL=1`). Khi opt-in, fixture tự động setup và teardown trọn vẹn cả PG và D1 trong `finally` / teardown hook kể cả khi assertion fail.
+> 4. (P2) Nguồn PostgreSQL chỉ bind `127.0.0.1`, container gán docker label ownership, credentials ngẫu nhiên per-run không in log. Token D1 local ngẫu nhiên độc lập với cloud token, env file chmod 0600.
+> 5. Thêm regression tests với mock/sentinel kiểm chứng an toàn process ownership và cleanup.
+
+**Phân quyền file:**
+- **Agent A:** `backend/apps/common/tests/harness_pg_source.py`, `backend/apps/common/tests/test_harness_pg_source.py`.
+- **Agent B:** `backend/apps/common/tests/harness_d1_target.py`, `backend/apps/common/tests/test_harness_d1_target.py`.
+- **Agent C:** `backend/apps/common/tests/test_pg_to_d1_rehearsal.py`, `backend/pytest.ini`, `conftest.py`.
+- **Coordinator:** Điều phối, hợp nhất kế hoạch, chạy verify độc lập và ponytail review.
+
+- [x] **Step 1: Agent B sửa P1 Process Ownership & Cleanup trong `harness_d1_target.py`**
+- [x] **Step 2: Agent A sửa P2 Run ID, Labels, 127.0.0.1 Binding & Random Credentials trong `harness_pg_source.py`**
+- [x] **Step 3: Agent C cấu hình Opt-in Gating, tự động Fixture Lifecycle & Mock Sentinel Tests**
+- [x] **Step 4: Chạy kiểm thử an toàn ownership (sentinel servers không bị kill, cleanup chỉ xóa đúng marker)**
+- [x] **Step 5: Chạy full rehearsal opt-in xác nhận 11 bài migration đạt với lifecycle tự động**
+- [x] **Step 6: Thẩm định độc lập (Ponytail Review), dọn dẹp tài nguyên và commit**
   ```
 
 ---

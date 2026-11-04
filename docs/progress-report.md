@@ -1,13 +1,13 @@
 # Báo Cáo Triển Khai Tuần 4: Chuyển Đổi Cloudflare D1 (AssetHub)
-## Nghiệm Thu Hoàn Tất Task 0, Task 1, Task 2 & Task 3 (Migration Tool & 7-Criteria Reconciliation)
+## Nghiệm Thu Hoàn Tất Task 0, Task 1, Task 2, Task 3 & Task 3c (Rehearsal Lifecycle & Harness Hardening)
 
-- **Thời điểm:** 2026-11-04 10:20 (GMT+7)
+- **Thời điểm:** 2026-11-04 14:55 (GMT+7)
 - **Nhánh Git:** `feat/cloudflare-d1`
 - **Tài khoản Cloudflare:** `hnhoa494@gmail.com` (Account ID: `5e76c2bf4e09587a010d31ea416ec8d3`)
 - **Tài nguyên thử nghiệm:**
   - CSDL D1: `assethub-test-d1` (`3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`, APAC)
   - Worker Bridge Staging: `https://assethub-test-worker.hnhoa494-assethub.workers.dev` (Version ID: `9afb7c31-d0aa-4fc3-80f0-16a78040bd06`)
-- **Trạng thái:** **Task 0, Task 1, Task 2 & Task 3 (5 Defect Fixes) PASS 100% — Sẵn sàng để Codex nghiệm thu trước khi chạy migration thực tế.**
+- **Trạng thái:** **Task 0, Task 1, Task 2, Task 3 & Task 3c PASS 100% — Sẵn sàng để Codex nghiệm thu.**
 - **Ranh giới an toàn nghiêm ngặt:** 1 tab AGY, 0 worktree, 0 push/merge, 0 đụng CSDL PostgreSQL gốc (`USE_D1_DATABASE=False`), 0 chi phí Cloudflare, 0 đổi DNS, chưa chạy lệnh ghi lên D1 Cloud.
 
 ---
@@ -133,7 +133,7 @@ Theo yêu cầu ưu tiên của Codex:
 ### 5.2. Kết Luận Thẩm Định Độc Lập (Ponytail Review & Task 3 Followup)
 - **Đánh giá:** **VERDICT: READY FOR CODEX REVIEW (ĐẠT PHẠM VI TESTBED / CHƯA CHẠY CLOUD)**.
 - Đã giải quyết triệt để 4 vấn đề được Codex tái hiện trong lần review thứ hai:
-  1. **Preflight schema & Chính sách bảng AI:** Phân biệt 15 bảng bắt buộc nguồn (`SOURCE_MANDATORY_TABLES`) và bảng mới ở đích (`TARGET_NEW_TABLES` gồm `ai_suggestion_logs`). Preflight kiểm tra tồn tại và khớp cấu trúc cột trước mọi thao tác ghi; bảng bắt buộc thiếu ở nguồn, đích hoặc cả hai đều bị chặn.
+  1. **Preflight schema & Chính sách bảng AI:** Phân biệt 16 bảng bắt buộc nguồn (`SOURCE_MANDATORY_TABLES`) và bảng mới ở đích (`TARGET_NEW_TABLES` gồm `ai_suggestion_logs`). 17 bảng dữ liệu đích, 19 bảng tổng thể gồm 2 bảng hạ tầng. Preflight kiểm tra tồn tại và khớp cấu trúc cột trước mọi thao tác ghi; bảng bắt buộc thiếu ở nguồn, đích hoặc cả hai đều bị chặn.
   2. **Canonicalization dựa trên kiểu schema:** Không đoán kiểu dữ liệu từ nội dung chuỗi. Tra cứu theo `(table, column)` metadata (`JSON_COLUMNS`, `DATETIME_COLUMNS`, `DATE_COLUMNS`, `BOOL_COLUMNS`, `PASSWORD_COLUMNS`). Toàn bộ các cột text/varchar được so sánh nguyên văn; password giữ nguyên văn; lỗi không in thông tin nhạy cảm.
   3. **Rollback lồng transaction & Bỏ mock detection:** Sử dụng `django.db.transaction.atomic(using=target_db)` cho SQLite batch execution để hỗ trợ savepoints lồng nhau và rollback sạch 100% khi lỗi; xóa bỏ hoàn toàn `from unittest.mock import Mock, MagicMock` và `is_mock` khỏi mã nguồn production; chặn backend không hỗ trợ trước ghi.
   4. **Clean Import & Không Upsert âm thầm:** Sử dụng `INSERT INTO` tiêu chuẩn; đích có xung đột PK bị từ chối sạch sẽ, không ghi đè âm thầm mật khẩu, vai trò, auth_version hay audit log.
@@ -153,48 +153,88 @@ Theo yêu cầu ưu tiên của Codex:
 8. `1305783` - `docs: record task 1-3 implementation, safe ddl, and migration verification`
 9. `8addff6` - `fix(migration): harden pg-to-d1 migration command with comprehensive content reconciliation and safety guards`
 10. `a16aa8d` - `fix(migration): enforce schema-driven canonicalization, preflight validation and clean atomic import`
-11. *(Next commit)* - `test(migration): complete local end-to-end rehearsal from real postgresql to local d1 bridge`
+11. `83f95c1` - `test(migration): complete local end-to-end rehearsal from real postgresql to local d1 bridge`
+12. `335de67` - `fix(harness): harden process ownership, directory markers, and opt-in lifecycle gating`
 
 ---
 
-## 7. Trạng Thái Hiện Tại & Báo Cáo Diễn Tập Task 3b (Local Rehearsal)
+## 7. Trạng Thái Baseline Task 3b (Commit 83f95c1)
 
-### 7.1. Diễn Tập Thực Tế PostgreSQL Test -> D1 Local Qua Worker Bridge
-Đã hoàn thành toàn bộ kịch bản diễn tập theo yêu cầu của Codex:
+Tại commit `83f95c1`, quy trình diễn tập PG thật -> D1 local đã được chứng minh lần đầu:
 - **Nguồn PostgreSQL Test Độc Lập:**
-  - Container `assethub-pg-rehearsal-20261104` chạy trên port `5434`, schema tạo bằng lệnh `python manage.py migrate` thật của Django (15 bảng bắt buộc, hoàn toàn không có `ai_suggestion_logs`).
-  - Nạp dữ liệu giả phong phú: PK gốc, mật khẩu băm PBKDF2 1,000,000 iterations, timestamps UTC microsecond, date, booleans, JSON objects/lists, quan hệ M2M, sequence counters.
-  - Cấp tài khoản `assethub_ro_user` chỉ có quyền `SELECT` cho lệnh migration.
+  - Container chạy trên port `5434`, schema tạo bằng Django migrations (16 bảng bắt buộc, không có `ai_suggestion_logs`).
+  - Nạp dữ liệu giả phong phú: PK gốc, PBKDF2 1,000,000 hashes, UTC datetimes, date, booleans, JSON objects/lists, M2M, sequence counters.
+  - Cấp tài khoản `assethub_ro_user` chỉ có quyền `SELECT`.
 - **Đích Cloudflare D1 Local & Worker Bridge:**
-  - Chạy `wrangler dev` trên port `8787` (`http://127.0.0.1:8787`) với thư mục persist tạm `/tmp/wrangler-d1-rehearsal-20261104` và token bảo mật.
-  - Nạp DDL chuẩn `schema.sql` (16 bảng đích gồm `ai_suggestion_logs`, triggers và constraints).
-  - Xác nhận đích ban đầu hoàn toàn rỗng (0 bản ghi trên 16 bảng).
-  - Kết nối qua adapter Django `assethub_api.backends.d1` và Worker Bridge thật, không dùng driver SQLite trực tiếp.
-
-### 7.2. Kết Quả Xác Minh Tuần Tự
-1. **Preflight Checks:** Xác nhận danh tính nguồn/đích; nguồn có 15 bảng (vắng bảng AI), đích có 16 bảng và rỗng -> **PASS**.
-2. **Dry Run (`--dry-run`):** Trích xuất metadata, tính SHA-256 checksum, in kế hoạch 4-Tier; xác nhận 0 bản ghi ghi vào đích -> **PASS**.
-3. **Migration Thật:** Chạy `migrate_pg_to_d1` với alias nguồn/đích tường minh, không dùng `--allow-non-empty`. Nạp trọn vẹn 4 Tier dữ liệu -> **PASS**.
-4. **Đối Soát 1:1 (`D1Reconciler`):** Xác nhận 100% khớp across 7 tiêu chí (Row count, Key set, Foreign keys, PBKDF2 verbatim, Datetime/bool, Sequence counters theo `(kind, year)`, Row content parity) -> **PASS**.
-5. **Kiểm Tra Mật Khẩu Django Auth:** Xác thực mật khẩu 4 user bằng `User.check_password` trực tiếp trên local với dữ liệu đã nạp vào D1; 0 rò rỉ credential -> **PASS**.
-6. **Non-Empty Target Guard:** Chạy lại migration trên đích đã có dữ liệu mà không có cờ `--allow-non-empty`; lệnh lập tức chặn dừng với `CommandError` trước khi ghi byte nào -> **PASS**.
-7. **Negative Defect Detection:** Kiểm thử 5 kịch bản sai lệch cố ý (đổi password hash, đổi boolean `is_staff`, giảm sequence counter, xóa dòng history log, đổi text department); `D1Reconciler` bắt chính xác 100% sai lệch -> **PASS**.
-
-### 7.3. Tổng Hợp Kết Quả Test Suite
-- `backend/apps/common/tests/test_pg_to_d1_rehearsal.py`: **11 passed in 22.94s (100% PASS)**
-- `backend/apps/common/tests/test_harness_pg_source.py`: **6 passed in 3.42s (100% PASS)**
-- `backend/apps/common/tests/test_harness_d1_target.py`: **3 passed in 4.62s (100% PASS)**
-- `backend/apps/common/tests/test_d1_migration.py`: **44 passed in 25.89s (100% PASS)**
-- `backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py`: **8 passed in 0.18s (100% PASS)**
-- `backend/assethub_api/backends/d1/tests/test_isolation_guard.py`: **10 passed, 1 skipped in 0.11s (100% PASS)**
-- `node spikes/cf-d1-spike/bridge-worker/tests/test_worker_regression.mjs`: **8 passed in 101.44ms (100% PASS)**
-- **Schema Byte Parity:** `backend/assethub_api/backends/d1/sql/schema.sql` và `spikes/cf-d1-spike/schema.sql` -> **IDENTICAL**.
-- **Dọn Dẹp Tài Nguyên:** Container test `assethub-pg-rehearsal-20261104` đã được stop/rm; port 8787 và port 5434 đã giải phóng; thư mục persist tạm đã xóa. CSDL `assethub-db-1` (port 5433) và `pg-test` (port 5432) hoàn toàn nguyên vẹn.
+  - `wrangler dev` trên port `8787`, nạp DDL chuẩn `schema.sql` (17 bảng dữ liệu gồm `ai_suggestion_logs`, 19 bảng tổng thể gồm 2 bảng hạ tầng).
+  - Khởi tạo 0 bản ghi trên 17 bảng dữ liệu.
+  - Kết nối qua adapter Django `assethub_api.backends.d1` và Worker Bridge.
+- **Kết quả baseline cũ:** 11 kịch bản migration và đối soát 1:1 đạt PASS. Tuy nhiên, Codex phát hiện hai lỗi P1 nghiêm trọng về lifecycle/process ownership và test gating.
 
 ---
 
-## 8. Ranh Giới An Toàn & Đề Xuất Bước Kế Tiếp
+## 8. Kết Quả Triển Khai Task 3c: Sửa Triệt Để P1/P2 Lifecycle & Harness Hardening
 
-- **Bằng chứng thực tế:** Đã chứng minh toàn bộ quy trình migration chạy từ CSDL PostgreSQL thật sang Cloudflare D1 local qua Worker bridge thật với schema migrations Django.
-- **Ranh giới:** Tuyệt đối chưa ghi lên Cloudflare D1 Cloud; chưa can thiệp CSDL PostgreSQL production (`USE_D1_DATABASE=False`).
-- Kính gửi Codex nghiệm thu kết quả diễn tập local Task 3b để xin phê duyệt các bước tiếp theo.
+Nhận phản hồi review từ Codex đối với commit `83f95c1`, đã thực hiện tái cấu trúc toàn diện harness và lifecycle:
+
+### 8.1. P1: Khắc Phục Process Ownership & Quản Lý Dọn Dẹp An Toàn
+- **Xóa bỏ hoàn toàn lệnh nguy hiểm:** Loại bỏ 100% `_kill_processes_on_port`, `pkill`, `fuser`, và hành vi duyệt cây tiến trình cha trong `/proc` xuống con.
+- **Chỉ quản lý process do run khởi tạo:** Worker bridge được khởi động qua `subprocess.Popen(..., start_new_session=True)`. Teardown chỉ gửi signal `SIGTERM` (sau đó `SIGKILL` nếu timeout) tới đúng process group của process do chính harness tạo thông qua `os.killpg()`.
+- **Port Conflict Guard Tuyệt Đối:** Trước khi khởi động, kiểm tra socket port 8787 / 5434. Nếu port đang bận bởi tiến trình lạ, ném ngay `RuntimeError` và không chạm vào bất kỳ tiến trình nào trên host.
+- **Sentinel Regression Test:** Đã kiểm chứng qua `test_sentinel_port_in_use_refuses_to_kill` và `test_sentinel_port_conflict_guard`: server socket sentinel cố ý chiếm port vẫn sống nguyên vẹn và tiếp tục nhận kết nối sau khi harness từ chối khởi động.
+
+### 8.2. P1: Run Isolation & Directory Markers
+- **Thư mục persist riêng biệt theo Run ID:** Mỗi lượt chạy tạo thư mục `/tmp/assethub_rehearsal_d1_{run_id}`.
+- **Xác thực quyền sở hữu qua Marker:** Ghi file `run_marker.json` chứa `run_id`, `pid`, và `created_at`.
+- **Cleanup Guard:** Hàm `cleanup_persist_directory()` kiểm tra bắt buộc: đường dẫn phải nằm trong `/tmp`, có tiền tố `assethub_rehearsal_d1_`, và nội dung file `run_marker.json` khớp chính xác với `run_id` của lượt chạy. Từ chối xóa và raise lỗi nếu thiếu marker hoặc lệch run ID.
+
+### 8.3. P1: Gating Test Suite Mặc Định & Self-Contained Lifecycle Fixtures
+- **Đăng ký Marker `@pytest.mark.rehearsal`:** Khai báo marker trong `backend/pytest.ini`.
+- **Cơ chế Opt-in rõ ràng:** Bổ sung `backend/conftest.py` với cờ `--rehearsal` và biến môi trường `ASSETHUB_RUN_REHEARSAL=1`. Mặc định khi chạy `pytest` thông thường, toàn bộ 27 test rehearsal được skip ngay lập tức (0.04s), không tạo container Docker hay tiến trình Worker nào.
+- **Fixture tự quản lý toàn vẹn (Self-Contained Lifecycle):**
+  - Fixture `pg_rehearsal_harness` và `rehearsal_environment` tự động khởi động và dọn dẹp sạch sẽ cả CSDL PostgreSQL nguồn lẫn D1 đích trong khối `try ... finally`.
+  - Không yêu cầu người vận hành phải chạy lệnh CLI thủ công trước hoặc sau test suite.
+  - Bổ sung test hồi quy `test_00_teardown_reliability_regression`: chứng minh mọi tài nguyên nguồn/đích/port/thư mục tạm đều được dọn sạch hoàn toàn ngay cả khi có assertion cố tình thất bại giữa chừng.
+
+### 8.4. P2: Cô Lập Network & Credentials An Toàn
+- **Ràng buộc Loopback 127.0.0.1:** Container PostgreSQL test bind chặt chẽ vào `127.0.0.1:{port}:5432`, không mở ra `0.0.0.0`.
+- **Docker Labels & Teardown Guard:** Gắn nhãn `assethub.owner=rehearsal` và `assethub.run_id={run_id}` cho container. Hàm teardown kiểm tra nhãn trước khi `docker rm -f`. Tuyệt đối bảo vệ các container hệ thống `assethub-db-1` (port 5433) và `pg-test` (port 5432).
+- **Credentials ngẫu nhiên theo run:** Tự động sinh `admin_user` (`pgadm_{run_id}`), `ro_user` (`pgro_{run_id}`), và mật khẩu ngẫu nhiên qua `secrets.token_urlsafe(16)`. Không hardcode mật khẩu, không in credentials trong `repr()`, `str()` hay error logs.
+- **Token Local Riêng Biệt:** Tự động sinh token ngẫu nhiên độc lập (`secrets.token_urlsafe(32)`), không tái sử dụng token Cloud. File env tạm được phân quyền chặt chẽ `chmod 0600`.
+
+---
+
+## 9. Tổng Hợp Kiểm Thử Xác Minh Sau Khi Sửa (Task 3c)
+
+### 9.1. Bộ Kiểm Thử Diễn Tập Opt-in (`--rehearsal`)
+Lệnh: `backend/.venv/bin/pytest backend/apps/common/tests/test_harness_pg_source.py backend/apps/common/tests/test_harness_d1_target.py backend/apps/common/tests/test_pg_to_d1_rehearsal.py --rehearsal -v`
+Kết quả: **27 passed in 37.93s (100% PASS)**:
+- `test_harness_pg_source.py`: **10 passed** (sentinel conflict guard, foreign container teardown rejection, random credentials, labels & loopback binding, schema isolation 16 mandatory tables, seed completeness, PBKDF2 Django auth, richness verification, read-only privilege enforcement).
+- `test_harness_d1_target.py`: **5 passed** (safe environment guard, env file 0600 mode, sentinel port kill refusal, marker validation refusal, lifecycle & process group clean termination).
+- `test_pg_to_d1_rehearsal.py`: **12 passed** (teardown reliability regression on failure, preflight checks, dry run 0 writes, real migration & 7-criteria parity, PBKDF2 auth verification, identifier sequences, non-empty target guard, 5 negative defect mutation detections).
+
+### 9.2. Kiểm Thử Gating Suite Mặc Định (Zero Side-Effects)
+Lệnh: `backend/.venv/bin/pytest backend/apps/common/tests/test_harness_pg_source.py backend/apps/common/tests/test_harness_d1_target.py backend/apps/common/tests/test_pg_to_d1_rehearsal.py`
+Kết quả: **27 skipped in 0.04s (100% CLEAN)**.
+- 0 container Docker được khởi tạo.
+- 0 tiến trình Worker được spawn.
+- 0 tiến trình ngoài bị ảnh hưởng.
+
+### 9.3. Toàn Bộ Unit Test Suite Khác
+- `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/apps/common/tests/test_d1_migration.py backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py backend/assethub_api/backends/d1/tests/test_isolation_guard.py -v`:
+  **62 passed, 1 skipped in 25.93s (100% PASS)**.
+- `node spikes/cf-d1-spike/bridge-worker/tests/test_worker_regression.mjs`:
+  **8 passed in 99.47ms (100% PASS)**.
+- **Kiểm Tra Trạng Thái Hệ Thống:**
+  - Cổng 5434 và 8787 hoàn toàn giải phóng (`Ports 5434 and 8787 are completely clean`).
+  - Thư mục `/tmp/assethub_rehearsal_d1_*` dọn sạch 100%.
+  - `assethub-db-1` (port 5433) và `pg-test` (port 5432) hoạt động bình thường, không bị gián đoạn.
+  - Quét 0 chuỗi hex token/secret 64 ký tự trong git diff.
+
+---
+
+## 10. Ranh Giới An Toàn & Đề Xuất Nghiệm Thu
+
+- **Bằng chứng kỹ thuật:** Đã hoàn thiện toàn diện quy trình kiểm thử và diễn tập an toàn, giải quyết trọn vẹn mọi yêu cầu P1 và P2 của Codex về process ownership, marker isolation, opt-in gating, và dynamic credentials.
+- **Ranh giới:** Chưa push/merge git, không ghi CSDL production PostgreSQL, không ghi Cloudflare D1 Cloud.
+- Kính gửi Codex nghiệm thu Task 3c để sẵn sàng chuyển sang Task 4 (Business Logic & Cloud Integration).

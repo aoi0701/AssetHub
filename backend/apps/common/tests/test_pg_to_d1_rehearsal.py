@@ -43,6 +43,7 @@ Validates the full local rehearsal sequence:
 """
 import io
 import os
+import secrets
 import time
 from typing import Dict, Any, Generator
 
@@ -58,24 +59,19 @@ from apps.common.management.commands.migrate_pg_to_d1 import (
     check_table_exists,
 )
 from apps.common.tests.harness_pg_source import (
-    RO_USER,
-    RO_PASSWORD,
-    DB_NAME,
-    HOST as PG_HOST,
-    PORT as PG_PORT,
+    PGSourceHarness,
     TEST_USERS,
-    setup_pg_rehearsal_source,
-    verify_schema_isolation,
+    is_port_in_use as is_pg_port_in_use,
 )
 from apps.common.tests.harness_d1_target import (
-    setup_d1_target,
-    teardown_d1_target,
+    D1TargetHarness,
+    check_port_in_use as is_d1_port_in_use,
     DEFAULT_BRIDGE_URL,
     DEFAULT_TOKEN,
     TARGET_TABLES,
-    D1TargetHarness,
 )
 
+pytestmark = pytest.mark.rehearsal
 
 SRC_ALIAS = "rehearsal_pg_src"
 TGT_ALIAS = "rehearsal_d1_tgt"
@@ -85,71 +81,81 @@ TGT_ALIAS = "rehearsal_d1_tgt"
 def rehearsal_environment(django_db_blocker) -> Generator[Dict[str, Any], None, None]:
     """
     Module-scoped fixture orchestrating both ends of the rehearsal:
-    1. Ensures PostgreSQL test container is running with authentic schema and seeded data.
-    2. Starts Cloudflare D1 local Worker Bridge with fresh DDL (0 rows).
+    1. Uses PGSourceHarness to spin up isolated Postgres and seed authentic dataset.
+    2. Uses D1TargetHarness to spin up local D1 worker bridge.
     3. Configures dynamic Django database aliases: 'rehearsal_pg_src' & 'rehearsal_d1_tgt'.
-    4. Cleanly tears down bridge and settings upon completion.
+    4. Guarantees clean teardown of both harnesses and dynamic databases in finally block.
     """
     with django_db_blocker.unblock():
-        # 1. PostgreSQL Source Setup
-        setup_pg_rehearsal_source(recreate=False)
-
-        # 2. D1 Target Setup
-        d1_harness: D1TargetHarness = setup_d1_target(clean_first=True)
-
-        # 3. Dynamic Database Settings Registration
-        pg_conf = {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": DB_NAME,
-            "USER": RO_USER,
-            "PASSWORD": RO_PASSWORD,
-            "HOST": PG_HOST,
-            "PORT": str(PG_PORT),
-            "TIME_ZONE": None,
-            "CONN_MAX_AGE": 0,
-            "CONN_HEALTH_CHECKS": False,
-            "OPTIONS": {},
-            "AUTOCOMMIT": True,
-            "ATOMIC_REQUESTS": False,
-        }
-
-        d1_conf = {
-            "ENGINE": "assethub_api.backends.d1",
-            "NAME": "assethub-test-d1",
-            "BRIDGE_URL": DEFAULT_BRIDGE_URL,
-            "BRIDGE_TOKEN": DEFAULT_TOKEN,
-            "TIMEOUT": 45.0,
-            "TIME_ZONE": None,
-            "CONN_MAX_AGE": 0,
-            "CONN_HEALTH_CHECKS": False,
-            "OPTIONS": {},
-            "AUTOCOMMIT": True,
-            "ATOMIC_REQUESTS": False,
-        }
-
-        settings.DATABASES[SRC_ALIAS] = pg_conf
-        settings.DATABASES[TGT_ALIAS] = d1_conf
-        connections.databases[SRC_ALIAS] = pg_conf
-        connections.databases[TGT_ALIAS] = d1_conf
-
-        env_info = {
-            "d1_harness": d1_harness,
-            "src_alias": SRC_ALIAS,
-            "tgt_alias": TGT_ALIAS,
-        }
+        run_id = secrets.token_hex(6)
+        pg_harness = PGSourceHarness(run_id=run_id, port=5434)
+        d1_harness = D1TargetHarness(run_id=run_id, port=8787)
 
         try:
+            pg_harness.setup()
+            d1_harness.setup()
+
+            pg_conf = {
+                "ENGINE": "django.db.backends.postgresql",
+                "NAME": pg_harness.dbname,
+                "USER": pg_harness.ro_user,
+                "PASSWORD": pg_harness.ro_password,
+                "HOST": pg_harness.host,
+                "PORT": str(pg_harness.port),
+                "TIME_ZONE": None,
+                "CONN_MAX_AGE": 0,
+                "CONN_HEALTH_CHECKS": False,
+                "OPTIONS": {},
+                "AUTOCOMMIT": True,
+                "ATOMIC_REQUESTS": False,
+            }
+
+            d1_conf = {
+                "ENGINE": "assethub_api.backends.d1",
+                "NAME": "assethub-test-d1",
+                "BRIDGE_URL": d1_harness.base_url,
+                "BRIDGE_TOKEN": d1_harness.token,
+                "TIMEOUT": 45.0,
+                "TIME_ZONE": None,
+                "CONN_MAX_AGE": 0,
+                "CONN_HEALTH_CHECKS": False,
+                "OPTIONS": {},
+                "AUTOCOMMIT": True,
+                "ATOMIC_REQUESTS": False,
+            }
+
+            settings.DATABASES[SRC_ALIAS] = pg_conf
+            settings.DATABASES[TGT_ALIAS] = d1_conf
+            connections.databases[SRC_ALIAS] = pg_conf
+            connections.databases[TGT_ALIAS] = d1_conf
+
+            env_info = {
+                "run_id": run_id,
+                "pg_harness": pg_harness,
+                "d1_harness": d1_harness,
+                "src_alias": SRC_ALIAS,
+                "tgt_alias": TGT_ALIAS,
+            }
+
             yield env_info
         finally:
-            # Clean teardown of D1 bridge
-            d1_harness.teardown()
-            # Clean teardown of Django database connection aliases
-            for alias in (SRC_ALIAS, TGT_ALIAS):
-                if alias in connections:
-                    connections[alias].close()
-                    del connections[alias]
-                settings.DATABASES.pop(alias, None)
-                connections.databases.pop(alias, None)
+            # Clean teardown ALWAYS runs for BOTH, even if tests fail!
+            try:
+                d1_harness.teardown()
+            finally:
+                try:
+                    pg_harness.teardown()
+                finally:
+                    # Clean up settings.DATABASES
+                    for alias in (SRC_ALIAS, TGT_ALIAS):
+                        if alias in connections:
+                            try:
+                                connections[alias].close()
+                            except Exception:
+                                pass
+                            del connections[alias]
+                        settings.DATABASES.pop(alias, None)
+                        connections.databases.pop(alias, None)
 
 
 def _ensure_migrated():
@@ -167,6 +173,63 @@ def _ensure_migrated():
 
 
 # ==============================================================================
+# (0) TEARDOWN RELIABILITY REGRESSION TEST
+# ==============================================================================
+
+def test_00_teardown_reliability_regression():
+    """
+    Teardown Reliability Regression Test:
+    Verifies that if a test in rehearsal fails or raises an AssertionError,
+    the finally block still executes and both port 8787 and port 5434 are cleanly released.
+    """
+    run_id = f"td_{secrets.token_hex(4)}"
+    test_pg_port = 5434 if not is_pg_port_in_use(5434) else 5435
+    test_d1_port = 8787 if not is_d1_port_in_use(8787) else 8788
+
+    pg_harness = PGSourceHarness(run_id=run_id, port=test_pg_port)
+    d1_harness = D1TargetHarness(run_id=run_id, port=test_d1_port)
+
+    executed_finally = False
+    caught_assertion_error = False
+
+    try:
+        pg_harness.start()
+        d1_harness.setup(clean_first=True)
+
+        assert is_pg_port_in_use(test_pg_port), f"Postgres port {test_pg_port} must be open"
+        assert is_d1_port_in_use(test_d1_port), f"D1 bridge port {test_d1_port} must be open"
+
+        try:
+            # Simulate an unexpected test assertion failure inside the rehearsal lifecycle
+            raise AssertionError("Simulated test failure during migration execution")
+        finally:
+            executed_finally = True
+            try:
+                d1_harness.teardown()
+            finally:
+                pg_harness.teardown()
+
+    except AssertionError as err:
+        caught_assertion_error = True
+        assert str(err) == "Simulated test failure during migration execution"
+    finally:
+        # Guarantee safety cleanup in case harness start threw before inner try
+        try:
+            d1_harness.teardown()
+        except Exception:
+            pass
+        try:
+            pg_harness.teardown()
+        except Exception:
+            pass
+
+    assert executed_finally is True, "The finally block must execute when a test fails"
+    assert caught_assertion_error is True, "The AssertionError must propagate out of the test block"
+    assert not is_d1_port_in_use(test_d1_port), f"Port {test_d1_port} was not released after teardown"
+    assert not is_pg_port_in_use(test_pg_port), f"Port {test_pg_port} was not released after teardown"
+
+
+# ==============================================================================
 # (1) PREFLIGHT VERIFICATION
 # ==============================================================================
 
@@ -180,6 +243,7 @@ def test_01_rehearsal_preflight_checks(rehearsal_environment):
     """
     conn_src = connections[SRC_ALIAS]
     conn_tgt = connections[TGT_ALIAS]
+    pg_harness: PGSourceHarness = rehearsal_environment["pg_harness"]
 
     # Verify vendors
     assert conn_src.vendor == "postgresql", f"Expected postgresql vendor for source, got {conn_src.vendor}"
@@ -189,11 +253,11 @@ def test_01_rehearsal_preflight_checks(rehearsal_environment):
     with conn_src.cursor() as cur:
         cur.execute("SELECT current_user, current_database()")
         db_user, current_db = cur.fetchone()
-        assert db_user == RO_USER, f"Expected read-only user '{RO_USER}', got '{db_user}'"
-        assert current_db == DB_NAME
+        assert db_user == pg_harness.ro_user, f"Expected read-only user '{pg_harness.ro_user}', got '{db_user}'"
+        assert current_db == pg_harness.dbname
 
     # Verify source schema isolation: 16 tables, ai_suggestion_logs absent
-    src_isolation = verify_schema_isolation()
+    src_isolation = pg_harness.verify_schema_isolation()
     assert src_isolation["verified"] is True
     assert src_isolation["ai_suggestion_logs_absent"] is True
     assert not check_table_exists(conn_src, "ai_suggestion_logs")

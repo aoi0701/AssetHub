@@ -9,14 +9,21 @@ Isolation Rules:
 - NEVER use --remote flag.
 - NEVER reset cloud D1 resources.
 - Strict token authentication and local file-backed persistence.
+- Strict process ownership: Only manage the process spawned by this instance.
+- Port collision guard: Refuse to start and never kill external processes.
+- Run-scoped directory and marker ownership: Only clean directories with matching marker.
 """
 
 import atexit
+import datetime
 import glob
 import json
+import logging
 import os
+import secrets
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import time
@@ -25,19 +32,29 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
 # Rehearsal Configuration Constants
 DEFAULT_PORT = 8787
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PERSIST_DIR = Path("/tmp/wrangler-d1-rehearsal-20261104")
-DEFAULT_ENV_FILE = Path("/tmp/wrangler-rehearsal-20261104.env")
-DEFAULT_PID_FILE = Path("/tmp/wrangler-rehearsal-20261104.pid")
-DEFAULT_TOKEN = (
-    os.environ.get("D1_BRIDGE_TOKEN")
-    or "assethub_rehearsal_bridge_token_local_test_32chars_min"
-)
+
+
+def generate_local_token() -> str:
+    """Generate a cryptographically secure random token for local Worker Bridge auth."""
+    return secrets.token_urlsafe(32)
+
+
+# Local random token generated per session - never reuse cloud token from D1_BRIDGE_TOKEN
+DEFAULT_TOKEN = generate_local_token()
+
 DEFAULT_DB_NAME = "assethub-test-d1"
 DEFAULT_BRIDGE_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
 DEFAULT_QUERY_URL = f"{DEFAULT_BRIDGE_URL}/api/v1/query"
+
+# Backward compatibility defaults
+DEFAULT_PERSIST_DIR = Path("/tmp/assethub_rehearsal_d1_default")
+DEFAULT_ENV_FILE = Path("/tmp/assethub_rehearsal_d1_default.env")
+DEFAULT_PID_FILE = Path("/tmp/assethub_rehearsal_d1_default.pid")
 
 # Target tables to verify: 16 source mandatory tables + ai_suggestion_logs (17 total)
 TARGET_TABLES: List[str] = [
@@ -79,80 +96,206 @@ def assert_safe_environment(cmd_args: List[str]) -> None:
             raise RuntimeError("CRITICAL ISOLATION GUARD: wrangler deploy is strictly forbidden in local rehearsal!")
 
 
-def _kill_processes_on_port(port: int = DEFAULT_PORT) -> None:
+def check_port_in_use(host_or_port: Any = DEFAULT_HOST, port: Optional[int] = None, host: Optional[str] = None) -> bool:
+    """Check if a TCP port is currently open and accepting connections."""
+    if host is not None:
+        target_host = host
+        target_port = port if port is not None else DEFAULT_PORT
+    elif isinstance(host_or_port, int):
+        target_host = DEFAULT_HOST
+        target_port = host_or_port
+    else:
+        target_host = str(host_or_port)
+        target_port = port if port is not None else DEFAULT_PORT
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((target_host, target_port)) == 0
+
+
+def assert_port_available(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     """
-    Safely terminate any lingering process listening on the specified port.
-    Crucial: Kills entire process tree (node/wrangler/workerd) to prevent auto-respawn.
+    Verify the target port is available.
+    If the port is already in use: FAIL IMMEDIATELY with RuntimeError.
+    Strictly forbidden to kill external processes.
     """
-    # 1. Kill any wrangler dev process targeting this port
+    if check_port_in_use(host=host, port=port):
+        raise RuntimeError(
+            f"Port {port} on {host} is already in use by another process. Refusing to terminate external process."
+        )
+
+
+def write_run_marker(persist_dir: Path, run_id: str, pid: Optional[int] = None) -> Path:
+    """Write run_marker.json inside persist_dir recording run_id, pid, and creation timestamp."""
+    target_dir = Path(persist_dir).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    marker_path = target_dir / "run_marker.json"
+    marker_data = {
+        "run_id": run_id,
+        "pid": pid,
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    marker_path.write_text(json.dumps(marker_data, indent=2), encoding="utf-8")
+    return marker_path
+
+
+def cleanup_persist_directory(
+    persist_dir: Optional[Path],
+    run_id: Optional[str] = None,
+    raise_on_error: bool = False,
+) -> bool:
+    """
+    Safely delete rehearsal directory only if:
+    1. Directory exists and is within /tmp
+    2. Name matches /tmp/assethub_rehearsal_d1_* or /tmp/wrangler_d1_*
+    3. Contains run_marker.json with matching run_id
+    Never deletes arbitrary paths.
+    """
+    if persist_dir is None:
+        return False
+    path = Path(persist_dir).resolve()
+    if not path.exists():
+        return False
+
+    def _refuse(reason: str) -> bool:
+        logger.warning("Refusing to delete directory '%s': %s", path, reason)
+        if raise_on_error:
+            raise RuntimeError(f"Refusing to delete directory '{path}': {reason}")
+        return False
+
+    # Guard 1: Must be inside /tmp
+    tmp_path = Path("/tmp").resolve()
     try:
-        subprocess.run(["pkill", "-9", "-f", f"wrangler.*dev.*{port}"], capture_output=True)
+        path.relative_to(tmp_path)
+    except ValueError:
+        return _refuse("Path is not inside /tmp")
+
+    if path == tmp_path:
+        return _refuse("Path is the root /tmp directory itself")
+
+    # Guard 2: Name pattern match
+    name = path.name
+    if not (name.startswith("assethub_rehearsal_d1_") or name.startswith("wrangler_d1_")):
+        return _refuse(f"Directory name '{name}' does not match run directory pattern")
+
+    # Guard 3: run_id must be provided
+    if not run_id:
+        return _refuse("No run_id provided for marker verification")
+
+    # Guard 4: run_marker.json must exist
+    marker_path = path / "run_marker.json"
+    if not marker_path.is_file():
+        return _refuse(f"Missing run_marker.json in {path}")
+
+    # Guard 5: run_id matches marker contents
+    try:
+        data = json.loads(marker_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return _refuse("run_marker.json does not contain a JSON object")
+        if data.get("run_id") != run_id:
+            return _refuse(
+                f"Marker run_id '{data.get('run_id')}' does not match expected run_id '{run_id}'"
+            )
+    except Exception as exc:
+        return _refuse(f"Failed to read or parse run_marker.json: {exc}")
+
+    # All checks passed: safely remove directory
+    shutil.rmtree(path, ignore_errors=True)
+    return True
+
+
+def cleanup_env_file(env_file: Optional[Path]) -> bool:
+    """Safely unlink temporary rehearsal env file under /tmp."""
+    if env_file is None:
+        return False
+    path = Path(env_file).resolve()
+    if not path.is_file():
+        return False
+
+    tmp_path = Path("/tmp").resolve()
+    try:
+        path.relative_to(tmp_path)
+    except ValueError:
+        return False
+
+    if path == tmp_path:
+        return False
+
+    name = path.name
+    if not (name.startswith("assethub_rehearsal_d1_") or name.startswith("wrangler")):
+        return False
+
+    try:
+        path.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def terminate_process(proc: Optional[subprocess.Popen], timeout: float = 5.0) -> None:
+    """
+    Safely terminate only the given subprocess and its process group.
+    Sends SIGTERM to process group, waits up to timeout (5s), sends SIGKILL if still running.
+    Does nothing if proc is None or already terminated.
+    """
+    if proc is None:
+        return
+    if proc.poll() is not None:
+        return
+
+    # 1. Send SIGTERM to process group
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+    # 2. Wait up to timeout
+    try:
+        proc.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
     except Exception:
         pass
 
-    # 2. Check stored pid file if present
-    if DEFAULT_PID_FILE.exists():
-        try:
-            pid = int(DEFAULT_PID_FILE.read_text().strip())
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
-            except Exception:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except Exception:
-                    pass
-            DEFAULT_PID_FILE.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    # 3. Kill listeners and their parent dev processes
+    # 3. If still running, send SIGKILL to process group
     try:
-        res = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
-        pids = [int(p) for p in res.stdout.strip().split() if p.isdigit()]
-        for pid in pids:
-            # Walk up to kill parents (wrangler/node) first so workerd does not respawn
-            curr = pid
-            to_kill = [curr]
-            while curr > 1:
-                try:
-                    with open(f"/proc/{curr}/stat", "r") as f:
-                        ppid = int(f.read().split()[3])
-                        if ppid > 1 and ppid not in to_kill:
-                            to_kill.append(ppid)
-                            curr = ppid
-                        else:
-                            break
-                except Exception:
-                    break
-
-            for p in reversed(to_kill):
-                try:
-                    os.kill(p, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-    except Exception:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
         pass
 
-    # 4. Secondary fuser safeguard
     try:
-        subprocess.run(["fuser", "-k", "-9", f"{port}/tcp"], capture_output=True)
+        proc.wait(timeout=2.0)
     except Exception:
         pass
 
 
-def create_env_file(env_file: Path = DEFAULT_ENV_FILE, token: str = DEFAULT_TOKEN) -> Path:
-    """Generate temporary environment file containing BRIDGE_SECRET_TOKEN."""
-    token_clean = token.strip()
-    if len(token_clean) < 32:
+def create_env_file(env_file: Path = DEFAULT_ENV_FILE, token: Optional[str] = None) -> Path:
+    """Generate temporary environment file containing BRIDGE_SECRET_TOKEN with 0600 file permissions."""
+    token_val = (token or DEFAULT_TOKEN).strip()
+    if len(token_val) < 32:
         raise ValueError("BRIDGE_SECRET_TOKEN must be at least 32 characters long.")
     target_path = Path(env_file).resolve()
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_text(f"BRIDGE_SECRET_TOKEN={token_clean}\n", encoding="utf-8")
+
+    flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
+    fd = os.open(str(target_path), flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(f"BRIDGE_SECRET_TOKEN={token_val}\n")
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
     return target_path
 
 
 def ingest_d1_ddl(
-    persist_dir: Path = DEFAULT_PERSIST_DIR,
+    persist_dir: Optional[Path] = None,
     bridge_worker_dir: Optional[Path] = None,
     schema_file: Optional[Path] = None,
     db_name: str = DEFAULT_DB_NAME,
@@ -168,7 +311,7 @@ def ingest_d1_ddl(
     if schema_file is None:
         schema_file = repo_root / "spikes" / "cf-d1-spike" / "schema.sql"
 
-    persist_dir_path = Path(persist_dir).resolve()
+    persist_dir_path = Path(persist_dir or DEFAULT_PERSIST_DIR).resolve()
     persist_dir_path.mkdir(parents=True, exist_ok=True)
 
     if not bridge_worker_dir.exists():
@@ -203,9 +346,9 @@ def ingest_d1_ddl(
 init_d1_ddl = ingest_d1_ddl
 
 
-def get_d1_sqlite_file(persist_dir: Path = DEFAULT_PERSIST_DIR) -> Path:
+def get_d1_sqlite_file(persist_dir: Optional[Path] = None) -> Path:
     """Locate the miniflare D1 SQLite database file."""
-    persist_dir_path = Path(persist_dir).resolve()
+    persist_dir_path = Path(persist_dir or DEFAULT_PERSIST_DIR).resolve()
     pattern = persist_dir_path / "v3" / "d1" / "miniflare-D1DatabaseObject" / "*.sqlite"
     matches = [Path(p) for p in glob.glob(str(pattern)) if not p.endswith("metadata.sqlite")]
     if not matches:
@@ -217,19 +360,20 @@ def query_bridge_http(
     sql: str,
     params: Optional[List[Any]] = None,
     url: str = DEFAULT_QUERY_URL,
-    token: str = DEFAULT_TOKEN,
+    token: Optional[str] = None,
     timeout: float = 5.0,
 ) -> Dict[str, Any]:
     """Execute SQL query over Worker Bridge HTTP API."""
     if params is None:
         params = []
+    token_val = (token or DEFAULT_TOKEN).strip()
     payload = json.dumps({"sql": sql, "params": params}).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=payload,
         headers={
             "Content-Type": "application/json",
-            "X-Bridge-Token": token.strip(),
+            "X-Bridge-Token": token_val,
         },
         method="POST",
     )
@@ -239,7 +383,7 @@ def query_bridge_http(
 
 def check_bridge_health(
     url: str = DEFAULT_QUERY_URL,
-    token: str = DEFAULT_TOKEN,
+    token: Optional[str] = None,
     timeout: float = 2.0,
 ) -> bool:
     """Poll Worker Bridge with 'SELECT 1' health check query."""
@@ -253,7 +397,7 @@ def check_bridge_health(
 def wait_for_bridge_ready(
     proc: Optional[subprocess.Popen] = None,
     url: str = DEFAULT_QUERY_URL,
-    token: str = DEFAULT_TOKEN,
+    token: Optional[str] = None,
     timeout: float = 15.0,
 ) -> bool:
     """Wait up to timeout seconds for bridge to respond to SELECT 1."""
@@ -268,7 +412,7 @@ def wait_for_bridge_ready(
     return False
 
 
-def verify_d1_target_clean_sqlite(persist_dir: Path = DEFAULT_PERSIST_DIR) -> Dict[str, int]:
+def verify_d1_target_clean_sqlite(persist_dir: Optional[Path] = None) -> Dict[str, int]:
     """Inspect local SQLite database directly to verify table existence and zero rows."""
     db_file = get_d1_sqlite_file(persist_dir)
     conn = sqlite3.connect(str(db_file))
@@ -303,13 +447,14 @@ def verify_d1_target_clean_sqlite(persist_dir: Path = DEFAULT_PERSIST_DIR) -> Di
 
 def verify_d1_target_clean_bridge(
     url: str = DEFAULT_QUERY_URL,
-    token: str = DEFAULT_TOKEN,
+    token: Optional[str] = None,
 ) -> Dict[str, int]:
     """Inspect local D1 via Worker Bridge HTTP query to verify table existence and zero rows."""
+    token_val = token or DEFAULT_TOKEN
     res = query_bridge_http(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'sqlite_%';",
         url=url,
-        token=token,
+        token=token_val,
     )
     if not res.get("success"):
         raise RuntimeError(f"Failed to query sqlite_master over bridge: {res}")
@@ -327,7 +472,7 @@ def verify_d1_target_clean_bridge(
     row_counts: Dict[str, int] = {}
     non_empty: Dict[str, int] = {}
     for t in TARGET_TABLES:
-        c_res = query_bridge_http(f'SELECT count(*) as cnt FROM "{t}";', url=url, token=token)
+        c_res = query_bridge_http(f'SELECT count(*) as cnt FROM "{t}";', url=url, token=token_val)
         if not c_res.get("success"):
             raise RuntimeError(f"Failed to query row count for table '{t}': {c_res}")
         items = c_res.get("results", [])
@@ -348,44 +493,51 @@ def verify_d1_target_clean_bridge(
 
 def verify_d1_target_clean(
     url: str = DEFAULT_QUERY_URL,
-    token: str = DEFAULT_TOKEN,
-    persist_dir: Path = DEFAULT_PERSIST_DIR,
+    token: Optional[str] = None,
+    persist_dir: Optional[Path] = None,
 ) -> Dict[str, int]:
     """Verify target tables are clean (0 rows) and all exist, preferring bridge when active."""
-    if check_bridge_health(url=url, token=token, timeout=1.0):
-        return verify_d1_target_clean_bridge(url=url, token=token)
+    token_val = token or DEFAULT_TOKEN
+    if check_bridge_health(url=url, token=token_val, timeout=1.0):
+        return verify_d1_target_clean_bridge(url=url, token=token_val)
     return verify_d1_target_clean_sqlite(persist_dir=persist_dir)
 
 
 def start_d1_bridge(
     port: int = DEFAULT_PORT,
-    persist_dir: Path = DEFAULT_PERSIST_DIR,
-    env_file: Path = DEFAULT_ENV_FILE,
-    token: str = DEFAULT_TOKEN,
+    host: str = DEFAULT_HOST,
+    persist_dir: Optional[Path] = None,
+    env_file: Optional[Path] = None,
+    token: Optional[str] = None,
     bridge_worker_dir: Optional[Path] = None,
     timeout: float = 15.0,
+    run_id: Optional[str] = None,
 ) -> subprocess.Popen:
     """
-    Launch npx wrangler dev on port 8787 with:
-    --ip 127.0.0.1 --port 8787 --persist-to <persist_dir> --env-file <env_file>
-    Polls health check with SELECT 1 until ready (15s timeout).
+    Launch npx wrangler dev on host:port with:
+    --ip <host> --port <port> --persist-to <persist_dir> --env-file <env_file>
+    Tests connection via socket.connect_ex first: Fails immediately if port is in use.
+    Spawns process via start_new_session=True.
+    Polls health check with SELECT 1 until ready.
     """
-    _kill_processes_on_port(port)
-    create_env_file(env_file=env_file, token=token)
+    assert_port_available(host=host, port=port)
+
+    persist_dir_path = Path(persist_dir or DEFAULT_PERSIST_DIR).resolve()
+    env_file_path = Path(env_file or DEFAULT_ENV_FILE).resolve()
+    token_val = token or DEFAULT_TOKEN
+
+    create_env_file(env_file=env_file_path, token=token_val)
 
     repo_root = get_repo_root()
     if bridge_worker_dir is None:
         bridge_worker_dir = repo_root / "spikes" / "cf-d1-spike" / "bridge-worker"
-
-    persist_dir_path = Path(persist_dir).resolve()
-    env_file_path = Path(env_file).resolve()
 
     cmd = [
         "npx",
         "wrangler",
         "dev",
         "--ip",
-        DEFAULT_HOST,
+        host,
         "--port",
         str(port),
         "--persist-to",
@@ -400,21 +552,21 @@ def start_d1_bridge(
         cwd=str(bridge_worker_dir),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
-        preexec_fn=os.setsid,
+        start_new_session=True,
         text=True,
     )
 
-    # Record PID
-    DEFAULT_PID_FILE.write_text(str(proc.pid), encoding="utf-8")
+    if run_id:
+        write_run_marker(persist_dir_path, run_id=run_id, pid=proc.pid)
 
-    query_url = f"http://{DEFAULT_HOST}:{port}/api/v1/query"
+    query_url = f"http://{host}:{port}/api/v1/query"
     try:
-        is_ready = wait_for_bridge_ready(proc=proc, url=query_url, token=token, timeout=timeout)
+        is_ready = wait_for_bridge_ready(proc=proc, url=query_url, token=token_val, timeout=timeout)
         if not is_ready:
-            teardown_d1_target(proc=proc, persist_dir=None, env_file=None, port=port)
+            terminate_process(proc)
             raise TimeoutError(f"Worker bridge failed to become ready on {query_url} within {timeout}s.")
     except Exception:
-        teardown_d1_target(proc=proc, persist_dir=None, env_file=None, port=port)
+        terminate_process(proc)
         raise
 
     return proc
@@ -422,56 +574,25 @@ def start_d1_bridge(
 
 def teardown_d1_target(
     proc: Optional[subprocess.Popen] = None,
-    persist_dir: Optional[Path] = DEFAULT_PERSIST_DIR,
-    env_file: Optional[Path] = DEFAULT_ENV_FILE,
+    persist_dir: Optional[Path] = None,
+    env_file: Optional[Path] = None,
     port: int = DEFAULT_PORT,
+    run_id: Optional[str] = None,
 ) -> None:
     """
-    Terminates the wrangler dev process and cleans up:
-    - /tmp/wrangler-d1-rehearsal-20261104
-    - /tmp/wrangler-rehearsal-20261104.env
+    Safely tears down only the provided process and cleans up only its own run-scoped files:
+    - ONLY terminates proc if given
+    - Cleans persist_dir only if marker validates against run_id
+    - Cleans env_file only if under /tmp
     """
-    # 1. Terminate provided process instance
     if proc is not None:
-        try:
-            if proc.poll() is None:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                try:
-                    proc.wait(timeout=3.0)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-        except Exception:
-            pass
+        terminate_process(proc)
 
-    # 2. Terminate any stray listeners on rehearsal port & ancestors
-    _kill_processes_on_port(port)
+    if persist_dir is not None:
+        cleanup_persist_directory(persist_dir, run_id=run_id)
 
-    # 3. Clean up rehearsal persist directory
-    if persist_dir:
-        p = Path(persist_dir)
-        if p.exists():
-            shutil.rmtree(p, ignore_errors=True)
-
-    # 4. Clean up rehearsal environment and pid files
-    if env_file:
-        ef = Path(env_file)
-        if ef.exists():
-            try:
-                ef.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-    if DEFAULT_PID_FILE.exists():
-        try:
-            DEFAULT_PID_FILE.unlink(missing_ok=True)
-        except Exception:
-            pass
+    if env_file is not None:
+        cleanup_env_file(env_file)
 
 
 class D1TargetHarness:
@@ -480,32 +601,79 @@ class D1TargetHarness:
     def __init__(
         self,
         port: int = DEFAULT_PORT,
-        persist_dir: Path = DEFAULT_PERSIST_DIR,
-        env_file: Path = DEFAULT_ENV_FILE,
-        token: str = DEFAULT_TOKEN,
+        host: str = DEFAULT_HOST,
+        persist_dir: Optional[Path] = None,
+        env_file: Optional[Path] = None,
+        token: Optional[str] = None,
         proc: Optional[subprocess.Popen] = None,
+        run_id: Optional[str] = None,
     ):
+        if isinstance(port, str) and run_id is None:
+            run_id = port
+            port = DEFAULT_PORT
+        self.run_id = run_id or secrets.token_hex(6)
         self.port = port
-        self.persist_dir = Path(persist_dir)
-        self.env_file = Path(env_file)
-        self.token = token
-        self.proc = proc
-        self.base_url = f"http://{DEFAULT_HOST}:{port}"
+        self.host = host
+        self.persist_dir = (
+            Path(persist_dir).resolve()
+            if persist_dir is not None
+            else Path(f"/tmp/assethub_rehearsal_d1_{self.run_id}")
+        )
+        self.env_file = (
+            Path(env_file).resolve()
+            if env_file is not None
+            else Path(f"/tmp/assethub_rehearsal_d1_{self.run_id}.env")
+        )
+        self.token = token or DEFAULT_TOKEN
+        self.process: Optional[subprocess.Popen] = proc
+        self.base_url = f"http://{self.host}:{self.port}"
         self.query_url = f"{self.base_url}/api/v1/query"
 
-    def setup(self, clean_first: bool = True) -> "D1TargetHarness":
-        """Execute full initialization pipeline."""
-        if clean_first:
-            teardown_d1_target(persist_dir=self.persist_dir, env_file=self.env_file, port=self.port)
+    @property
+    def proc(self) -> Optional[subprocess.Popen]:
+        """Backward compatibility alias for self.process."""
+        return self.process
 
+    @proc.setter
+    def proc(self, value: Optional[subprocess.Popen]) -> None:
+        self.process = value
+
+    def setup(self, clean_first: bool = True) -> "D1TargetHarness":
+        """Execute initialization pipeline with strict process and directory isolation."""
+        # 1. Immediate port check: Fail if port is in use; NEVER kill external processes
+        assert_port_available(host=self.host, port=self.port)
+
+        # 2. Clean prior instance files if requested
+        if clean_first:
+            if self.process is not None:
+                terminate_process(self.process)
+                self.process = None
+            cleanup_persist_directory(self.persist_dir, run_id=self.run_id)
+            cleanup_env_file(self.env_file)
+
+        # 3. Create run directory and write initial marker
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+        write_run_marker(self.persist_dir, run_id=self.run_id, pid=None)
+
+        # 4. Ingest DDL
         ingest_d1_ddl(persist_dir=self.persist_dir, port=self.port)
-        self.proc = start_d1_bridge(
+
+        # 5. Launch Worker Bridge
+        self.process = start_d1_bridge(
             port=self.port,
+            host=self.host,
             persist_dir=self.persist_dir,
             env_file=self.env_file,
             token=self.token,
+            run_id=self.run_id,
         )
+
+        # 6. Update marker with active PID
+        write_run_marker(self.persist_dir, run_id=self.run_id, pid=self.process.pid)
+
+        # 7. Verify destination clean state (17 tables, 0 rows)
         self.verify_clean()
+
         if self not in _active_harnesses:
             _active_harnesses.append(self)
         return self
@@ -519,16 +687,20 @@ class D1TargetHarness:
         return verify_d1_target_clean_bridge(url=self.query_url, token=self.token)
 
     def teardown(self) -> None:
-        """Teardown running bridge and purge rehearsal files."""
+        """Teardown only this harness's process and purge only its own files."""
         if self in _active_harnesses:
             _active_harnesses.remove(self)
-        teardown_d1_target(
-            proc=self.proc,
-            persist_dir=self.persist_dir,
-            env_file=self.env_file,
-            port=self.port,
-        )
-        self.proc = None
+
+        # Terminate only our own process
+        if self.process is not None:
+            terminate_process(self.process)
+            self.process = None
+
+        # Clean only our own directory after verifying marker
+        cleanup_persist_directory(self.persist_dir, run_id=self.run_id)
+
+        # Clean only our own env file
+        cleanup_env_file(self.env_file)
 
     def close(self) -> None:
         """Alias for teardown."""
@@ -553,17 +725,21 @@ def _cleanup_atexit() -> None:
 
 def setup_d1_target(
     port: int = DEFAULT_PORT,
-    persist_dir: Path = DEFAULT_PERSIST_DIR,
-    env_file: Path = DEFAULT_ENV_FILE,
-    token: str = DEFAULT_TOKEN,
+    host: str = DEFAULT_HOST,
+    persist_dir: Optional[Path] = None,
+    env_file: Optional[Path] = None,
+    token: Optional[str] = None,
     clean_first: bool = True,
+    run_id: Optional[str] = None,
 ) -> D1TargetHarness:
     """Factory function: Setup clean D1 target, start bridge, and verify destination."""
     harness = D1TargetHarness(
         port=port,
+        host=host,
         persist_dir=persist_dir,
         env_file=env_file,
         token=token,
+        run_id=run_id,
     )
     return harness.setup(clean_first=clean_first)
 
@@ -576,12 +752,13 @@ if __name__ == "__main__":
     if arg == "--setup":
         print(f"Setting up D1 target harness on port {DEFAULT_PORT}...")
         harness = setup_d1_target()
-        print(f"Bridge running at {harness.base_url}. PID: {harness.proc.pid if harness.proc else 'unknown'}")
+        print(f"Bridge running at {harness.base_url}. PID: {harness.process.pid if harness.process else 'unknown'}")
         print("Target tables verified clean (0 rows):", len(TARGET_TABLES))
 
     elif arg == "--teardown":
-        print("Tearing down D1 target harness...")
-        teardown_d1_target()
+        print("Tearing down active D1 target harnesses...")
+        for h in list(_active_harnesses):
+            h.teardown()
         print("Teardown complete.")
 
     elif arg == "--verify":
@@ -593,7 +770,7 @@ if __name__ == "__main__":
     elif arg == "--test":
         print("Running D1 target harness self-test...")
         with D1TargetHarness() as h:
-            print(f"[1/4] Harness initialized at {h.base_url}")
+            print(f"[1/4] Harness initialized at {h.base_url} (run_id: {h.run_id})")
             counts = h.verify_clean()
             print(f"[2/4] Verified {len(counts)} tables have 0 rows.")
             assert "ai_suggestion_logs" in counts, "ai_suggestion_logs must be present"
@@ -603,8 +780,12 @@ if __name__ == "__main__":
             assert q_res.get("results") == [{"answer": 42}], f"Unexpected result: {q_res}"
             print("[3/4] SELECT query validated successfully.")
 
+            # Record paths to verify post-cleanup
+            p_dir = h.persist_dir
+            e_file = h.env_file
+
         # Verify teardown
-        assert not DEFAULT_ENV_FILE.exists(), f"Env file was not cleaned: {DEFAULT_ENV_FILE}"
-        assert not DEFAULT_PERSIST_DIR.exists(), f"Persist dir was not cleaned: {DEFAULT_PERSIST_DIR}"
+        assert not e_file.exists(), f"Env file was not cleaned: {e_file}"
+        assert not p_dir.exists(), f"Persist dir was not cleaned: {p_dir}"
         print("[4/4] Teardown cleaned all persist files and killed worker process.")
         print("ALL HARNESS TESTS PASSED.")
