@@ -34,7 +34,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 from django.conf import settings
 from django.core.management import call_command, CommandError
-from django.db import connections, OperationalError
+from django.db import connections, OperationalError, transaction
 
 from apps.common.management.commands.migrate_pg_to_d1 import (
     Command,
@@ -120,7 +120,7 @@ def migration_dbs(tmp_path):
         connections.databases.pop(target_alias, None)
 
 
-def seed_source_test_data(db_alias: str):
+def seed_source_test_data(db_alias: str, include_ai: bool = True):
     """Seed comprehensive test dataset across all 4 tiers with explicit, non-standard IDs."""
     conn = connections[db_alias]
     with conn.cursor() as cur:
@@ -245,12 +245,13 @@ def seed_source_test_data(db_alias: str):
             [1301, 1101, 701, 'ALLOCATE', 'AVAILABLE', 'IN_USE', None, 702, 401, 401,
              'Bàn giao thiết bị', 'AST-2026-001', 'MacBook Pro M3 Max', '2026-11-01 09:30:00']
         )
-        cur.execute(
-            '''INSERT INTO ai_suggestion_logs (
-                id, asset_name, description, suggested_category_id, suggested_category_name, model, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)''',
-            ['ai-log-uuid-001', 'MacBook Pro', 'Laptop Apple', 501, 'Máy tính xách tay', 'llama-3.1-8b', '2026-11-01 08:45:00']
-        )
+        if include_ai:
+            cur.execute(
+                '''INSERT INTO ai_suggestion_logs (
+                    id, asset_name, description, suggested_category_id, suggested_category_name, model, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                ['ai-log-uuid-001', 'MacBook Pro', 'Laptop Apple', 501, 'Máy tính xách tay', 'llama-3.1-8b', '2026-11-01 08:45:00']
+            )
 
 
 # ==============================================================================
@@ -678,14 +679,15 @@ def test_batch_size_chunking_with_d1_batch(migration_dbs):
                     cur.execute(str(stmt))
         return [{"success": True}]
 
-    with patch("apps.common.management.commands.migrate_pg_to_d1.d1_batch", side_effect=mock_d1_batch):
-        call_command(
-            'migrate_pg_to_d1',
-            source_db=source_alias,
-            target_db=target_alias,
-            batch_size=50,
-            allow_non_empty=True,
-        )
+    with patch.object(connections[target_alias], "vendor", "d1"):
+        with patch("apps.common.management.commands.migrate_pg_to_d1.d1_batch", side_effect=mock_d1_batch):
+            call_command(
+                'migrate_pg_to_d1',
+                source_db=source_alias,
+                target_db=target_alias,
+                batch_size=50,
+                allow_non_empty=True,
+            )
 
     data_batches = [b for b in captured_batches if any('INSERT INTO "departments_department"' in str(s) for s in b)]
     assert len(data_batches) == 3
@@ -709,15 +711,16 @@ def test_isolation_guard_error_propagates_without_cursor_fallback(migration_dbs)
     def mock_blocked_guard(*args, **kwargs):
         raise OperationalError("D1 Database Isolation Guard: blocked")
 
-    with patch("apps.common.management.commands.migrate_pg_to_d1.d1_batch", side_effect=mock_blocked_guard):
-        with pytest.raises(OperationalError) as exc_info:
-            call_command(
-                'migrate_pg_to_d1',
-                source_db=source_alias,
-                target_db=target_alias,
-                allow_non_empty=True,
-            )
-        assert "D1 Database Isolation Guard: blocked" in str(exc_info.value)
+    with patch.object(connections[target_alias], "vendor", "d1"):
+        with patch("apps.common.management.commands.migrate_pg_to_d1.d1_batch", side_effect=mock_blocked_guard):
+            with pytest.raises(OperationalError) as exc_info:
+                call_command(
+                    'migrate_pg_to_d1',
+                    source_db=source_alias,
+                    target_db=target_alias,
+                    allow_non_empty=True,
+                )
+            assert "D1 Database Isolation Guard: blocked" in str(exc_info.value)
 
 
 def test_sqlite_testbed_batch_failure_rolls_back_atomically(migration_dbs):
@@ -1021,11 +1024,10 @@ def test_d1_reconciler_detects_foreign_key_drift_to_different_valid_row(migratio
     source_alias, target_alias, _, _ = migration_dbs
     seed_source_test_data(source_alias)
 
-    # Insert a second valid department in both source and target
+    # Insert a second valid department in source only
     dept_stmt = 'INSERT INTO departments_department (id, name, code, description, created_at) VALUES (?, ?, ?, ?, ?)'
-    with connections[source_alias].cursor() as s_cur, connections[target_alias].cursor() as t_cur:
+    with connections[source_alias].cursor() as s_cur:
         s_cur.execute(dept_stmt, [402, 'Phòng Kế Toán', 'ACC', 'Ban Kế toán', '2026-11-01 08:00:00'])
-        t_cur.execute(dept_stmt, [402, 'Phòng Kế Toán', 'ACC', 'Ban Kế toán', '2026-11-01 08:00:00'])
 
     call_command('migrate_pg_to_d1', source_db=source_alias, target_db=target_alias, allow_non_empty=True)
 
@@ -1133,3 +1135,258 @@ def test_normalize_value_types():
 
     json_dict = {"model": "XPS", "specs": {"ram": 16}}
     assert normalize_value(json_dict) == json.dumps(json_dict, ensure_ascii=False)
+
+
+# ==============================================================================
+# 8. TASK 3 FOLLOWUP REGRESSION TESTS (CODEX REVIEW)
+# ==============================================================================
+
+def test_schema_source_without_ai_table_migrates_cleanly(migration_dbs):
+    """
+    Followup Issue 1: Real PostgreSQL schema does NOT contain ai_suggestion_logs.
+    Migration from source without AI table into target with empty AI table must succeed
+    and reconciliation must confirm 100% parity without complaining about missing source AI table.
+    """
+    source_alias, target_alias, _, _ = migration_dbs
+
+    # Drop ai_suggestion_logs on source to simulate real PostgreSQL schema
+    conn_src = connections[source_alias]
+    with conn_src.cursor() as cur:
+        cur.execute('DROP TABLE IF EXISTS "ai_suggestion_logs"')
+
+    seed_source_test_data(source_alias, include_ai=False)
+
+    out = io.StringIO()
+    call_command(
+        'migrate_pg_to_d1',
+        source_db=source_alias,
+        target_db=target_alias,
+        stdout=out,
+    )
+
+    reconciler = D1Reconciler(source_db=source_alias, target_db=target_alias)
+    result = reconciler.reconcile()
+    assert result.success is True, f"Reconciliation failed on source without AI table: {result.errors}"
+
+
+def test_preflight_fails_and_aborts_writes_when_mandatory_table_missing_in_source(migration_dbs):
+    """
+    Followup Issue 1: Preflight check detects missing mandatory source table (e.g. departments_department)
+    before any writes occur. Target remains completely empty (0 writes).
+    """
+    source_alias, target_alias, _, _ = migration_dbs
+    seed_source_test_data(source_alias)
+
+    conn_src = connections[source_alias]
+    with conn_src.cursor() as cur:
+        cur.execute("PRAGMA foreign_keys = OFF;")
+        cur.execute('DROP TABLE "departments_department"')
+        cur.execute("PRAGMA foreign_keys = ON;")
+
+    with pytest.raises(CommandError) as exc_info:
+        call_command(
+            'migrate_pg_to_d1',
+            source_db=source_alias,
+            target_db=target_alias,
+        )
+
+    assert "departments_department" in str(exc_info.value)
+
+    # Assert target DB has 0 rows written across all tables
+    conn_tgt = connections[target_alias]
+    with conn_tgt.cursor() as cur:
+        cur.execute('SELECT COUNT(*) FROM "django_content_type"')
+        assert cur.fetchone()[0] == 0
+
+
+def test_preflight_fails_when_mandatory_table_missing_in_both(migration_dbs):
+    """
+    Followup Issue 1: A mandatory table missing in BOTH source and target must fail preflight,
+    never silently skipped.
+    """
+    source_alias, target_alias, _, _ = migration_dbs
+    seed_source_test_data(source_alias)
+
+    with connections[source_alias].cursor() as cur:
+        cur.execute('DROP TABLE "django_session"')
+    with connections[target_alias].cursor() as cur:
+        cur.execute('DROP TABLE "django_session"')
+
+    with pytest.raises(CommandError) as exc_info:
+        call_command(
+            'migrate_pg_to_d1',
+            source_db=source_alias,
+            target_db=target_alias,
+        )
+
+    assert "django_session" in str(exc_info.value)
+
+
+def test_preflight_fails_when_mandatory_table_column_mismatch(migration_dbs):
+    """
+    Followup Issue 1: Column schema differences between source and target for mandatory tables
+    must be caught at preflight before writes.
+    """
+    source_alias, target_alias, _, _ = migration_dbs
+    seed_source_test_data(source_alias)
+
+    # Recreate departments_category in target without description column
+    conn_tgt = connections[target_alias]
+    with conn_tgt.cursor() as cur:
+        cur.execute('DROP TABLE "departments_category"')
+        cur.execute('CREATE TABLE "departments_category" (id INTEGER PRIMARY KEY, name VARCHAR(100), created_at TEXT)')
+
+    with pytest.raises(CommandError) as exc_info:
+        call_command(
+            'migrate_pg_to_d1',
+            source_db=source_alias,
+            target_db=target_alias,
+        )
+
+    assert "departments_category" in str(exc_info.value)
+
+
+def test_canonicalization_treats_text_looking_like_datetime_verbatim(migration_dbs):
+    """
+    Followup Issue 2: A text column (assets_asset.name) containing date/time strings
+    must be compared verbatim without datetime canonicalization. Mismatch must be detected.
+    """
+    source_alias, target_alias, _, _ = migration_dbs
+    seed_source_test_data(source_alias)
+
+    # Set name on source to space-separated datetime string
+    with connections[source_alias].cursor() as cur:
+        cur.execute('UPDATE assets_asset SET name = "2026-11-01 09:00:00" WHERE id = 1101')
+
+    call_command('migrate_pg_to_d1', source_db=source_alias, target_db=target_alias)
+
+    # Change target name to ISO format with T and Z (semantically same time, but different text!)
+    with connections[target_alias].cursor() as cur:
+        cur.execute('UPDATE assets_asset SET name = "2026-11-01T09:00:00Z" WHERE id = 1101')
+
+    reconciler = D1Reconciler(source_db=source_alias, target_db=target_alias)
+    result = reconciler.reconcile()
+    assert result.success is False, "Text column looking like datetime was incorrectly canonicalized!"
+    assert any("assets_asset" in err and "name" in err for err in result.errors)
+
+
+def test_canonicalization_treats_text_looking_like_json_verbatim(migration_dbs):
+    """
+    Followup Issue 2: A text column (assets_assethistorylog.reason) containing JSON strings
+    must be compared verbatim without JSON key sorting or whitespace normalization.
+    """
+    source_alias, target_alias, _, _ = migration_dbs
+    seed_source_test_data(source_alias)
+
+    # Set reason on source to compact JSON string
+    with connections[source_alias].cursor() as cur:
+        cur.execute('UPDATE assets_assethistorylog SET reason = \'{"a":1,"b":2}\' WHERE id = 1301')
+
+    call_command('migrate_pg_to_d1', source_db=source_alias, target_db=target_alias)
+
+    # Change target reason to different key order and whitespace
+    with connections[target_alias].cursor() as cur:
+        cur.execute('UPDATE assets_assethistorylog SET reason = \'{ "b": 2, "a": 1 }\' WHERE id = 1301')
+
+    reconciler = D1Reconciler(source_db=source_alias, target_db=target_alias)
+    result = reconciler.reconcile()
+    assert result.success is False, "Text column looking like JSON was incorrectly canonicalized!"
+    assert any("assets_assethistorylog" in err and "reason" in err for err in result.errors)
+
+
+def test_sqlite_batch_inside_outer_atomic_transaction_rolls_back(migration_dbs):
+    """
+    Followup Issue 3: When execute_batch_statements is called inside an outer transaction.atomic(),
+    a failure on statement 2 must roll back statement 1 (0 rows remain, not 1).
+    """
+    _, target_alias, _, _ = migration_dbs
+
+    conn = connections[target_alias]
+    # Ensure auth_group is empty
+    with conn.cursor() as cur:
+        cur.execute('DELETE FROM auth_group')
+
+    stmts = [
+        ('INSERT INTO auth_group (id, name) VALUES (?, ?)', [9901, 'Group 1']),
+        ('INSERT INTO auth_group (id, name) VALUES (?, ?)', [9901, 'Group 1 Colliding PK']),
+    ]
+
+    with transaction.atomic(using=target_alias):
+        try:
+            execute_batch_statements(target_alias, stmts)
+        except Exception:
+            pass
+
+    # Assert statement 1 was NOT left committed in the table
+    with conn.cursor() as cur:
+        cur.execute('SELECT COUNT(*) FROM auth_group WHERE id = 9901')
+        count = cur.fetchone()[0]
+        assert count == 0, f"Expected 0 rows due to rollback, found {count}"
+
+
+def test_clean_import_rejects_conflicting_pk_without_silent_overwrite(migration_dbs):
+    """
+    Followup Issue 4: Target non-empty with colliding PK must reject without silently overwriting
+    existing target records (e.g. passwords, roles, auth_version, audit logs).
+    """
+    source_alias, target_alias, _, _ = migration_dbs
+    seed_source_test_data(source_alias)
+
+    # Pre-insert user 701 on target with a distinct password and role
+    conn_tgt = connections[target_alias]
+    with conn_tgt.cursor() as cur:
+        cur.execute(
+            '''INSERT INTO authentication_user (
+                id, password, last_login, is_superuser, username, first_name, last_name,
+                email, is_staff, is_active, date_joined, role, full_name, phone, department_id, auth_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            [701, 'pbkdf2_sha256$1000000$targetUniqueSalt$targetHashNotToBeOverwritten12345=',
+             '2026-11-01 00:00:00', 1, 'admin_existing', 'Admin', 'Pre',
+             'admin_pre@assethub.vn', 1, 1, '2026-11-01 00:00:00', 'ADMIN', 'Quản Trị Pre', '0909999999',
+             None, 1, '2026-11-01 00:00:00']
+        )
+
+    # Running migration with allow_non_empty must fail due to PK conflict rather than overwriting silently
+    with pytest.raises((CommandError, OperationalError, sqlite3.IntegrityError, Exception)):
+        call_command(
+            'migrate_pg_to_d1',
+            source_db=source_alias,
+            target_db=target_alias,
+            allow_non_empty=True,
+        )
+
+    # Verify target user 701's password was NOT silently overwritten by source
+    with conn_tgt.cursor() as cur:
+        cur.execute('SELECT password FROM authentication_user WHERE id = 701')
+        pw = cur.fetchone()[0]
+        assert 'targetHashNotToBeOverwritten12345=' in pw, "Existing target password was silently overwritten!"
+
+
+def test_unsupported_database_backend_engine_rejected(migration_dbs):
+    """
+    Followup Issue 3: Target database with unsupported engine (neither D1 nor SQLite)
+    must be rejected before writing.
+    """
+    source_alias, _, _, _ = migration_dbs
+    unsupported_alias = "unsupported_db"
+    settings.DATABASES[unsupported_alias] = {
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": "dummy_mysql",
+    }
+    connections.databases[unsupported_alias] = {
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": "dummy_mysql",
+    }
+
+    try:
+        with pytest.raises(CommandError) as exc_info:
+            call_command(
+                'migrate_pg_to_d1',
+                source_db=source_alias,
+                target_db=unsupported_alias,
+            )
+        assert "Unsupported" in str(exc_info.value) or "mysql" in str(exc_info.value).lower()
+    finally:
+        settings.DATABASES.pop(unsupported_alias, None)
+        connections.databases.pop(unsupported_alias, None)
+        connections.databases.pop(unsupported_alias, None)

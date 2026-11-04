@@ -14,10 +14,9 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
-from unittest.mock import Mock, MagicMock
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import connections, DEFAULT_DB_ALIAS
+from django.db import connections, DEFAULT_DB_ALIAS, transaction
 from django.utils import timezone
 
 try:
@@ -58,6 +57,12 @@ ALL_TABLES: List[str] = [
     table for tier in sorted(TOPO_TIERS.keys()) for table in TOPO_TIERS[tier]
 ]
 
+SOURCE_MANDATORY_TABLES: List[str] = [
+    table for table in ALL_TABLES if table != "ai_suggestion_logs"
+]
+
+TARGET_NEW_TABLES: Set[str] = {"ai_suggestion_logs"}
+
 AUTOINCREMENT_TABLES: Set[str] = set(ALL_TABLES) - {
     "django_session",
     "ai_suggestion_logs",
@@ -66,6 +71,42 @@ AUTOINCREMENT_TABLES: Set[str] = set(ALL_TABLES) - {
 PK_COLUMNS: Dict[str, str] = {
     table: ("session_key" if table == "django_session" else "id")
     for table in ALL_TABLES
+}
+
+# Schema metadata for type-safe reconciliation (no guessing from raw text content)
+JSON_COLUMNS: Set[Tuple[str, str]] = {
+    ("assets_asset", "specification"),
+}
+
+DATETIME_COLUMNS: Set[Tuple[str, str]] = {
+    ("django_admin_log", "action_time"),
+    ("django_migrations", "applied"),
+    ("django_session", "expire_date"),
+    ("authentication_user", "last_login"),
+    ("authentication_user", "date_joined"),
+    ("authentication_user", "created_at"),
+    ("departments_department", "created_at"),
+    ("departments_category", "created_at"),
+    ("assets_asset", "created_at"),
+    ("assets_asset", "updated_at"),
+    ("requests_assetrequest", "reviewed_at"),
+    ("requests_assetrequest", "created_at"),
+    ("assets_assethistorylog", "created_at"),
+    ("ai_suggestion_logs", "created_at"),
+}
+
+DATE_COLUMNS: Set[Tuple[str, str]] = {
+    ("assets_asset", "purchase_date"),
+}
+
+BOOL_COLUMNS: Set[Tuple[str, str]] = {
+    ("authentication_user", "is_superuser"),
+    ("authentication_user", "is_staff"),
+    ("authentication_user", "is_active"),
+}
+
+PASSWORD_COLUMNS: Set[Tuple[str, str]] = {
+    ("authentication_user", "password"),
 }
 
 
@@ -115,56 +156,34 @@ def is_same_database(source_alias: str, target_alias: str) -> bool:
     return False
 
 
-def canonicalize_for_reconciliation(val: Any, col_name: str = "") -> Any:
+def canonicalize_for_reconciliation(val: Any, table: str = "", col_name: str = "") -> Any:
     """
-    Canonicalizes column values for 1:1 row content parity comparison.
-    Handles bool, datetime/date, JSON, and passwords safely.
+    Canonicalizes column values for 1:1 row content parity comparison based strictly
+    on schema table+column metadata. Never guesses data types from arbitrary text content.
     """
     if val is None:
         return None
 
-    # Password hash: verbatim comparison, never modify or parse
-    if col_name == "password" or (isinstance(val, str) and val.startswith("pbkdf2_")):
+    pair = (table, col_name)
+
+    # 1. Password: verbatim comparison
+    if pair in PASSWORD_COLUMNS:
         return str(val)
 
-    # Boolean normalization: 0 or 1
-    if isinstance(val, bool):
+    # 2. Boolean: normalized to 0 or 1
+    if pair in BOOL_COLUMNS:
         return 1 if val else 0
 
-    # Datetime / Date normalization: UTC ISO-8601 string
-    if isinstance(val, datetime.datetime):
-        if timezone.is_naive(val):
-            val = timezone.make_aware(val, datetime.timezone.utc)
-        else:
-            val = val.astimezone(datetime.timezone.utc)
-        return val.isoformat()
-    if isinstance(val, datetime.date):
-        return val.isoformat()
-
-    # JSON normalization (dict/list)
-    if isinstance(val, (dict, list)):
-        return json.dumps(val, sort_keys=True, ensure_ascii=False)
-
-    # Memoryview / bytes
-    if isinstance(val, memoryview):
-        return bytes(val)
-    if isinstance(val, uuid.UUID):
-        return str(val)
-
-    # String values: check if it represents JSON or Datetime
-    if isinstance(val, str):
-        trimmed = val.strip()
-        if (trimmed.startswith("{") and trimmed.endswith("}")) or (
-            trimmed.startswith("[") and trimmed.endswith("]")
-        ):
-            try:
-                parsed = json.loads(trimmed)
-                return json.dumps(parsed, sort_keys=True, ensure_ascii=False)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                pass
-
-        if len(trimmed) >= 19 and (" " in trimmed[10:11] or "T" in trimmed[10:11]):
-            clean_str = trimmed.replace("Z", "+00:00")
+    # 3. Datetime: normalized to UTC ISO-8601 string
+    if pair in DATETIME_COLUMNS:
+        if isinstance(val, datetime.datetime):
+            if timezone.is_naive(val):
+                val = timezone.make_aware(val, datetime.timezone.utc)
+            else:
+                val = val.astimezone(datetime.timezone.utc)
+            return val.isoformat()
+        if isinstance(val, str):
+            clean_str = val.strip().replace("Z", "+00:00")
             try:
                 dt = datetime.datetime.fromisoformat(clean_str)
                 if timezone.is_naive(dt):
@@ -173,15 +192,44 @@ def canonicalize_for_reconciliation(val: Any, col_name: str = "") -> Any:
                     dt = dt.astimezone(datetime.timezone.utc)
                 return dt.isoformat()
             except (ValueError, TypeError):
-                pass
+                return val
+        return val
 
+    # 4. Date: normalized to YYYY-MM-DD
+    if pair in DATE_COLUMNS:
+        if isinstance(val, (datetime.date, datetime.datetime)):
+            return val.strftime("%Y-%m-%d")
+        if isinstance(val, str):
+            return val.strip()[:10]
+        return val
+
+    # 5. JSON: parsed and dumped with sorted keys
+    if pair in JSON_COLUMNS:
+        if isinstance(val, (dict, list)):
+            return json.dumps(val, sort_keys=True, ensure_ascii=False)
+        if isinstance(val, str):
+            try:
+                parsed = json.loads(val.strip())
+                return json.dumps(parsed, sort_keys=True, ensure_ascii=False)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return val
+        return val
+
+    # Standard types
+    if isinstance(val, memoryview):
+        return bytes(val)
+    if isinstance(val, uuid.UUID):
+        return str(val)
+
+    # 6. All other text/varchar/int/float columns: return verbatim without guessing types!
     return val
 
 
 def execute_batch_statements(target_db: str, statements: List[Any]) -> List[Any]:
     """
-    Executes a list of statements via d1_batch when target is Cloudflare D1 (or mocked d1_batch),
-    or executes in an atomic transaction with BEGIN TRANSACTION and ROLLBACK on error for SQLite testbeds.
+    Executes a list of statements via d1_batch when target is Cloudflare D1,
+    or executes inside django.db.transaction.atomic() for SQLite testbeds.
+    Rejects unsupported database engines before execution.
     """
     if not statements:
         return []
@@ -190,49 +238,66 @@ def execute_batch_statements(target_db: str, statements: List[Any]) -> List[Any]
     conn.ensure_connection()
 
     is_d1 = (getattr(conn, "vendor", "") == "d1") or ("d1" in conn.settings_dict.get("ENGINE", ""))
-    is_mock = isinstance(d1_batch, (MagicMock, Mock)) or hasattr(d1_batch, "mock_calls")
+    is_sqlite = (getattr(conn, "vendor", "") == "sqlite") or ("sqlite" in conn.settings_dict.get("ENGINE", ""))
 
-    if (is_d1 or is_mock) and d1_batch is not None:
+    if is_d1:
+        if d1_batch is None:
+            raise CommandError("D1 batch helper is not available.")
         # Re-raise immediately if d1_batch fails; never fallback to cursor!
         return d1_batch(statements, using=target_db)
+    elif is_sqlite:
+        with transaction.atomic(using=target_db):
+            with conn.cursor() as cursor:
+                results = []
+                for stmt in statements:
+                    if isinstance(stmt, (tuple, list)):
+                        sql = stmt[0]
+                        params = stmt[1] if len(stmt) > 1 else None
+                        cursor.execute(sql, params)
+                    elif isinstance(stmt, dict):
+                        cursor.execute(stmt["sql"], stmt.get("params"))
+                    else:
+                        cursor.execute(str(stmt))
+                    if cursor.description:
+                        results.append(cursor.fetchall())
+                return results
     else:
-        # For SQLite testbed, execute in an atomic transaction with BEGIN TRANSACTION and ROLLBACK
-        return _execute_sqlite_batch(conn, statements)
+        raise CommandError(
+            f"Unsupported database engine for target '{target_db}': {conn.settings_dict.get('ENGINE')}"
+        )
 
 
-def _execute_sqlite_batch(conn, statements: List[Any]) -> List[Any]:
-    """Execute raw statements sequentially over cursor wrapped in an explicit atomic transaction."""
-    with conn.cursor() as cursor:
-        in_tx = False
-        try:
-            cursor.execute("BEGIN TRANSACTION;")
-            in_tx = True
-        except Exception:
-            pass
+def run_preflight_schema_checks(conn_src, conn_tgt) -> None:
+    """
+    Preflight schema verification:
+    1. Checks all 15 mandatory PostgreSQL source tables exist in source.
+    2. Checks all 16 target tables (including ai_suggestion_logs) exist in target.
+    3. Checks column schemas match on all mandatory tables.
+    Aborts with CommandError BEFORE any data is extracted or written.
+    """
+    for table in SOURCE_MANDATORY_TABLES:
+        if not check_table_exists(conn_src, table):
+            raise CommandError(
+                f"Preflight schema check failed: mandatory table '{table}' missing in source database."
+            )
 
-        try:
-            results = []
-            for stmt in statements:
-                if isinstance(stmt, (tuple, list)):
-                    sql = stmt[0]
-                    params = stmt[1] if len(stmt) > 1 else None
-                    cursor.execute(sql, params)
-                elif isinstance(stmt, dict):
-                    cursor.execute(stmt["sql"], stmt.get("params"))
-                else:
-                    cursor.execute(str(stmt))
-                if cursor.description:
-                    results.append(cursor.fetchall())
-            if in_tx:
-                cursor.execute("COMMIT;")
-            return results
-        except Exception:
-            if in_tx:
-                try:
-                    cursor.execute("ROLLBACK;")
-                except Exception:
-                    pass
-            raise
+    for table in ALL_TABLES:
+        if not check_table_exists(conn_tgt, table):
+            raise CommandError(
+                f"Preflight schema check failed: table '{table}' missing in target database."
+            )
+
+    for table in SOURCE_MANDATORY_TABLES:
+        with conn_src.cursor() as s_cur, conn_tgt.cursor() as t_cur:
+            s_cur.execute(f'SELECT * FROM "{table}" LIMIT 0')
+            s_cols = set(d[0] for d in s_cur.description)
+            t_cur.execute(f'SELECT * FROM "{table}" LIMIT 0')
+            t_cols = set(d[0] for d in t_cur.description)
+            if s_cols != t_cols:
+                diff = (s_cols - t_cols) | (t_cols - s_cols)
+                raise CommandError(
+                    f"Preflight schema check failed: column mismatch on table '{table}' (differing columns: {diff})."
+                )
 
 
 def check_table_exists(conn, table_name: str) -> bool:
@@ -287,19 +352,42 @@ class D1Reconciler:
         conn_tgt = connections[self.target_db]
 
         for table in self.tables:
+            if table == "ai_suggestion_logs" and not check_table_exists(conn_src, table):
+                tgt_count = 0
+                tgt_exists = check_table_exists(conn_tgt, table)
+                if tgt_exists:
+                    with self._get_cursor(self.target_db) as cur:
+                        cur.execute(f'SELECT COUNT(*) FROM "{table}"')
+                        row = cur.fetchone()
+                        tgt_count = row[0] if row else 0
+                counts[table] = {"source": "N/A (dest-only)", "target": tgt_count, "match": tgt_exists}
+                if not tgt_exists:
+                    mismatches.append(f"Table '{table}' missing in target database")
+                continue
+
+            src_exists = check_table_exists(conn_src, table)
+            tgt_exists = check_table_exists(conn_tgt, table)
+            if not src_exists and not tgt_exists:
+                mismatches.append(f"Mandatory table '{table}' missing in both source and target databases")
+                continue
+            if not src_exists:
+                mismatches.append(f"Table '{table}' missing in source database")
+                continue
+            if not tgt_exists:
+                mismatches.append(f"Table '{table}' missing in target database")
+                continue
+
             src_count = 0
-            if check_table_exists(conn_src, table):
-                with self._get_cursor(self.source_db) as cur:
-                    cur.execute(f'SELECT COUNT(*) FROM "{table}"')
-                    row = cur.fetchone()
-                    src_count = row[0] if row else 0
+            with self._get_cursor(self.source_db) as cur:
+                cur.execute(f'SELECT COUNT(*) FROM "{table}"')
+                row = cur.fetchone()
+                src_count = row[0] if row else 0
 
             tgt_count = 0
-            if check_table_exists(conn_tgt, table):
-                with self._get_cursor(self.target_db) as cur:
-                    cur.execute(f'SELECT COUNT(*) FROM "{table}"')
-                    row = cur.fetchone()
-                    tgt_count = row[0] if row else 0
+            with self._get_cursor(self.target_db) as cur:
+                cur.execute(f'SELECT COUNT(*) FROM "{table}"')
+                row = cur.fetchone()
+                tgt_count = row[0] if row else 0
 
             match = src_count == tgt_count
             counts[table] = {"source": src_count, "target": tgt_count, "match": match}
@@ -322,28 +410,44 @@ class D1Reconciler:
         conn_tgt = connections[self.target_db]
 
         for table in self.tables:
+            if table == "ai_suggestion_logs" and not check_table_exists(conn_src, table):
+                key_results[table] = {"match": True, "details": "Destination-only table"}
+                continue
+
+            src_exists = check_table_exists(conn_src, table)
+            tgt_exists = check_table_exists(conn_tgt, table)
+            if not src_exists or not tgt_exists:
+                mismatches.append(f"Key set check aborted: table '{table}' missing in {'source' if not src_exists else 'target'}")
+                continue
+
             pk_col = PK_COLUMNS.get(table, "id")
             src_keys = set()
-            if check_table_exists(conn_src, table):
-                with self._get_cursor(self.source_db) as cur:
-                    cur.execute(f'SELECT "{pk_col}" FROM "{table}"')
-                    src_keys = {row[0] for row in cur.fetchall()}
+            with self._get_cursor(self.source_db) as cur:
+                cur.execute(f'SELECT "{pk_col}" FROM "{table}"')
+                src_keys = {row[0] for row in cur.fetchall()}
 
             tgt_keys = set()
-            if check_table_exists(conn_tgt, table):
-                with self._get_cursor(self.target_db) as cur:
-                    cur.execute(f'SELECT "{pk_col}" FROM "{table}"')
-                    tgt_keys = {row[0] for row in cur.fetchall()}
+            with self._get_cursor(self.target_db) as cur:
+                cur.execute(f'SELECT "{pk_col}" FROM "{table}"')
+                tgt_keys = {row[0] for row in cur.fetchall()}
 
             missing = src_keys - tgt_keys
             unexpected = tgt_keys - src_keys
             match = len(missing) == 0 and len(unexpected) == 0
 
+            # Mask session_key values to avoid leaking sensitive tokens
+            if table == "django_session":
+                missing_sample = [f"***{str(k)[-6:]}" for k in list(missing)[:5]]
+                unexpected_sample = [f"***{str(k)[-6:]}" for k in list(unexpected)[:5]]
+            else:
+                missing_sample = list(missing)[:5]
+                unexpected_sample = list(unexpected)[:5]
+
             key_results[table] = {
                 "source_count": len(src_keys),
                 "target_count": len(tgt_keys),
-                "missing": list(missing)[:5],
-                "unexpected": list(unexpected)[:5],
+                "missing": missing_sample,
+                "unexpected": unexpected_sample,
                 "match": match,
             }
 
@@ -574,9 +678,17 @@ class D1Reconciler:
         conn_tgt = connections[self.target_db]
 
         for table in self.tables:
+            if table == "ai_suggestion_logs" and not check_table_exists(conn_src, table):
+                # Destination-only table: ensure it exists on target
+                tgt_exists = check_table_exists(conn_tgt, table)
+                if not tgt_exists:
+                    errors.append(f"Table '{table}' missing in target database")
+                continue
+
             src_exists = check_table_exists(conn_src, table)
             tgt_exists = check_table_exists(conn_tgt, table)
             if not src_exists and not tgt_exists:
+                errors.append(f"Mandatory table '{table}' missing in both source and target databases")
                 continue
             if not src_exists:
                 errors.append(f"Table '{table}' missing in source database")
@@ -624,8 +736,8 @@ class D1Reconciler:
 
                 t_row = tgt_by_pk[pk_val]
                 for idx, col in enumerate(cols):
-                    s_c = canonicalize_for_reconciliation(s_row[idx], col)
-                    t_c = canonicalize_for_reconciliation(t_row[idx], col)
+                    s_c = canonicalize_for_reconciliation(s_row[idx], table, col)
+                    t_c = canonicalize_for_reconciliation(t_row[idx], table, col)
                     if s_c != t_c:
                         # Never leak secrets or private values, only table, PK, and column
                         errors.append(
@@ -756,6 +868,12 @@ class Command(BaseCommand):
                 raise CommandError(
                     f"Target database alias '{target_db}' not configured in settings.DATABASES."
                 )
+        elif not dry_run:
+            tgt_engine = connections.databases.get(target_db, {}).get("ENGINE", "")
+            if "d1" not in tgt_engine and "sqlite" not in tgt_engine:
+                raise CommandError(
+                    f"Unsupported database engine for target '{target_db}': {tgt_engine}"
+                )
 
         # Prevent source and target collision (checked before opening target connection)
         if is_same_database(source_db, target_db):
@@ -771,6 +889,10 @@ class Command(BaseCommand):
             conn_tgt.ensure_connection()
         else:
             conn_tgt = None
+
+        # Preflight schema check: Verify source and target schema before any writes
+        if conn_tgt is not None:
+            run_preflight_schema_checks(conn_src, conn_tgt)
 
         # Step 1: Target Non-Empty Guard (runs by default on migration unless --allow-non-empty is set)
         if not dry_run and not allow_non_empty:
@@ -874,18 +996,9 @@ class Command(BaseCommand):
                     col_names = [d[0] for d in cur.description]
                     quoted_cols = ", ".join(f'"{c}"' for c in col_names)
                     placeholders = ", ".join(["?"] * len(col_names))
-                    update_cols = [c for c in col_names if c != pk_col]
-                    if update_cols:
-                        update_clause = ", ".join(f'"{c}" = excluded."{c}"' for c in update_cols)
-                        insert_sql = (
-                            f'INSERT INTO "{table}" ({quoted_cols}) VALUES ({placeholders}) '
-                            f'ON CONFLICT ("{pk_col}") DO UPDATE SET {update_clause}'
-                        )
-                    else:
-                        insert_sql = (
-                            f'INSERT INTO "{table}" ({quoted_cols}) VALUES ({placeholders}) '
-                            f'ON CONFLICT ("{pk_col}") DO NOTHING'
-                        )
+                    insert_sql = (
+                        f'INSERT INTO "{table}" ({quoted_cols}) VALUES ({placeholders})'
+                    )
 
                     while True:
                         rows = cur.fetchmany(batch_size)

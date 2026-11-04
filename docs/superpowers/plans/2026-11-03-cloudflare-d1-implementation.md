@@ -344,7 +344,7 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 
 ### Task 3: Công Cụ Di Chuyển Dữ Liệu & Đối Soát 1:1 (`migrate_pg_to_d1`)
 
-> **Mục tiêu:** Hoàn thiện lệnh quản trị Django `migrate_pg_to_d1` trích xuất dữ liệu từ nguồn test/cloned dataset độc lập (tuyệt đối không đưa CSDL production lên cloud trong giai đoạn này), nạp lên D1 theo 4 Tier topo bảo toàn 100% khóa chính gốc, đồng bộ `sqlite_sequence` an toàn không sinh dòng trùng, đối soát 1:1 theo 7 tiêu chí kỹ thuật (bao gồm đối chiếu nội dung từng dòng/cột theo PK với canonicalization), xử lý dứt khoát lỗi guard không fallback, chặn đích không rỗng theo mặc định, và chặn xung đột định danh nguồn/đích.
+> **Mục tiêu:** Hoàn thiện lệnh quản trị Django `migrate_pg_to_d1` trích xuất dữ liệu từ nguồn test/cloned dataset độc lập (tuyệt đối không đưa CSDL production lên cloud trong giai đoạn này), nạp lên D1 theo 4 Tier topo bảo toàn 100% khóa chính gốc, preflight kiểm tra schema nguồn (15 bảng bắt buộc) và schema đích (gồm bảng AI mới) trước mọi ghi, phân loại canonicalization theo đúng kiểu schema `(table, column)` không đoán kiểu từ chuỗi, xử lý batch SQLite atomic an toàn trong nested transaction bằng `transaction.atomic()` và loại bỏ mock-detection trong production, loại bỏ upsert ghi đè âm thầm, bảo toàn `sqlite_sequence` và đối soát 1:1 theo 7 tiêu chí kỹ thuật.
 > 
 > **Điều kiện tiên quyết:** Task 2 đã hoàn tất (D1 đã có cấu trúc DDL hoàn chỉnh gồm 19 bảng và triggers).
 
@@ -355,28 +355,27 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 
 **Interfaces:**
 - Consumes: CSDL PostgreSQL `default` hoặc alias test chỉ định rõ, CSDL D1 `d1` hoặc SQLite testbed.
-- Produces: Dữ liệu di chuyển lên CSDL đích, báo cáo đối soát 1:1 (Row count, Key set, Row content canonicalized, FKs, PBKDF2 verbatim, Datetime/bool, Identifier sequence counters theo `(kind, year)`).
+- Produces: Dữ liệu di chuyển lên CSDL đích, báo cáo đối soát 1:1 (Row count, Key set, Row content canonicalized theo schema, FKs, PBKDF2 verbatim, Datetime/bool, Identifier sequence counters theo `(kind, year)`).
 
-- [ ] **Step 1: Viết failing regression tests cho 5 nhóm lỗi Task 3**
+- [ ] **Step 1: Viết failing regression tests cho 4 lỗi followup Task 3**
   Trong `backend/apps/common/tests/test_d1_migration.py`:
-  - Test 1 (P1 - Exit non-zero khi đối soát thất bại): `--allow-non-empty` vẫn raise `CommandError` khi đối soát lệch (ví dụ thêm category 999 chỉ ở đích).
-  - Test 2 (P1 - Bắt sai lệch nội dung & quyền): Thay đổi name, status, role, is_active, auth_version, valid FK, JSON nghiệp vụ, nội dung audit log bị `D1Reconciler` phát hiện; các giá trị tương đương (JSON whitespace, bool 1/True, ISO UTC datetime) không báo sai. Lỗi chỉ nêu bảng/PK/cột, không in thông tin nhạy cảm.
-  - Test 3 (P2 - Sequence không trùng & check counter theo `(kind, year)`): `sqlite_sequence` không chứa dòng trùng (COUNT = 1 mỗi bảng), không hạ high-water mark; counter `assets_identifiersequence` kiểm tra theo đúng cặp `(kind, year)` (không gộp năm làm lọt lỗi).
-  - Test 4 (P1 - Lỗi Guard không fallback): Mock `d1_batch` ném lỗi isolation guard / transport phải được truyền ra nguyên trạng, không fallback sang thực thi cursor. Batch SQLite testbed phải rollback khi gặp lỗi giữa chừng.
-  - Test 5 (P1 - Nguồn/đích & Default Non-empty Guard): Nguồn và đích trùng alias hoặc cùng file DB vật lý bị chặn; nguồn thiếu cấu hình bị chặn không fallback ngầm; đích không rỗng bị chặn mặc định khi không truyền `--allow-non-empty`; `--dry-run` không ghi vào nguồn hoặc đích.
+  - Test 1 (Preflight & Nguồn cũ không AI): Nguồn cũ không có `ai_suggestion_logs` di chuyển thành công sang đích có bảng AI rỗng hợp lệ; thiếu bất kỳ bảng/cột bắt buộc nào ở nguồn hoặc đích (kể cả thiếu cả hai phía) đều bị chặn ngay tại preflight trước mọi ghi.
+  - Test 2 (Canonicalization theo kiểu schema table+column): Text trông giống JSON (như `assets_assethistorylog.reason`) hoặc text trông giống datetime (như `assets_asset.name`) bị phát hiện khác biệt khi thay đổi khoảng trắng/định dạng vì được so nguyên văn; JSON thực (`specification`), datetime thực (`created_at`) và bool thực mới canonicalize.
+  - Test 3 (SQLite batch trong nested transaction & backend guard): Batch SQLite lồng trong `transaction.atomic` ngoài khi lỗi được rollback hoàn toàn (0 bản ghi sót lại); backend không hỗ trợ (không phải D1 hoặc SQLite testbed) bị từ chối; không có logic `unittest.mock` trong production.
+  - Test 4 (Clean import & không upsert âm thầm): Không sử dụng `ON CONFLICT DO UPDATE`; đích có dữ liệu xung đột PK bị từ chối, không được ghi đè âm thầm password, role, auth_version, audit logs.
 
 - [ ] **Step 2: Chạy kiểm thử để xác nhận lỗi (Red)**
   ```bash
-  docker compose exec backend pytest apps/common/tests/test_d1_migration.py -v
+  docker compose exec backend pytest apps/common/tests/test_d1_migration.py -v -k "ai_table or canonicalize_by_schema or nested_transaction or no_silent_upsert"
   ```
   Mong đợi: Các test regression mới FAIL trên mã nguồn hiện tại.
 
 - [ ] **Step 3: Cải tiến `migrate_pg_to_d1.py`**
-  - Sửa đối soát thất bại luôn raise `CommandError`, loại bỏ dòng in PASS khi có lỗi.
-  - Bổ sung `check_row_content_parity` vào `D1Reconciler` với hàm canonicalization kiểu dữ liệu (JSON, bool, ISO datetime), giữ nguyên chuỗi băm password, kiểm tra bảng/cột bắt buộc, không in nội dung nhạy cảm.
-  - Sửa đồng bộ `sqlite_sequence`: kiểm tra dòng hiện có, giữ `MAX(existing, max_id)`, xóa dòng cũ và insert duy nhất 1 dòng; sửa kiểm tra `assets_identifiersequence` theo `(kind, year)` phân tích mã `AST-YYYY-NNN` và `REQ-YYYY-NNN`.
-  - Sửa `execute_batch_statements`: kiểm tra engine/backend D1 vs SQLite testbed; với D1 truyền lỗi ra ngoài không fallback; với SQLite bọc batch trong transaction có rollback.
-  - Sửa kiểm tra cấu hình: chặn source alias không tồn tại (không đổi ngầm `postgres -> default`), chặn source == target (cả alias lẫn physical DB name), bật kiểm tra đích không rỗng theo mặc định.
+  - Tách bạch `SOURCE_MANDATORY_TABLES` (15 bảng) và `DESTINATION_NEW_TABLES` (`ai_suggestion_logs`).
+  - Thêm hàm `run_preflight_schema_checks(conn_src, conn_tgt)` kiểm tra đầy đủ bảng và cột bắt buộc trước khi ghi bất kỳ byte nào.
+  - Sửa `canonicalize_for_reconciliation`: nhận `table` và `column`, tra cứu theo bảng thuộc tính schema (`JSON_COLUMNS`, `DATETIME_COLUMNS`, `DATE_COLUMNS`, `BOOL_COLUMNS`, `PASSWORD_COLUMNS`). Cột text so sánh chuỗi nguyên văn.
+  - Sửa `execute_batch_statements`: kiểm tra backend hợp lệ (`is_d1` hoặc `is_sqlite`), dùng `transaction.atomic(using=target_db)` cho SQLite để tự động hỗ trợ savepoints trong nested transaction; xóa bỏ hoàn toàn `from unittest.mock import Mock, MagicMock` và `is_mock`.
+  - Sửa câu lệnh INSERT: dùng `INSERT INTO` chuẩn (clean import), loại bỏ `ON CONFLICT DO UPDATE`.
 
 - [ ] **Step 4: Chạy kiểm thử xác nhận thành công (Green)**
   ```bash
@@ -384,10 +383,10 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
   ```
   Mong đợi: PASS 100% tất cả các unit và regression tests.
 
-- [ ] **Step 5: Thẩm định chéo độc lập & Commit Task 3**
+- [ ] **Step 5: Thẩm định chéo độc lập & Commit Task 3 Followup**
   - Reviewer độc lập và ponytail-review kiểm tra diff, bảo đảm an toàn dữ liệu và tuân thủ ranh giới.
-  - Commit local riêng cho Task 3:
-    `git commit -m "fix(migration): harden pg-to-d1 migration command with comprehensive content reconciliation and safety guards"`
+  - Commit local riêng cho Task 3 Followup:
+    `git commit -m "fix(migration): enforce schema-driven canonicalization, preflight validation and clean atomic import"`
   ```
 
 ---

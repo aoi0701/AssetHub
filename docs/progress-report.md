@@ -130,12 +130,14 @@ Theo yêu cầu ưu tiên của Codex:
   Kết quả: **8 passed in 97.67ms (100% PASS)**.
 - **Schema Byte Parity:** Xác nhận bằng `cmp -s` -> **PARITY_OK**.
 
-### 5.2. Kết Luận Thẩm Định Độc Lập (Ponytail Review)
-- **Đánh giá:** **VERDICT: SHIP (ĐẠT TOÀN DIỆN)**.
-- Cả 5 nhóm lỗi được giải quyết dứt khoát, không over-engineering.
-- Kiểm thử độc lập 35/35 test migration đạt, bắt trọn vẹn cả 5 nhóm lỗi trên baseline cũ và chuyển xanh sau khi sửa.
-- 0 rò rỉ secret, 0 thông tin nhạy cảm in ra stderr/log.
-- Ranh giới nghiêm ngặt được giữ vững: 0 mutation trên PostgreSQL, 0 ghi lên Cloudflare D1 Cloud.
+### 5.2. Kết Luận Thẩm Định Độc Lập (Ponytail Review & Task 3 Followup)
+- **Đánh giá:** **VERDICT: READY FOR CODEX REVIEW (ĐẠT PHẠM VI TESTBED / CHƯA CHẠY CLOUD)**.
+- Đã giải quyết triệt để 4 vấn đề được Codex tái hiện trong lần review thứ hai:
+  1. **Preflight schema & Chính sách bảng AI:** Phân biệt 15 bảng bắt buộc nguồn (`SOURCE_MANDATORY_TABLES`) và bảng mới ở đích (`TARGET_NEW_TABLES` gồm `ai_suggestion_logs`). Preflight kiểm tra tồn tại và khớp cấu trúc cột trước mọi thao tác ghi; bảng bắt buộc thiếu ở nguồn, đích hoặc cả hai đều bị chặn.
+  2. **Canonicalization dựa trên kiểu schema:** Không đoán kiểu dữ liệu từ nội dung chuỗi. Tra cứu theo `(table, column)` metadata (`JSON_COLUMNS`, `DATETIME_COLUMNS`, `DATE_COLUMNS`, `BOOL_COLUMNS`, `PASSWORD_COLUMNS`). Toàn bộ các cột text/varchar được so sánh nguyên văn; password giữ nguyên văn; lỗi không in thông tin nhạy cảm.
+  3. **Rollback lồng transaction & Bỏ mock detection:** Sử dụng `django.db.transaction.atomic(using=target_db)` cho SQLite batch execution để hỗ trợ savepoints lồng nhau và rollback sạch 100% khi lỗi; xóa bỏ hoàn toàn `from unittest.mock import Mock, MagicMock` và `is_mock` khỏi mã nguồn production; chặn backend không hỗ trợ trước ghi.
+  4. **Clean Import & Không Upsert âm thầm:** Sử dụng `INSERT INTO` tiêu chuẩn; đích có xung đột PK bị từ chối sạch sẽ, không ghi đè âm thầm mật khẩu, vai trò, auth_version hay audit log.
+- **Ranh giới an toàn:** Bằng chứng kiểm thử dựa trên testbed SQLite tạm / mock runner trong container độc lập. Chưa chạy migration lên Cloudflare D1 Cloud và chưa tác động vào PostgreSQL production (`USE_D1_DATABASE=False`).
 
 ---
 
@@ -149,14 +151,15 @@ Theo yêu cầu ưu tiên của Codex:
 6. `1c72935` - `refactor(schema): make ddl non-destructive and isolate test reset with strict guards`
 7. `1168ad3` - `feat(migration): implement pg-to-d1 topological migration command and reconciliation tests`
 8. `1305783` - `docs: record task 1-3 implementation, safe ddl, and migration verification`
-9. *(Next commit)* - `fix(migration): resolve 5 codex review findings for robust pg-to-d1 migration and 7-criteria reconciliation`
+9. `8addff6` - `fix(migration): harden pg-to-d1 migration command with comprehensive content reconciliation and safety guards`
+10. *(Next commit)* - `fix(migration): enforce schema-driven canonicalization, preflight validation and clean atomic import`
 
 ---
 
 ## 7. Trạng Thái Hiện Tại & Đề Xuất Bước Kế Tiếp
 
-- **Task 3 đã hoàn tất sửa đổi 5 nhóm lỗi và vượt qua 100% bài kiểm thử (77/77 tests passed).**
+- **Task 3 Followup hoàn tất: 44/44 test migration passed, 67/67 unit/regression tests passed, 8/8 Node bridge tests passed.**
 - **Ranh giới an toàn hiện tại:**
-  - Lệnh `migrate_pg_to_d1` mới chỉ được kiểm thử trên testbed double / bộ nhớ tạm, **chưa chạy trên CSDL thật hay Cloudflare D1 Cloud**.
+  - Lệnh `migrate_pg_to_d1` mới chỉ được kiểm thử trên testbed double / bộ nhớ tạm, **tuyệt đối chưa chạy trên CSDL thật hay Cloudflare D1 Cloud**.
   - `USE_D1_DATABASE=False` vẫn duy trì cho ứng dụng chính, CSDL PostgreSQL không bị thay đổi.
-- Kính gửi Codex nghiệm thu kết quả Task 3 đã sửa đổi để xin phê duyệt chuyển sang bước thực thi di chuyển dữ liệu (Task 3 Execution).
+- Kính gửi Codex nghiệm thu kết quả Task 3 Followup để chuẩn bị cho bước diễn tập testbed PostgreSQL độc lập (chưa chạy migration cloud).
