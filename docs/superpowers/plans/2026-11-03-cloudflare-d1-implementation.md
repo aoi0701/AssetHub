@@ -383,10 +383,29 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
   ```
   Mong đợi: PASS 100% tất cả các unit và regression tests.
 
-- [ ] **Step 5: Thẩm định chéo độc lập & Commit Task 3 Followup**
+- [x] **Step 5: Thẩm định chéo độc lập & Commit Task 3 Followup**
   - Reviewer độc lập và ponytail-review kiểm tra diff, bảo đảm an toàn dữ liệu và tuân thủ ranh giới.
-  - Commit local riêng cho Task 3 Followup:
+  - Commit local riêng cho Task 3 Followup: `a16aa8d`
     `git commit -m "fix(migration): enforce schema-driven canonicalization, preflight validation and clean atomic import"`
+
+---
+
+### Task 3b: Diễn Tập Local End-to-End: PostgreSQL Test Độc Lập -> D1 Local Qua Worker Bridge
+
+> **Mục tiêu:** Chứng minh `migrate_pg_to_d1` chạy thành công từ CSDL PostgreSQL test độc lập (schema tạo bằng Django migrations thật, dữ liệu giả) sang D1 local qua Worker bridge thật (`http://127.0.0.1:8787`) và Django adapter backend `assethub_api.backends.d1`. Kiểm chứng trọn vẹn kiểu dữ liệu (JSON scalar/object, Datetime aware/microseconds, PBKDF2 1,000,000 iterations, bool, date), quan hệ M2M, sequence counters và non-empty guard.
+
+**Phân quyền và phối hợp:**
+- **Agent A (Nguồn PostgreSQL Test):** Tạo container PostgreSQL `assethub-pg-rehearsal-<id>` trên port 5434 độc lập, migrate Django schema thật (15 bảng, không có bảng AI), seed dữ liệu giả đa dạng.
+- **Agent B (Đích D1 Local & Worker Bridge):** Chạy `wrangler dev` với thư mục persist tạm, port 8787, nạp DDL chuẩn (16 bảng gồm `ai_suggestion_logs`), chứng minh đích rỗng.
+- **Agent C (Kiểm thử & Reviewer Độc Lập):** Soạn kịch bản diễn tập, chạy xác nhận tiền kiểm, `--dry-run`, migration thật, đối soát 1:1, kiểm tra mật khẩu qua Django auth, kiểm tra non-empty guard, và chạy kịch bản đối chứng cố tình gây lỗi.
+- **Coordinator:** Điều phối, cấu hình settings test, thực thi end-to-end, cleanup tài nguyên và commit.
+
+- [ ] **Step 1: Khởi động Agent A & Agent B song song (Dựng 2 đầu harness)**
+- [ ] **Step 2: Nạp schema & seed dữ liệu giả vào PostgreSQL test; nạp DDL vào D1 local**
+- [ ] **Step 3: Thực hiện kiểm thử tiền kiểm & `--dry-run` (0 ghi)**
+- [ ] **Step 4: Chạy migration thật từ PostgreSQL test sang D1 local (không `--allow-non-empty`)**
+- [ ] **Step 5: Đối soát 1:1, kiểm tra mật khẩu bằng Django auth, kiểm tra non-empty guard & negative tests**
+- [ ] **Step 6: Dọn dẹp tài nguyên diễn tập local (container/volume/persist dir tạm) & commit kết quả**
   ```
 
 ---

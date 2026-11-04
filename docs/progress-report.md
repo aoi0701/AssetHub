@@ -152,14 +152,49 @@ Theo yêu cầu ưu tiên của Codex:
 7. `1168ad3` - `feat(migration): implement pg-to-d1 topological migration command and reconciliation tests`
 8. `1305783` - `docs: record task 1-3 implementation, safe ddl, and migration verification`
 9. `8addff6` - `fix(migration): harden pg-to-d1 migration command with comprehensive content reconciliation and safety guards`
-10. *(Next commit)* - `fix(migration): enforce schema-driven canonicalization, preflight validation and clean atomic import`
+10. `a16aa8d` - `fix(migration): enforce schema-driven canonicalization, preflight validation and clean atomic import`
+11. *(Next commit)* - `test(migration): complete local end-to-end rehearsal from real postgresql to local d1 bridge`
 
 ---
 
-## 7. Trạng Thái Hiện Tại & Đề Xuất Bước Kế Tiếp
+## 7. Trạng Thái Hiện Tại & Báo Cáo Diễn Tập Task 3b (Local Rehearsal)
 
-- **Task 3 Followup hoàn tất: 44/44 test migration passed, 67/67 unit/regression tests passed, 8/8 Node bridge tests passed.**
-- **Ranh giới an toàn hiện tại:**
-  - Lệnh `migrate_pg_to_d1` mới chỉ được kiểm thử trên testbed double / bộ nhớ tạm, **tuyệt đối chưa chạy trên CSDL thật hay Cloudflare D1 Cloud**.
-  - `USE_D1_DATABASE=False` vẫn duy trì cho ứng dụng chính, CSDL PostgreSQL không bị thay đổi.
-- Kính gửi Codex nghiệm thu kết quả Task 3 Followup để chuẩn bị cho bước diễn tập testbed PostgreSQL độc lập (chưa chạy migration cloud).
+### 7.1. Diễn Tập Thực Tế PostgreSQL Test -> D1 Local Qua Worker Bridge
+Đã hoàn thành toàn bộ kịch bản diễn tập theo yêu cầu của Codex:
+- **Nguồn PostgreSQL Test Độc Lập:**
+  - Container `assethub-pg-rehearsal-20261104` chạy trên port `5434`, schema tạo bằng lệnh `python manage.py migrate` thật của Django (15 bảng bắt buộc, hoàn toàn không có `ai_suggestion_logs`).
+  - Nạp dữ liệu giả phong phú: PK gốc, mật khẩu băm PBKDF2 1,000,000 iterations, timestamps UTC microsecond, date, booleans, JSON objects/lists, quan hệ M2M, sequence counters.
+  - Cấp tài khoản `assethub_ro_user` chỉ có quyền `SELECT` cho lệnh migration.
+- **Đích Cloudflare D1 Local & Worker Bridge:**
+  - Chạy `wrangler dev` trên port `8787` (`http://127.0.0.1:8787`) với thư mục persist tạm `/tmp/wrangler-d1-rehearsal-20261104` và token bảo mật.
+  - Nạp DDL chuẩn `schema.sql` (16 bảng đích gồm `ai_suggestion_logs`, triggers và constraints).
+  - Xác nhận đích ban đầu hoàn toàn rỗng (0 bản ghi trên 16 bảng).
+  - Kết nối qua adapter Django `assethub_api.backends.d1` và Worker Bridge thật, không dùng driver SQLite trực tiếp.
+
+### 7.2. Kết Quả Xác Minh Tuần Tự
+1. **Preflight Checks:** Xác nhận danh tính nguồn/đích; nguồn có 15 bảng (vắng bảng AI), đích có 16 bảng và rỗng -> **PASS**.
+2. **Dry Run (`--dry-run`):** Trích xuất metadata, tính SHA-256 checksum, in kế hoạch 4-Tier; xác nhận 0 bản ghi ghi vào đích -> **PASS**.
+3. **Migration Thật:** Chạy `migrate_pg_to_d1` với alias nguồn/đích tường minh, không dùng `--allow-non-empty`. Nạp trọn vẹn 4 Tier dữ liệu -> **PASS**.
+4. **Đối Soát 1:1 (`D1Reconciler`):** Xác nhận 100% khớp across 7 tiêu chí (Row count, Key set, Foreign keys, PBKDF2 verbatim, Datetime/bool, Sequence counters theo `(kind, year)`, Row content parity) -> **PASS**.
+5. **Kiểm Tra Mật Khẩu Django Auth:** Xác thực mật khẩu 4 user bằng `User.check_password` trực tiếp trên local với dữ liệu đã nạp vào D1; 0 rò rỉ credential -> **PASS**.
+6. **Non-Empty Target Guard:** Chạy lại migration trên đích đã có dữ liệu mà không có cờ `--allow-non-empty`; lệnh lập tức chặn dừng với `CommandError` trước khi ghi byte nào -> **PASS**.
+7. **Negative Defect Detection:** Kiểm thử 5 kịch bản sai lệch cố ý (đổi password hash, đổi boolean `is_staff`, giảm sequence counter, xóa dòng history log, đổi text department); `D1Reconciler` bắt chính xác 100% sai lệch -> **PASS**.
+
+### 7.3. Tổng Hợp Kết Quả Test Suite
+- `backend/apps/common/tests/test_pg_to_d1_rehearsal.py`: **11 passed in 22.94s (100% PASS)**
+- `backend/apps/common/tests/test_harness_pg_source.py`: **6 passed in 3.42s (100% PASS)**
+- `backend/apps/common/tests/test_harness_d1_target.py`: **3 passed in 4.62s (100% PASS)**
+- `backend/apps/common/tests/test_d1_migration.py`: **44 passed in 25.89s (100% PASS)**
+- `backend/assethub_api/backends/d1/tests/test_d1_schema_constraints.py`: **8 passed in 0.18s (100% PASS)**
+- `backend/assethub_api/backends/d1/tests/test_isolation_guard.py`: **10 passed, 1 skipped in 0.11s (100% PASS)**
+- `node spikes/cf-d1-spike/bridge-worker/tests/test_worker_regression.mjs`: **8 passed in 101.44ms (100% PASS)**
+- **Schema Byte Parity:** `backend/assethub_api/backends/d1/sql/schema.sql` và `spikes/cf-d1-spike/schema.sql` -> **IDENTICAL**.
+- **Dọn Dẹp Tài Nguyên:** Container test `assethub-pg-rehearsal-20261104` đã được stop/rm; port 8787 và port 5434 đã giải phóng; thư mục persist tạm đã xóa. CSDL `assethub-db-1` (port 5433) và `pg-test` (port 5432) hoàn toàn nguyên vẹn.
+
+---
+
+## 8. Ranh Giới An Toàn & Đề Xuất Bước Kế Tiếp
+
+- **Bằng chứng thực tế:** Đã chứng minh toàn bộ quy trình migration chạy từ CSDL PostgreSQL thật sang Cloudflare D1 local qua Worker bridge thật với schema migrations Django.
+- **Ranh giới:** Tuyệt đối chưa ghi lên Cloudflare D1 Cloud; chưa can thiệp CSDL PostgreSQL production (`USE_D1_DATABASE=False`).
+- Kính gửi Codex nghiệm thu kết quả diễn tập local Task 3b để xin phê duyệt các bước tiếp theo.

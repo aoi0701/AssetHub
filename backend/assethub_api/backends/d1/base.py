@@ -123,6 +123,20 @@ class D1DatabaseOperations(SQLiteDatabaseOperations):
                 quoted.append(f"'{s}'")
         return tuple(quoted)
 
+    def last_executed_query(self, cursor, sql, params):
+        if not params:
+            return sql
+        try:
+            return super().last_executed_query(cursor, sql, params)
+        except (TypeError, ValueError):
+            if isinstance(params, (list, tuple)):
+                quoted = self._quote_params_for_last_executed_query(params)
+                res = sql
+                for q in quoted:
+                    res = res.replace("?", str(q), 1)
+                return res
+            return sql
+
 
 class D1DatabaseFeatures(SQLiteDatabaseFeatures):
     atomic_transactions = False
