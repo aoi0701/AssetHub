@@ -466,8 +466,32 @@ class AssetViewSet(viewsets.ModelViewSet):
                 **{kind: saved_key, 'updated_at': timezone.now()}
             )
         except Exception as exc:
-            if not getattr(exc, 'committed', False):
+            committed = getattr(exc, 'committed', None)
+            if committed is True:
+                # State 1: Definitely committed -> DO NOT delete saved_key!
+                pass
+            elif committed is False:
+                # State 2: Definitely uncommitted -> Safe to delete saved_key
                 storage.delete(saved_key)
+            else:
+                # State 3: Unknown commit state (committed is None / missing)
+                try:
+                    persisted_key = (
+                        Asset.objects.filter(id=asset.id)
+                        .values_list(kind, flat=True)
+                        .first()
+                    )
+                    if persisted_key == saved_key:
+                        # DB actually committed! DO NOT delete saved_key!
+                        if old_key and old_key != saved_key:
+                            storage.delete(old_key)
+                    else:
+                        # DB definitely did NOT record saved_key. Clean up.
+                        storage.delete(saved_key)
+                except Exception:
+                    # Readback itself raised an exception; state remains completely unknown.
+                    # Retain saved_key (temporary orphan) to prevent active reference with missing file.
+                    pass
             raise
 
         if rows == 0:
@@ -554,12 +578,32 @@ class AssetViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        default_ttl = getattr(settings, 'R2_PRESIGNED_URL_EXPIRE_SECONDS', 900)
-        expire_param = request.query_params.get('expires_in') or request.query_params.get('expire_seconds')
-        try:
-            expire_seconds = int(expire_param) if expire_param else default_ttl
-        except (ValueError, TypeError):
-            expire_seconds = default_ttl
+        if 'expires_in' in request.query_params:
+            raw_ttl = request.query_params.get('expires_in')
+        elif 'expire_seconds' in request.query_params:
+            raw_ttl = request.query_params.get('expire_seconds')
+        else:
+            raw_ttl = None
+
+        if raw_ttl is not None:
+            try:
+                expire_seconds = int(raw_ttl)
+            except (ValueError, TypeError):
+                return Response(
+                    {"detail": "Thời gian hết hạn URL (expires_in/expire_seconds) phải là số nguyên hợp lệ."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if expire_seconds < 1 or expire_seconds > 604800:
+                return Response(
+                    {"detail": "Thời gian hết hạn URL phải nằm trong khoảng từ 1 đến 604800 giây."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            try:
+                default_ttl = int(getattr(settings, 'R2_PRESIGNED_URL_EXPIRE_SECONDS', 900))
+            except (ValueError, TypeError):
+                default_ttl = 900
+            expire_seconds = max(1, min(default_ttl, 604800))
 
         as_attachment = (kind == 'document') or (request.query_params.get('attachment') == '1')
         storage = AttachmentStorage()

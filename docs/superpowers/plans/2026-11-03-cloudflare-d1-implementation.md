@@ -547,7 +547,17 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 - [x] **Step 5: Review Độc Lập D & Coordinator Tích Hợp Verification**
   - Agent D độc lập review diff và kết nối production code: R2 cleanup lifecycle, B↔C contract, không tạo file dư thừa.
   - Coordinator chạy kiểm thử tổng hợp (storage, AI backend, worker tests, D1 business integrity regression).
-  - Cập nhật `docs/progress-report.md`, commit local `feat(r2-ai): implement r2 private presigned storage and workers ai with heuristic fallback`.
+  - Cập nhật `docs/progress-report.md`, commit local `feat(r2-ai): implement r2 private presigned storage and workers ai with heuristic fallback`. (Commit: `feff816`).
+
+- [x] **Step 6: Sửa 5 lỗi hồi quy Task 5 theo review feff816**
+  - [x] Agent A: Xử lý 3 trạng thái commit (chắc chắn chưa ghi / đã ghi / chưa biết có readback an toàn, giữ orphan khi unknown tránh mất file), validate strict integer TTL (1 <= ttl <= 604800, trả 400 rõ), test trên D1 local thật.
+  - [x] Agent B: Bỏ `record_failure()` khi gặp lỗi auth 401/403 của Worker (không mở breaker sang 200 giả), validate kiểu/giá trị `suggested_category_id` trước khi ORM filter (tránh 500 ValueError).
+  - [x] Agent C: Bỏ tìm kiếm substring tên category trong rawResponse/explanation (trả 502 `INVALID_SUGGESTION`, không ghi audit log khi output lỗi).
+
+- [x] **Step 7: Verification và Commit Task 5 Fixes**
+  - Chạy đầy đủ: unit mock, PG test baseline, D1 local rehearsal attachments, Worker vitest.
+  - Reviewer độc lập D thẩm định diff và 5 ca hồi quy.
+  - Commit: `fix(r2-ai): resolve upload unknown commit cleanup, download ttl validation, ai auth breaker and category parsing`.
   ```
 
 ---

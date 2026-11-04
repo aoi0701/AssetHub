@@ -125,6 +125,7 @@ export default {
 
     let suggestedId = null;
     let explanation = '';
+    let parsedObj = null;
 
     const rawResponse =
       typeof aiOutput === 'string'
@@ -133,12 +134,12 @@ export default {
 
     try {
       const jsonMatch = typeof rawResponse === 'string' ? rawResponse.match(/\{[\s\S]*\}/) : null;
-      const parsedObj = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(rawResponse);
-      const rawId = parsedObj.suggested_category_id ?? parsedObj.category_id;
+      parsedObj = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(rawResponse);
+      const rawId = parsedObj?.suggested_category_id ?? parsedObj?.category_id;
       if (rawId !== undefined && rawId !== null) {
         suggestedId = Number(rawId);
       }
-      if (parsedObj.explanation) {
+      if (parsedObj?.explanation) {
         explanation = String(parsedObj.explanation);
       }
     } catch {
@@ -149,13 +150,21 @@ export default {
     if (suggestedId !== null && !isNaN(suggestedId)) {
       matchedCategory = categories.find((c) => Number(c.id) === Number(suggestedId));
     }
-    if (!matchedCategory) {
-      // Fallback matching by category name
-      matchedCategory = categories.find(
-        (c) =>
-          typeof rawResponse === 'string' &&
-          rawResponse.toLowerCase().includes(c.name.toLowerCase())
-      );
+    if (!matchedCategory && parsedObj && typeof parsedObj === 'object') {
+      const catNameProp =
+        parsedObj.suggested_category_name ?? parsedObj.category_name;
+      if (
+        catNameProp !== undefined &&
+        catNameProp !== null &&
+        typeof catNameProp === 'string' &&
+        catNameProp.trim() !== ''
+      ) {
+        matchedCategory = categories.find(
+          (c) =>
+            typeof c.name === 'string' &&
+            c.name.trim().toLowerCase() === String(catNameProp).trim().toLowerCase()
+        );
+      }
     }
 
     if (!matchedCategory) {

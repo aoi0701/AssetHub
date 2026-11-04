@@ -175,6 +175,77 @@ def test_worker_returns_401_maps_to_503(admin_user, sample_categories):
         )
         assert response.status_code == 503
         assert "authentication failed" in str(response.data)
+        assert AiProxyService._failure_count == 0
+        assert not AiProxyService.is_circuit_open()
+
+
+@pytest.mark.django_db
+def test_worker_401_consecutive_calls_never_trips_circuit_breaker(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    http_error = urllib.error.HTTPError(
+        url="http://127.0.0.1:8787/api/suggest-category",
+        code=401,
+        msg="Unauthorized",
+        hdrs=None,
+        fp=MagicMock(read=lambda: b'{"error":"Unauthorized"}'),
+    )
+
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        for i in range(5):
+            response = client.post(
+                "/api/ai/suggest-category/",
+                data={"name": f"ThinkPad X1 Carbon {i}"},
+                format="json",
+            )
+            assert response.status_code == 503
+            assert "authentication failed" in str(response.data)
+            assert AiProxyService._failure_count == 0
+            assert not AiProxyService.is_circuit_open()
+            assert not (response.status_code == 200 and response.data.get("is_fallback") is True)
+
+
+@pytest.mark.django_db
+def test_worker_403_consecutive_calls_never_trips_circuit_breaker(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    http_error = urllib.error.HTTPError(
+        url="http://127.0.0.1:8787/api/suggest-category",
+        code=403,
+        msg="Forbidden",
+        hdrs=None,
+        fp=MagicMock(read=lambda: b'{"error":"Forbidden"}'),
+    )
+
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        for i in range(5):
+            response = client.post(
+                "/api/ai/suggest-category/",
+                data={"name": f"Dell Latitude {i}"},
+                format="json",
+            )
+            assert response.status_code == 503
+            assert "authentication failed" in str(response.data)
+            assert AiProxyService._failure_count == 0
+            assert not AiProxyService.is_circuit_open()
+            assert not (response.status_code == 200 and response.data.get("is_fallback") is True)
+
+
+def test_post_request_direct_401_403_raises_service_unavailable():
+    for code in (401, 403):
+        http_error = urllib.error.HTTPError(
+            url="http://127.0.0.1:8787/api/suggest-category",
+            code=code,
+            msg="Auth error",
+            hdrs=None,
+            fp=MagicMock(read=lambda: b'{"error":"Auth failure"}'),
+        )
+        with patch("urllib.request.urlopen", side_effect=http_error):
+            with pytest.raises(Exception) as exc_info:
+                AiProxyService._post_request("http://test.url", {}, {})
+            assert "AI worker authentication failed." in str(exc_info.value)
+            assert AiProxyService._failure_count == 0
+            assert not AiProxyService.is_circuit_open()
 
 
 @pytest.mark.django_db
@@ -389,3 +460,53 @@ def test_worker_returns_unrecognized_category_triggers_fallback(admin_user, samp
         assert response.data["is_fallback"] is True
         assert response.data["suggested_category_id"] == sample_categories[0].id
         assert response.data["suggested_category_name"] == "Laptop"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("invalid_id", ["not-a-number", [1, 2], True, -5, {}])
+def test_invalid_suggested_category_id_types_trigger_fallback(admin_user, sample_categories, invalid_id):
+    client = auth_client_for(admin_user)
+
+    mock_worker_response = {
+        "request_id": f"test-invalid-type-{type(invalid_id).__name__}",
+        "suggested_category_id": invalid_id,
+        "suggested_category_name": "Unknown",
+        "explanation": "Worker returned non-integer category id",
+        "log_saved": False,
+    }
+
+    with patch.object(AiProxyService, "_post_request", return_value=mock_worker_response):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon", "description": "Laptop doanh nhân"},
+            format="json",
+        )
+        # Never raises ValueError / HTTP 500
+        assert response.status_code == 200
+        assert response.data["is_fallback"] is True
+        assert response.data["suggested_category_id"] == sample_categories[0].id
+        assert response.data["suggested_category_name"] == "Laptop"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("invalid_id", ["not-a-number", [1, 2], True, -5, {}])
+def test_invalid_suggested_category_id_types_non_matching_raises_503(admin_user, sample_categories, invalid_id):
+    client = auth_client_for(admin_user)
+
+    mock_worker_response = {
+        "request_id": f"test-invalid-type-non-match-{type(invalid_id).__name__}",
+        "suggested_category_id": invalid_id,
+        "suggested_category_name": "Unknown",
+        "explanation": "Worker returned non-integer category id",
+        "log_saved": False,
+    }
+
+    with patch.object(AiProxyService, "_post_request", return_value=mock_worker_response):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "Vật dụng bí ẩn XYZ-999", "description": "Không khớp từ khóa nào"},
+            format="json",
+        )
+        # Never raises ValueError / HTTP 500, raises controlled 503
+        assert response.status_code == 503
+        assert "Không thể tự động phân loại danh mục. Vui lòng chọn thủ công." in str(response.data)

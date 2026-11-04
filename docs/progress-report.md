@@ -461,3 +461,67 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
   - Không gọi AI cloud tiêu thụ định mức 10.000 Neurons/ngày.
   - Nhánh `feat/cloudflare-d1`: không worktree, không push/merge lên remote.
 - Kính gửi Codex nghiệm thu Task 5.
+
+---
+
+## 16. Báo Cáo Triển Khai Task 5 Sửa Lỗi Hồi Quy (Theo Review Commit feff816)
+
+- **Thời điểm:** 2026-11-04 22:00 (GMT+7)
+- **Trạng thái:** **Task 5 Fixes PASS 100% — Đã qua review độc lập Agent D & sẵn sàng để Codex nghiệm thu.**
+- **Ranh giới an toàn nghiêm ngặt:**
+  - Không cài đặt/thêm/nâng cấp thư viện, công cụ, phần mềm; không kéo Docker image mới.
+  - Kiểm thử mock/local trên D1 local và PostgreSQL test container; chưa đụng dữ liệu thật, chưa deploy cloud, không kích hoạt R2 billing, không tiêu quota AI cloud, chưa mở Task 6.
+
+### 16.1. Chi Tiết Sửa 5 Lỗi Đã Tái Hiện Bằng Mã Nguồn Production
+1. **Bug 1 (P1) - Ba trạng thái dọn dẹp commit (views.py:466-490):**
+   - Đã sửa việc xóa mù tệp mới khi thiếu cờ `committed`.
+   - Ba trạng thái rõ ràng:
+     - `committed is True`: DB đã commit -> giữ `saved_key`.
+     - `committed is False`: DB chắc chắn chưa ghi -> xóa `saved_key`.
+     - `committed is None` (OperationalError / mất ack): thực hiện safe readback từ DB:
+       - Nếu DB đã trỏ `saved_key`: giữ `saved_key` và xóa `old_key`.
+       - Nếu DB chưa trỏ `saved_key`: an toàn xóa `saved_key`.
+       - Nếu readback bản thân bị lỗi: giữ `saved_key` làm orphan tạm thời để tránh làm mất file khi DB có thể đang tham chiếu.
+     - Khi `rows == 0`: xóa `saved_key` và trả HTTP 400.
+     - Khi `rows == 1`: DB ghi thành công -> xóa `old_key`.
+   - Kiểm thử thực tế trên D1 local thật (`test_d1_attachment_storage.py`): kiểm chứng 6 kịch bản trên Worker Bridge và LocalDevStorage thật.
+2. **Bug 2 (P2) - Validate số nguyên và dải hợp lệ cho TTL (views.py:578-608):**
+   - Kiểm tra chặt chẽ `int(raw_ttl)` và dải [1, 604800] giây (7 ngày giới hạn R2).
+   - Input sai kiểu ("abc") hoặc ngoài dải (0, -1, 604801) trả HTTP 400 rõ ràng; không âm thầm fallback về default.
+   - Khi không truyền param: sử dụng `settings.R2_PRESIGNED_URL_EXPIRE_SECONDS` (900s).
+   - Test helpers nội bộ trong `storage_backends.py` vẫn giữ khả năng sinh URL âm/quá hạn có chủ đích để kiểm thử xác thực URL.
+3. **Bug 3 (P2) - Bỏ `record_failure()` khi gặp lỗi auth 401/403 của Worker (services.py:309-322, 366-370):**
+   - Lỗi xác thực Worker (401/403) là lỗi cấu hình/secret, không phải lỗi availability; trực tiếp raise `ServiceUnavailable`, không đếm lỗi circuit breaker.
+   - Gọi liên tiếp 4+ lần với 401/403: luôn trả 503, breaker luôn ĐÓNG (`_failure_count == 0`), tuyệt đối không rơi vào heuristic 200 giả.
+4. **Bug 4 (P2) - Validate kiểu `suggested_category_id` trước khi ORM filter (services.py:417-427):**
+   - Loại trừ boolean, chuyển đổi và kiểm tra số nguyên dương (`val > 0`).
+   - Các giá trị không hợp lệ (`"not-a-number"`, `[]`, `{}`, `True`, `-5`) kích hoạt heuristic fallback sạch sẽ, không gây `ValueError` (HTTP 500).
+5. **Bug 5 (P2) - Bỏ tìm kiếm substring tên danh mục trong rawResponse/explanation (index.js:149-181):**
+   - Loại bỏ hoàn toàn việc tìm tên substring trong `rawResponse` hoặc `explanation`.
+   - Chỉ đối chiếu ID số hoặc thuộc tính JSON cấu trúc rõ ràng (`suggested_category_name` / `category_name`).
+   - Khi output không hợp lệ hoặc explanation nhắc tên theo ý phủ định: trả HTTP 502 `INVALID_SUGGESTION`, không ghi log vào D1.
+
+### 16.2. Tổng Hợp Kết Quả Kiểm Thử Sau Khi Sửa
+1. **Kiểm thử Storage & AI Backend:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_storage.py backend/tests/test_ai_proxy.py backend/apps/assets/tests/test_r2_storage.py -v`
+   - Kết quả: **57 passed in 8.20s (100% PASS)**.
+2. **Kiểm thử Cloudflare Worker Suite:**
+   - Lệnh: `cd cloudflare-worker && npm test`
+   - Kết quả: **15 passed in 301ms (100% PASS)**.
+3. **Kiểm thử D1 Local Attachment Storage Rehearsal Suite:**
+   - Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_attachment_storage.py --rehearsal -v`
+   - Kết quả: **6 passed in 6.90s (100% PASS)**.
+4. **Kiểm thử D1 Business Integrity & OCC Regression Suite:**
+   - Lệnh: `backend/.venv/bin/pytest backend/apps/assets/tests/test_d1_business_integrity.py --rehearsal -v`
+   - Kết quả: **21 passed in 25.61s (100% PASS)**.
+5. **Kiểm thử Baseline Backend Suite (PostgreSQL Test Container):**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/ -q`
+   - Kết quả: **206 passed in 67.38s (100% PASS)**.
+6. **Thẩm định Độc Lập Ponytail Review (Agent D):**
+   - **Verdict: APPROVED**. Cả 5 lỗi hồi quy được khắc phục hoàn toàn ở tầng mã nguồn production, zero bloat.
+
+### 16.3. Ranh Giới An Toàn & Đề Xuất Nghiệm Thu
+- Cổng 5434 và 8787 sạch 100%. Containers `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) hoạt động bình thường.
+- Không có thư viện/công cụ nào được cài mới; không có model/Docker image mới được tải về.
+- Nhánh `feat/cloudflare-d1`: không worktree, không push/merge, chưa mở Task 6.
+- Kính gửi Codex nghiệm thu Task 5.

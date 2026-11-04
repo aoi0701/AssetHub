@@ -224,6 +224,33 @@ def test_download_view_returns_900_default_and_respects_override(admin_user, tes
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "query_param,expected_error",
+    [
+        ("expires_in=0", "Thời gian hết hạn URL phải nằm trong khoảng từ 1 đến 604800 giây."),
+        ("expires_in=-1", "Thời gian hết hạn URL phải nằm trong khoảng từ 1 đến 604800 giây."),
+        ("expires_in=604801", "Thời gian hết hạn URL phải nằm trong khoảng từ 1 đến 604800 giây."),
+        ("expires_in=abc", "Thời gian hết hạn URL (expires_in/expire_seconds) phải là số nguyên hợp lệ."),
+        ("expire_seconds=0", "Thời gian hết hạn URL phải nằm trong khoảng từ 1 đến 604800 giây."),
+    ],
+)
+def test_download_view_invalid_ttl_returns_400(admin_user, test_asset, temp_media_root, query_param, expected_error):
+    """
+    [INTEGRATION TEST - Strict Integer TTL Validation]
+    Download endpoint rejects invalid, non-integer, or out-of-bounds TTL query params with HTTP 400.
+    """
+    storage = AttachmentStorage()
+    key = storage.save(f"assets/{test_asset.id}/image/sample.png", io.BytesIO(b"\x89PNG\r\n\x1a\nfakeimage"))
+    test_asset.image = key
+    test_asset.save()
+
+    client = auth_client_for(admin_user)
+    res = client.get(f"/api/assets/{test_asset.id}/attachments/image/download/?{query_param}")
+    assert res.status_code == 400
+    assert res.data["detail"] == expected_error
+
+
+@pytest.mark.django_db
 def test_upload_on_disposed_asset_fails_and_cleans_up_new_file(admin_user, asset_category, dept_it, temp_media_root):
     """
     [INTEGRATION TEST - Real DB & LocalDevStorage]
@@ -355,6 +382,110 @@ def test_database_exception_committed_false_deletes_new_file(admin_user, test_as
     # Verify new file was deleted
     created_files = list(temp_media_root.rglob("*uncommitted*"))
     assert len(created_files) == 0
+
+
+@pytest.mark.django_db
+def test_database_exception_unknown_committed_readback_matches_retains_new_and_deletes_old(
+    admin_user, test_asset, temp_media_root
+):
+    """
+    [INTEGRATION TEST - State 3: Unknown Commit State with Successful Readback Match]
+    If update raises an exception without 'committed' attr (e.g. timeout after commit),
+    readback finds saved_key in DB -> retains new file and deletes old file.
+    """
+    from django.db import connection
+
+    client = auth_client_for(admin_user)
+    storage = AttachmentStorage()
+
+    # Seed old file
+    old_key = storage.save(f"assets/{test_asset.id}/image/old_file.png", io.BytesIO(b"\x89PNG\r\n\x1a\nold"))
+    test_asset.image = old_key
+    test_asset.save()
+
+    class OperationalTimeoutError(Exception):
+        pass  # No committed attribute
+
+    def fake_update(self_qs, **kwargs):
+        # Directly update DB without calling QuerySet.update recursively
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE assets_asset SET image = %s WHERE id = %s", [kwargs['image'], test_asset.id])
+        raise OperationalTimeoutError("Lost network connection after mutation commit")
+
+    img_file = make_real_image(filename="unknown_state_match.png")
+    with patch('django.db.models.query.QuerySet.update', side_effect=fake_update, autospec=True):
+        with pytest.raises(OperationalTimeoutError):
+            client.post(
+                f"/api/assets/{test_asset.id}/attachments/",
+                data={'kind': 'image', 'file': img_file},
+                format='multipart',
+            )
+
+    # Verify new file is retained
+    new_files = list(temp_media_root.rglob("*unknown_state_match*"))
+    assert len(new_files) == 1
+    # Verify old file was deleted
+    assert not storage.exists(old_key)
+
+
+@pytest.mark.django_db
+def test_database_exception_unknown_committed_readback_mismatch_deletes_new(
+    admin_user, test_asset, temp_media_root
+):
+    """
+    [INTEGRATION TEST - State 3: Unknown Commit State with Readback Mismatch]
+    If update raises an exception without 'committed' attr, and readback shows
+    saved_key was NOT saved in DB -> cleans up new file.
+    """
+    client = auth_client_for(admin_user)
+
+    class OperationalError(Exception):
+        pass
+
+    img_file = make_real_image(filename="unknown_state_mismatch.png")
+    with patch('django.db.models.query.QuerySet.update', side_effect=OperationalError("Network drop before commit")):
+        with pytest.raises(OperationalError):
+            client.post(
+                f"/api/assets/{test_asset.id}/attachments/",
+                data={'kind': 'image', 'file': img_file},
+                format='multipart',
+            )
+
+    # Verify new file was cleaned up
+    new_files = list(temp_media_root.rglob("*unknown_state_mismatch*"))
+    assert len(new_files) == 0
+
+
+@pytest.mark.django_db
+def test_database_exception_unknown_committed_readback_failure_retains_new_orphan(
+    admin_user, test_asset, temp_media_root
+):
+    """
+    [INTEGRATION TEST - State 3: Readback Failure Retains Orphan]
+    If readback itself raises an exception, the state remains unknown.
+    The new file is retained as temporary orphan to avoid broken asset references.
+    """
+    client = auth_client_for(admin_user)
+
+    class NetworkError(Exception):
+        pass
+
+    def fail_first(self_qs):
+        raise NetworkError("Readback timeout")
+
+    img_file = make_real_image(filename="unknown_state_orphan.png")
+    with patch('django.db.models.query.QuerySet.update', side_effect=NetworkError("Update error")):
+        with patch('django.db.models.query.QuerySet.first', side_effect=fail_first, autospec=True):
+            with pytest.raises(NetworkError):
+                client.post(
+                    f"/api/assets/{test_asset.id}/attachments/",
+                    data={'kind': 'image', 'file': img_file},
+                    format='multipart',
+                )
+
+    # Verify new file was retained as temporary orphan
+    new_files = list(temp_media_root.rglob("*unknown_state_orphan*"))
+    assert len(new_files) == 1
 
 
 @pytest.mark.django_db(transaction=True)

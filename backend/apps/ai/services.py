@@ -303,9 +303,14 @@ class AiProxyService:
     def _post_request(cls, url: str, payload: dict, headers: dict, timeout: float = 6.0) -> dict:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            raw_body = response.read().decode("utf-8")
-            return json.loads(raw_body)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                raw_body = response.read().decode("utf-8")
+                return json.loads(raw_body)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                raise ServiceUnavailable("AI worker authentication failed.")
+            raise
 
     @classmethod
     def suggest_category(cls, actor, name: str, description: str = "") -> dict:
@@ -358,9 +363,10 @@ class AiProxyService:
 
         try:
             data = cls._post_request(worker_url, payload, headers, timeout=6.0)
+        except ServiceUnavailable:
+            raise
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
-                cls.record_failure()
                 raise ServiceUnavailable("AI worker authentication failed.")
 
             raw_body = ""
@@ -395,7 +401,7 @@ class AiProxyService:
         except urllib.error.URLError:
             cls.record_failure()
             trigger_fallback = True
-        except (GatewayTimeout, ServiceUnavailable):
+        except GatewayTimeout:
             cls.record_failure()
             trigger_fallback = True
         except Exception:
@@ -409,7 +415,15 @@ class AiProxyService:
             return cls._heuristic_fallback(request_id=request_id, name=cleaned_name, description=cleaned_description)
 
         suggested_id = data.get("suggested_category_id")
-        category = Category.objects.filter(id=suggested_id).first() if suggested_id is not None else None
+        parsed_id = None
+        if suggested_id is not None and not isinstance(suggested_id, bool):
+            try:
+                val = int(suggested_id)
+                if val > 0:
+                    parsed_id = val
+            except (ValueError, TypeError):
+                parsed_id = None
+        category = Category.objects.filter(id=parsed_id).first() if parsed_id is not None else None
         if not category:
             return cls._heuristic_fallback(request_id=request_id, name=cleaned_name, description=cleaned_description)
 

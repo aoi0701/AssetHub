@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import worker from '../src/index.js';
 
 describe('Cloudflare AI Worker', () => {
@@ -12,6 +12,10 @@ describe('Cloudflare AI Worker', () => {
       prepare: vi.fn(),
     },
   };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   const samplePayload = {
     request_id: 'req-12345',
@@ -316,14 +320,12 @@ describe('Cloudflare AI Worker', () => {
     });
   });
 
-  it('successfully falls back to name matching when category name is present in response', async () => {
+  it('returns 502 and does NOT insert log when model returns invalid ID and explanation mentions a category name in negative context (Bug 5)', async () => {
     env.AI.run = vi.fn().mockResolvedValue({
-      response: 'Theo đánh giá thì thiết bị này thuộc loại Bàn phím cơ cao cấp.',
-    });
-
-    const runMock = vi.fn().mockResolvedValue({ success: true });
-    env.DB.prepare = vi.fn().mockReturnValue({
-      bind: vi.fn().mockReturnValue({ run: runMock }),
+      response: JSON.stringify({
+        suggested_category_id: 999,
+        explanation: 'Laptop không phù hợp với yêu cầu này',
+      }),
     });
 
     const req = new Request('http://localhost/api/suggest-category', {
@@ -336,10 +338,79 @@ describe('Cloudflare AI Worker', () => {
     });
 
     const res = await worker.fetch(req, env);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(502);
+
     const data = await res.json();
+    expect(data.code).toBe('INVALID_SUGGESTION');
+    expect(data.error).toBe('Invalid AI suggestion: category not in list');
+    expect(env.DB.prepare).not.toHaveBeenCalled();
+  });
+
+  it('returns 502 with code INVALID_SUGGESTION on non-JSON output containing category name', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: 'Theo đánh giá thì thiết bị này thuộc loại Bàn phím cơ cao cấp.',
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(502);
+
+    const data = await res.json();
+    expect(data.code).toBe('INVALID_SUGGESTION');
+    expect(data.error).toBe('Invalid AI suggestion: category not in list');
+    expect(env.DB.prepare).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 and inserts log in D1 when valid structured category name is provided', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: JSON.stringify({
+        suggested_category_name: 'Bàn phím',
+        explanation: 'Thiết bị ngoại vi dùng để gõ phím.',
+      }),
+    });
+
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    const bindMock = vi.fn().mockReturnValue({ run: runMock });
+    env.DB.prepare = vi.fn().mockReturnValue({ bind: bindMock });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.request_id).toBe('req-12345');
     expect(data.suggested_category_id).toBe(3);
     expect(data.suggested_category_name).toBe('Bàn phím');
+    expect(data.explanation).toContain('gõ phím');
     expect(data.log_saved).toBe(true);
+
+    expect(env.DB.prepare).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO ai_suggestion_logs')
+    );
+    expect(bindMock).toHaveBeenCalledWith(
+      'req-12345',
+      samplePayload.name,
+      samplePayload.description,
+      3,
+      'Bàn phím',
+      '@cf/meta/llama-3.1-8b-instruct-fp8',
+      expect.any(String)
+    );
   });
 });
