@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 from datetime import timedelta
 from dotenv import load_dotenv
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -20,11 +21,15 @@ SECRET_KEY = os.environ.get(
 
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
-    if host.strip()
-]
+allowed_hosts_env = os.environ.get('DJANGO_ALLOWED_HOSTS')
+if allowed_hosts_env:
+    ALLOWED_HOSTS = [
+        host.strip()
+        for host in allowed_hosts_env.split(',')
+        if host.strip()
+    ]
+else:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'backend']
 
 # Application definition
 INSTALLED_APPS = [
@@ -83,20 +88,53 @@ WSGI_APPLICATION = 'assethub_api.wsgi.application'
 # Custom User Model
 AUTH_USER_MODEL = 'authentication.User'
 
-# Database configuration
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME', 'assethub'),
-        'USER': os.environ.get('DB_USER', 'assethub_user'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'assethub_password'),
-        'HOST': os.environ.get('DB_HOST', 'db'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
-        'TEST': {
-            'NAME': os.environ.get('TEST_DB_NAME', 'test_assethub'),
+# Database configuration & runtime switching (PostgreSQL vs Cloudflare D1)
+USE_D1_DATABASE = os.environ.get('USE_D1_DATABASE', 'False').lower() in ('true', '1', 'yes')
+
+if USE_D1_DATABASE:
+    d1_bridge_url = os.environ.get('D1_BRIDGE_URL')
+    d1_bridge_token = os.environ.get('D1_BRIDGE_SECRET_TOKEN')
+    if not d1_bridge_url or not d1_bridge_token:
+        raise ImproperlyConfigured(
+            "D1_BRIDGE_URL and D1_BRIDGE_SECRET_TOKEN must be set when USE_D1_DATABASE=True"
+        )
+    DATABASES = {
+        'default': {
+            'ENGINE': 'assethub_api.backends.d1',
+            'NAME': os.environ.get('D1_DATABASE_NAME', 'assethub-test-d1'),
+            'BRIDGE_URL': d1_bridge_url,
+            'BRIDGE_TOKEN': d1_bridge_token,
+            'TIMEOUT': float(os.environ.get('D1_TIMEOUT', '45.0')),
+            'TIME_ZONE': None,
+            'CONN_MAX_AGE': 0,
+            'CONN_HEALTH_CHECKS': False,
+            'OPTIONS': {},
+            'AUTOCOMMIT': True,
+            'ATOMIC_REQUESTS': False,
+        },
+        'postgres': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', os.environ.get('DB_NAME', 'assethub')),
+            'USER': os.environ.get('POSTGRES_RO_USER', os.environ.get('DB_USER', 'assethub_user')),
+            'PASSWORD': os.environ.get('POSTGRES_RO_PASSWORD', os.environ.get('DB_PASSWORD', 'assethub_password')),
+            'HOST': os.environ.get('POSTGRES_HOST', os.environ.get('DB_HOST', 'db')),
+            'PORT': os.environ.get('POSTGRES_PORT', os.environ.get('DB_PORT', '5432')),
         },
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'assethub'),
+            'USER': os.environ.get('DB_USER', 'assethub_user'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', 'assethub_password'),
+            'HOST': os.environ.get('DB_HOST', 'db'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+            'TEST': {
+                'NAME': os.environ.get('TEST_DB_NAME', 'test_assethub'),
+            },
+        }
+    }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -207,7 +245,10 @@ CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in cors_origins_env.split(',') if origin.strip()
 ]
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https:\/\/.*\.pages\.dev$",
+    r"^https:\/\/(?:[a-z0-9-]+\.)?assethub(?:-[a-z0-9-]+)?\.pages\.dev$",
 ]
+cors_extra_regex = os.environ.get('CORS_EXTRA_REGEX')
+if cors_extra_regex:
+    CORS_ALLOWED_ORIGIN_REGEXES.append(cors_extra_regex.strip())
 CORS_ALLOW_CREDENTIALS = False
 

@@ -1,10 +1,26 @@
-tunnel: ${TUNNEL_ID:-placeholder-tunnel-id}
+# Cloudflare Tunnel Configuration
+# ===============================
+# Quick Tunnel (ad-hoc demo without named tunnel credentials):
+#   cloudflared tunnel --url http://127.0.0.1:8000
+#
+# Named Tunnel (production setup):
+# 1. Authenticate and create tunnel:
+#    cloudflared tunnel login
+#    cloudflared tunnel create assethub-tunnel
+# 2. Assign DNS route:
+#    cloudflared tunnel route dns assethub-tunnel api.assethub.example.com
+# 3. Replace placeholder tunnel UUID below with actual tunnel UUID:
+
+tunnel: 00000000-0000-0000-0000-000000000000
 credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
-  - hostname: ${API_HOSTNAME:-api.assethub.example.com}
+  - hostname: api.assethub.example.com
+    # Primary target in Docker Compose network:
     service: http://backend:8000
+    # Host machine alternative target (when cloudflared runs directly on host):
+    # service: http://localhost:8000
     originRequest:
       noTLSVerify: false
-      httpHostHeader: ${API_HOSTNAME:-api.assethub.example.com}
+      httpHostHeader: api.assethub.example.com
   - service: http_status:404

@@ -575,64 +575,56 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 
 ---
 
-### Task 6: Cloudflare Pages Build, Ingress Tunnel (`cloudflared`) & E2E Verification
+### Task 6: Chuẩn Bị Bản Demo Cloudflare & Kiểm Thử Trước Deploy (Pre-Deployment Package)
 
-> **Mục tiêu:** Kích hoạt chuyển đổi runtime `USE_D1_DATABASE=True` (giữ `DATABASES['postgres']` làm alias đối soát chỉ đọc, tuyệt đối không silent fallback), cấu hình biến môi trường toàn diện trong `docker-compose.yml` và `.env.example`, siết chặt bảo mật CORS Pages domain cụ thể (`^https:\/\/(?:[a-z0-9-]+\.)?assethub\.pages\.dev$`) và `ALLOWED_HOSTS`, cấu hình build tĩnh React SPA cho Cloudflare Pages (`_headers`, `_redirects`), cấu hình ingress Cloudflare Tunnel (`cloudflared`), tài liệu hóa ràng buộc vận hành và kiểm thử khói End-to-End toàn hệ thống 4 tầng.
+> **Mục tiêu:** Hoàn thiện toàn bộ mã nguồn, cấu hình runtime D1 opt-in (`USE_D1_DATABASE`), siết chặt bảo mật CORS/ALLOWED_HOSTS, bản build tĩnh React SPA cho Cloudflare Pages (Headers CSP & Redirects SPA), cấu hình Cloudflare Tunnel (hỗ trợ Quick Tunnel demo qua binary host `cloudflared`), bộ test khói E2E có gating an toàn (mặc định không gọi cloud), và cập nhật tài liệu vận hành chính xác để Codex duyệt trước khi publish lên cloud.
 > 
-> **Điều kiện tiên quyết:** Chốt chặn tuần tự cuối cùng (Capstone Gate) — chỉ thực hiện khi toàn bộ Tasks 0, 1, 2, 3, 4, 5 đã hoàn tất 100%.
+> **Ranh giới an toàn nghiêm ngặt:**
+> - Chưa tự deploy/tạo/xóa/ghi tài nguyên cloud, mở public Tunnel, bật R2 billing, gọi AI cloud, đổi DNS, chuyển dữ liệu thật hoặc đổi runtime đang phục vụ.
+> - Không sửa `.env` đang dùng, không restart các container người dùng đang chạy (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+> - Không cài đặt/thêm/nâng cấp thư viện/công cụ, không kéo Docker image mới, không cài Llama local.
+> - 1 tab AGY, nhánh `feat/cloudflare-d1`, 0 worktree, 0 push/merge.
+> 
+> **Điều kiện tiên quyết:** Toàn bộ Tasks 0..5 đã được Codex nghiệm thu.
 
-**Files:**
-- Modify: `backend/assethub_api/settings.py`
-- Modify: `docker-compose.yml`
-- Modify: `.env.example`
-- Verify/Modify: `frontend/public/_headers`
-- Verify/Modify: `frontend/public/_redirects`
-- Modify: `frontend/vite.config.js`
-- Create: `deploy/cloudflared/tunnel-config.yml`
-- Modify: `docs/deployment-guide.md`
-- Create: `backend/tests/e2e/test_d1_cloud_smoke.py`
+**Phân công tệp tin:**
+- **Agent A (Backend Runtime & Settings):**
+  - `backend/assethub_api/settings.py`
+  - `docker-compose.yml`
+  - `backend/tests/test_settings_runtime.py`
+- **Agent B (Frontend Pages Build & API Integration):**
+  - `frontend/vite.config.js`
+  - `frontend/public/_headers`
+  - `frontend/public/_redirects`
+- **Agent C (Tunnel Config & E2E Smoke Harness):**
+  - `deploy/cloudflared/config.yml`
+  - `backend/tests/e2e/test_d1_cloud_smoke.py`
+  - `backend/tests/e2e/__init__.py`
+- **Coordinator:**
+  - `.env.example`
+  - `deploy/.env.demo.example`
+  - `deploy/docker-compose.demo.yml`
+  - `docs/deployment-guide.md`
+  - `README.md`
+  - `docs/progress-report.md`
+  - Điều phối và độc lập review qua Agent D.
 
-**Interfaces:**
-- Consumes: Bản build `frontend/dist`, Docker backend container port 8000.
-- Produces: Ứng dụng chạy thực tế trên Cloudflare Pages kết nối backend qua Tunnel, vượt qua bộ smoke test E2E 4 tầng.
+- [x] **Step 1: Khởi động song song Agent A, B, C theo contract thống nhất**
+  - Contract biến môi trường: `USE_D1_DATABASE`, `D1_BRIDGE_URL`, `D1_BRIDGE_SECRET_TOKEN`, `D1_DATABASE_NAME`, `D1_TIMEOUT`, `VITE_API_BASE_URL`, `CORS_ALLOWED_ORIGINS`, `DJANGO_ALLOWED_HOSTS`, `R2_*`, `AI_*`.
+  - Agent A: Cài đặt D1 opt-in runtime, cấu hình CORS/ALLOWED_HOSTS chuẩn, kiểm tra lỗi thiếu config khi bật D1, viết test settings.
+  - Agent B: Kiểm tra Vite build với `VITE_API_BASE_URL`, cấu hình CSP `_headers` và SPA `_redirects`, kiểm chứng không rò rỉ secret trong bundle.
+  - Agent C: Cấu hình `deploy/cloudflared/config.yml`, hướng dẫn Quick Tunnel qua binary host; viết `test_d1_cloud_smoke.py` có cờ opt-in gating `@pytest.mark.cloud_smoke`.
 
-- [ ] **Step 1: Viết kịch bản kiểm thử E2E Smoke Test**
-  Tạo `backend/tests/e2e/test_d1_cloud_smoke.py`:
-  - Bước 1: Kiểm tra Worker Bridge health check (`/health`) trên `assethub-test-worker`.
-  - Bước 2: Kiểm tra xác thực đăng nhập qua Tunnel (PBKDF2 1M vòng, SimpleJWT).
-  - Bước 3: Kiểm tra CRUD tài sản và phiếu yêu cầu trên CSDL D1 thật (không silent fallback PostgreSQL).
-  - Bước 4: Kiểm tra sinh Presigned URL tải file từ R2.
-  - Bước 5: Kiểm tra gợi ý danh mục AI trên model `@cf/meta/llama-3.1-8b-instruct-fp8` (hoặc fallback khi cạn quota).
-  - Bước 6: Kiểm tra bảo vệ Admin Trigger không cho phép xóa Admin cuối cùng.
+- [x] **Step 2: Coordinator chuẩn bị cấu hình demo cách ly và tài liệu**
+  - Tạo `deploy/.env.demo.example` và `deploy/docker-compose.demo.yml` tách biệt khỏi môi trường dev.
+  - Cập nhật `.env.example`.
+  - Cập nhật `README.md` và `docs/deployment-guide.md` phản ánh kiến trúc D1 là CSDL nghiệp vụ chính cho demo, PostgreSQL làm nguồn đối chiếu/rollback.
 
-- [ ] **Step 2: Chạy kiểm thử để xác nhận thất bại (Red)**
-  ```bash
-  docker compose exec backend pytest tests/e2e/test_d1_cloud_smoke.py -v
-  ```
-  Mong đợi: FAIL (chưa có cấu hình Pages, Tunnel hoặc runtime settings).
-
-- [ ] **Step 3: Cấu hình Runtime D1, Cloudflare Pages, Cloudflare Tunnel và Settings**
-  - Trong `backend/assethub_api/settings.py`:
-    - Bật `USE_D1_DATABASE=True`: chuyển `DATABASES['default']` sang D1, giữ `DATABASES['postgres']` làm alias đối soát chỉ đọc.
-    - Siết chặt `ALLOWED_HOSTS`: loại bỏ wildcard `*`, mặc định `localhost,127.0.0.1,backend`.
-    - Siết chặt CORS regex: `r"^https:\/\/(?:[a-z0-9-]+\.)?assethub\.pages\.dev$"`, từ chối `*.pages.dev` tùy tiện.
-  - Trong `docker-compose.yml` và `.env.example`: tiêm đầy đủ các biến `D1_BRIDGE_URL`, `D1_BRIDGE_SECRET_TOKEN`, `R2_*`, `AI_*`.
-  - Kiểm tra `frontend/public/_headers` (khai báo CSP, HSTS, X-Frame-Options) và `frontend/public/_redirects` (`/* /index.html 200`).
-  - Chạy thử nghiệm build frontend: `cd frontend && npm run build` -> kiểm tra thư mục `dist/`.
-  - Tạo cấu hình mẫu `deploy/cloudflared/tunnel-config.yml` chuyển tiếp HTTPS Ingress về `http://backend:8000`.
-  - Bổ sung tài liệu vận hành trong `docs/deployment-guide.md`: Nêu rõ ràng buộc máy trạm chạy Docker container qua Tunnel phải luôn bật nguồn và kết nối mạng.
-
-- [ ] **Step 4: Chạy kịch bản kiểm thử khói E2E (Green)**
-  ```bash
-  docker compose exec backend pytest tests/e2e/test_d1_cloud_smoke.py -v
-  ```
-  Mong đợi: PASS 100%. Toàn bộ 6 bước nghiệp vụ xuyên suốt hoạt động ổn định.
-
-- [ ] **Step 5: Commit Task 6**
-  ```bash
-  git add frontend/public/ frontend/vite.config.js deploy/cloudflared/ backend/assethub_api/settings.py docker-compose.yml .env.example docs/deployment-guide.md backend/tests/e2e/test_d1_cloud_smoke.py
-  git commit -m "chore(deploy): finalize cloudflare pages spa build, tunnel ingress config and e2e smoke verification"
-  ```
+- [x] **Step 3: Thẩm định độc lập (Agent D) & Verification tổng hợp**
+  - Thẩm định chéo diff qua `ponytail:ponytail-review` và `superpowers:requesting-code-review`.
+  - Build frontend Vite `npm --prefix frontend run build`.
+  - Chạy backend test settings và smoke gating test.
+  - Cập nhật progress-report.md và commit local Task 6 preparation.
 
 ---
 

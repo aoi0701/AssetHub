@@ -618,4 +618,68 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
    - Must fix: 0. Should fix: 0.
    - Không bloat, không thêm middleware/retry không cần thiết.
 
+---
+
+## 19. Nghiệm Thu Gói Chuẩn Bị Triển Khai Demo Cloudflare (Task 6 Pre-Deployment Package)
+
+- **Thời điểm:** 2026-11-05 00:15 (GMT+7)
+- **Trạng thái:** **Task 6 Pre-Deployment Package PASS 100% — Đã qua review độc lập Agent D & sẵn sàng trình Codex kiểm tra.**
+- **Ranh giới an toàn nghiêm ngặt:**
+  - Chưa tự deploy/tạo/xóa/ghi tài nguyên cloud, mở public Tunnel, bật R2 billing, gọi AI cloud, đổi DNS, chuyển dữ liệu thật hoặc đổi runtime đang phục vụ.
+  - Không sửa `.env` đang dùng, không restart các container người dùng đang chạy (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+  - Không cài đặt/thêm/nâng cấp thư viện/công cụ (`npm`, `pip`, `uv`, `npx`), không kéo Docker image mới, không cài Llama local.
+  - 1 tab AGY, nhánh `feat/cloudflare-d1`, 0 worktree, 0 push/merge.
+
+### 19.1. Chi Tiết Các Hạng Mục Chuẩn Bị Triển Khai
+1. **Backend Runtime Opt-in (`USE_D1_DATABASE`):**
+   - File: `backend/assethub_api/settings.py`, `backend/tests/test_settings_runtime.py`.
+   - Mặc định tiếp tục giữ PostgreSQL cho môi trường dev local (`USE_D1_DATABASE=False`).
+   - Khi kích hoạt `USE_D1_DATABASE=True`: chuyển `DATABASES['default']` sang engine `assethub_api.backends.d1`, yêu cầu bắt buộc `D1_BRIDGE_URL` và `D1_BRIDGE_SECRET_TOKEN` (ném `ImproperlyConfigured` nếu thiếu).
+   - Gắn `DATABASES['postgres']` làm alias đối soát dữ liệu chỉ đọc, không fallback âm thầm sang PostgreSQL khi D1 gặp sự cố.
+2. **Siết Chặt Bảo Mật Network & CORS:**
+   - `ALLOWED_HOSTS`: Bỏ wildcard `*` ở default, mặc định chỉ cho phép `localhost,127.0.0.1,backend` hoặc danh sách từ env `DJANGO_ALLOWED_HOSTS`.
+   - CORS Regex: Chuẩn hóa `r"^https:\/\/(?:[a-z0-9-]+\.)?assethub(?:-[a-z0-9-]+)?\.pages\.dev$"`, chấp nhận `assethub.pages.dev`, `assethub-demo.pages.dev` và preview branch, chặn tuyệt đối origin lạ.
+3. **Frontend SPA Build & Ingress Config:**
+   - File: `frontend/vite.config.js`, `frontend/public/_headers`, `frontend/public/_redirects`.
+   - Đảm bảo `VITE_API_BASE_URL` trỏ về API Tunnel/Domain mà không bị lặp `/api/api`.
+   - `_headers` thiết lập Content Security Policy chặt chẽ (cho phép connect API/Tunnel, ảnh blob/data và R2 presigned URL).
+   - `_redirects` hỗ trợ SPA deep-link refresh (`/* /index.html 200`).
+   - Build production `npm --prefix frontend run build` kiểm chứng không rò rỉ secret trong bundle.
+4. **Cloudflare Tunnel Ingress & Smoke Harness:**
+   - File: `deploy/cloudflared/config.yml`, `backend/tests/e2e/test_d1_cloud_smoke.py`.
+   - Chuẩn hóa cấu hình Tunnel không dùng shell expansion `${...}` trong YAML.
+   - Cung cấp phương án Quick Tunnel `cloudflared tunnel --url http://127.0.0.1:8000` cho demo mà không cần mua domain cố định.
+   - Bộ test E2E smoke gồm 7 bước phủ toàn diện luồng nghiệp vụ trên cloud, được bảo vệ bằng cờ opt-in `RUN_CLOUD_SMOKE=1`, mặc định skip hoàn toàn khi chạy local.
+5. **Khắc Phục Toàn Diện Phát Hiện Từ Reviewer Độc Lập (Agent D):**
+   - Loại bỏ secret token fallback hardcoded trong `test_d1_cloud_smoke.py`.
+   - Cập nhật regex CORS tương thích với subdomain preview `assethub-demo.pages.dev`.
+   - Đưa giá trị mặc định `R2_BUCKET_NAME` trong compose về rỗng tránh ghi đè fixture test.
+   - Thêm biến `CORS_EXTRA_REGEX` vào `deploy/docker-compose.prod.yml`.
+
+### 19.2. Kết Quả Kiểm Thử Toàn Tuyến & Nghiệm Thu Độc Lập
+1. **Frontend Production Build:**
+   - Lệnh: `npm --prefix frontend run build`
+   - Kết quả: **Exit code 0, 2255 modules transformed, sinh đủ `dist/_headers` và `dist/_redirects`**.
+2. **Backend Runtime, CORS, Storage & Smoke Gating Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_settings_runtime.py backend/tests/test_cors.py backend/apps/assets/tests/test_r2_storage.py backend/tests/test_storage.py backend/tests/e2e/test_d1_cloud_smoke.py -v`
+   - Kết quả: **49 passed, 7 skipped in 4.81s (100% PASS, exit code 0)**.
+3. **Cloudflare Worker Vitest Suite:**
+   - Lệnh: `npm --prefix cloudflare-worker test`
+   - Kết quả: **21 passed in 298ms (100% PASS, exit code 0)**.
+4. **AI Proxy Service Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_ai_proxy.py -v`
+   - Kết quả: **32 passed in 4.42s (100% PASS, exit code 0)**.
+5. **D1 Backend Unit & Isolation Guard Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/assethub_api/backends/d1/tests/ -v`
+   - Kết quả: **21 passed, 21 skipped in 0.22s (100% PASS, exit code 0)**.
+6. **Thẩm Định Độc Lập Ponytail Review (Agent D):**
+   - **Verdict: SHIP**.
+   - Must fix: 0. Should fix: 0.
+   - Sạch sẽ, an toàn, không bloat mã nguồn.
+
+### 19.3. Trạng Thái Hệ Thống Sẵn Sàng Trình Codex
+- Cổng 5434 và 8787 sạch. Các container `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) giữ nguyên trạng.
+- Sẵn sàng commit local và trình bày kế hoạch deploy chi tiết cho Codex duyệt trước khi publish.
+
+
 

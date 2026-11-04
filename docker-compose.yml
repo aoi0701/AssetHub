@@ -30,7 +30,27 @@ services:
       DB_HOST: db
       DB_PORT: ${DB_PORT:-5432}
       TEST_DB_NAME: ${TEST_DB_NAME:-test_assethub}
+      USE_D1_DATABASE: ${USE_D1_DATABASE:-False}
+      D1_DATABASE_NAME: ${D1_DATABASE_NAME:-assethub-test-d1}
+      D1_BRIDGE_URL: ${D1_BRIDGE_URL:-}
+      D1_BRIDGE_SECRET_TOKEN: ${D1_BRIDGE_SECRET_TOKEN:-}
+      D1_TIMEOUT: ${D1_TIMEOUT:-45.0}
+      POSTGRES_DB: ${POSTGRES_DB:-assethub}
+      POSTGRES_RO_USER: ${POSTGRES_RO_USER:-assethub_user}
+      POSTGRES_RO_PASSWORD: ${POSTGRES_RO_PASSWORD:-assethub_password}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-}
+      R2_ENDPOINT_URL: ${R2_ENDPOINT_URL:-}
+      R2_PRESIGNED_URL_EXPIRE_SECONDS: ${R2_PRESIGNED_URL_EXPIRE_SECONDS:-900}
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-dev-ai-secret-token-2026}
+      AI_WORKER_URL: ${AI_WORKER_URL:-http://127.0.0.1:8787}
+      AI_MODEL: ${AI_MODEL:-@cf/meta/llama-3.1-8b-instruct-fp8}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CORS_EXTRA_REGEX: ${CORS_EXTRA_REGEX:-}
+      SECURE_PROXY_SSL_HEADER: ${SECURE_PROXY_SSL_HEADER:-}
     depends_on:
       db:
         condition: service_healthy

@@ -4,23 +4,30 @@ Tài liệu hướng dẫn chi tiết quy trình triển khai, cấu hình môi 
 
 ---
 
-## 1. Kiến Trúc Triển Khai Hybrid
+## 1. Kiến Trúc Triển Khai Hybrid & Cloudflare Edge Demo
 
-Hệ thống AssetHub áp dụng mô hình kiến trúc **Hybrid Deployment**:
-- **Edge Cloud (Cloudflare)**: Đảm nhận phân phối tĩnh (SPA Frontend), Edge Computing & AI Inference, lưu trữ tệp đối tượng (Object Storage), và đường hầm bảo mật (Zero Trust Tunnel).
-- **Origin Server (Docker Compose)**: Chạy ứng dụng nghiệp vụ cốt lõi (Django REST Framework + Gunicorn) và cơ sở dữ liệu quan hệ (PostgreSQL 16) trên máy chủ riêng hoặc máy tính cá nhân.
+Hệ thống AssetHub áp dụng mô hình kiến trúc **Hybrid Edge-Core Deployment**:
+- **Edge Cloud (Cloudflare)**:
+  - **Frontend SPA**: Triển khai trên **Cloudflare Pages** (React 18 + Vite + TailwindCSS), phân phối toàn cầu qua CDN, bảo vệ bằng CSP headers (`_headers`) và SPA routing rewrites (`_redirects`).
+  - **Primary Operational Database**: **Cloudflare D1** (SQLite phân tán tại Edge, CSDL nghiệp vụ chính cho bản demo) kết nối qua Worker Bridge (`assethub-test-worker`).
+  - **Edge AI Inference**: **Cloudflare Workers AI** chạy mô hình `@cf/meta/llama-3.1-8b-instruct-fp8` gợi ý danh mục tài sản tự động.
+  - **Private Object Storage**: **Cloudflare R2** lưu trữ ảnh tài sản và tệp đính kèm với Presigned URLs chuẩn SigV4 (TTL 900 giây, zero egress fee).
+  - **Secure Ingress**: **Cloudflare Tunnel (`cloudflared`)** tạo kết nối mã hóa outbound từ máy chủ Origin đến Cloudflare Edge, không cần mở port mạng hay mua IP tĩnh.
+- **Origin Server (Docker Compose / Local Host)**:
+  - **Backend API**: Django 5.2, DRF, SimpleJWT, Gunicorn trong Linux Container (hoặc máy chủ riêng).
+  - **PostgreSQL 16**: CSDL quan hệ chuẩn dùng làm môi trường phát triển cục bộ mặc định (`USE_D1_DATABASE=False`), và làm nguồn đối chiếu dữ liệu 1:1 / phương án phục hồi tức thì (RPO = 0s) khi chạy chế độ D1 demo (`USE_D1_DATABASE=True`).
 
 ### Bảng Phân Định Thành Phần Kiến Trúc
 
 | Thành Phần | Công Nghệ / Nền Tảng | Nơi Thực Thi | Vai Trò & Chức Năng |
 | :--- | :--- | :--- | :--- |
 | **Frontend SPA** | React 18, Vite, TailwindCSS | **Cloudflare Pages** | Giao diện người dùng web, cache CDN toàn cầu, bảo vệ bằng Security Headers và SPA Rewrites. |
-| **AI Microservice** | Cloudflare Workers, `@cf/meta/llama-3-8b-instruct` | **Cloudflare Workers AI** | Phân loại danh mục tài sản tự động bằng mô hình LLM tại biên (Edge). |
-| **AI Logs Storage** | SQLite at Edge | **Cloudflare D1** | Lưu trữ phi tập trung lịch sử các gợi ý phân loại AI (`ai_suggestion_logs`). |
-| **Object Storage** | S3-Compatible Storage | **Cloudflare R2** | Lưu trữ ảnh tài sản, avatar người dùng, tệp đính kèm với chính sách Zero Egress Fee. |
-| **Secure Ingress** | Cloudflare Tunnel (`cloudflared`) | **Cloudflare Zero Trust** | Tạo kết nối mã hóa chiều ra (outbound) từ Origin Server đến Cloudflare Edge, không cần mở port mạng. |
-| **Backend API** | Django 5.2, DRF, SimpleJWT, Gunicorn | **Origin Server (Docker)** | Xử lý logic nghiệp vụ, xác thực JWT, RBAC, API RESTful và kiểm soát quyền truy cập. |
-| **Primary Database** | PostgreSQL 16 Alpine | **Origin Server (Docker)** | Lưu trữ toàn bộ dữ liệu nghiệp vụ chính: người dùng, phòng ban, tài sản, phiếu yêu cầu, báo cáo. |
+| **Primary Database (Demo)** | SQLite at Edge (Cloudflare D1) | **Cloudflare D1** | CSDL nghiệp vụ chính cho bản demo: người dùng, phòng ban, tài sản, phiếu yêu cầu, lịch sử, audit guard. |
+| **Reconciliation Source** | PostgreSQL 16 Alpine | **Origin Server (Docker)** | Nguồn đối chiếu 1:1 (`migrate_pg_to_d1`), rollback tức thì và môi trường phát triển cục bộ mặc định. |
+| **AI Microservice** | Cloudflare Workers, `@cf/meta/llama-3.1-8b-instruct-fp8` | **Cloudflare Workers AI** | Gợi ý danh mục tài sản tự động tại Edge, ghi log vào bảng `ai_suggestion_logs` trên D1. |
+| **Object Storage** | S3-Compatible Storage | **Cloudflare R2** | Lưu trữ ảnh và tệp đính kèm tài sản (Private Bucket + Presigned URL SigV4 900s). |
+| **Secure Ingress** | Cloudflare Tunnel (`cloudflared`) | **Cloudflare Zero Trust** | Tạo kết nối mã hóa chiều ra (outbound) từ Origin Server đến Cloudflare Edge, hỗ trợ Quick Tunnel demo. |
+| **Backend API** | Django 5.2, DRF, SimpleJWT, Gunicorn | **Origin Server (Docker)** | Xử lý logic nghiệp vụ, xác thực JWT, RBAC, adapter D1 atomic OCC và kiểm soát quyền truy cập. |
 
 ---
 
@@ -29,13 +36,20 @@ Hệ thống AssetHub áp dụng mô hình kiến trúc **Hybrid Deployment**:
 Khi trình diễn (demo) hoặc cho phép người dùng từ bên ngoài Internet truy cập vào hệ thống:
 
 1. **Điều kiện máy chủ Origin**:
-   - Máy tính cá nhân (hoặc server on-premise) chạy Docker Compose phải ở trạng thái **Bật** và không rơi vào chế độ Sleep/Hibernate.
-   - Các container Docker (`backend`, `db`, `cloudflared`) phải ở trạng thái `healthy` / `running`.
+   - Máy tính cá nhân (hoặc server on-premise) chạy Docker Compose / Django backend phải ở trạng thái **Bật** và không rơi vào chế độ Sleep/Hibernate.
+   - Container backend (hoặc tiến trình backend Django) và tiến trình Cloudflare Tunnel phải ở trạng thái `running`.
    - Kết nối mạng Internet của máy chủ phải duy trì liên tục và ổn định.
 2. **Không cần IP tĩnh hay mở port (Port Forwarding)**:
    - Nhờ sử dụng **Cloudflare Tunnel (`cloudflared`)**, container chỉ thực hiện kết nối outbound (chiều ra) qua giao thức HTTP/2 hoặc QUIC tới mạng Cloudflare Anycast Edge.
    - Router NAT/firewall tại gia đình hay văn phòng không cần can thiệp mở cổng (không cần cấu hình DDNS, NAT port 80/443).
    - Địa chỉ IP thực tế của máy chủ hoàn toàn được ẩn giấu (che giấu nguồn gốc), giảm thiểu nguy cơ tấn công DDoS trực tiếp.
+3. **Lựa chọn Quick Tunnel cho buổi Demo**:
+   - Không cần mua tên miền riêng: Sử dụng lệnh Quick Tunnel của Cloudflare:
+     ```bash
+     cloudflared tunnel --url http://127.0.0.1:8000
+     ```
+   - Cloudflare tự động cấp một URL công khai ngẫu nhiên (ví dụ: `https://random-subdomain.trycloudflare.com`).
+   - Cập nhật URL này vào `VITE_API_BASE_URL` của frontend và rebuild/redeploy Pages.
 
 ---
 
@@ -45,27 +59,25 @@ Hệ thống AssetHub được thiết kế tối ưu để có thể vận hàn
 
 | Dịch Vụ Cloudflare | Giới Hạn Gói Miễn Phí (Free Tier) | Lưu Ý Áp Dụng Cho AssetHub |
 | :--- | :--- | :--- |
-| **Cloudflare Pages** | - 500 builds / tháng<br>- Không giới hạn số lượng request<br>- Băng thông không giới hạn | Đủ cho quy trình CI/CD và truy cập frontend không giới hạn. |
-| **Cloudflare Tunnel** | - Hoàn toàn miễn phí<br>- Không giới hạn băng thông<br>- Hỗ trợ nhiều subdomain | Định tuyến API backend từ máy local ra Internet bảo mật tuyệt đối. |
-| **Cloudflare Workers AI**| - ~10,000 Neurons / ngày (miễn phí)<br>- Rate limit theo phút | Dùng cho tác vụ gợi ý danh mục tài sản khi tạo tài sản mới. Cần throttle gọi AI nếu vượt định mức. |
-| **Cloudflare D1** | - 5,000,000 read rows / ngày<br>- 100,000 write rows / ngày<br>- 5 GB dung lượng tổng | Chỉ dùng lưu log phân loại AI (`ai_suggestion_logs`). Không vượt quá hạn mức hàng ngày. |
-| **Cloudflare R2** | - 10 GB lưu trữ / tháng<br>- 1,000,000 Class A ops (PUT, LIST) / tháng<br>- 10,000,000 Class B ops (GET) / tháng<br>- **0đ phí tải xuống (Zero Egress Fees)** | Dùng lưu trữ avatar và ảnh thiết bị tài sản. Không tốn chi phí băng thông mạng. |
+| **Cloudflare Pages** | - 500 builds / tháng<br>- Không giới hạn request<br>- Băng thông không giới hạn | Đủ cho quy trình CI/CD và truy cập frontend không giới hạn. |
+| **Cloudflare Tunnel** | - Hoàn toàn miễn phí<br>- Không giới hạn băng thông<br>- Hỗ trợ Quick Tunnel | Định tuyến API backend từ máy local ra Internet bảo mật tuyệt đối. |
+| **Cloudflare Workers AI**| - ~10,000 Neurons / ngày (miễn phí)<br>- Rate limit theo phút | Dùng mô hình `@cf/meta/llama-3.1-8b-instruct-fp8`. Khi cạn quota, tự động kích hoạt Heuristic Fallback. |
+| **Cloudflare D1** | - 5,000,000 read rows / ngày<br>- 100,000 write rows / ngày<br>- 5 GB dung lượng tổng | Đủ cho toàn bộ 19 bảng CSDL nghiệp vụ demo AssetHub. |
+| **Cloudflare R2** | - 10 GB lưu trữ / tháng<br>- 1,000,000 Class A ops (PUT, LIST) / tháng<br>- 10,000,000 Class B ops (GET) / tháng<br>- **0đ phí tải xuống (Zero Egress Fees)** | Dùng lưu trữ ảnh thiết bị và tệp đính kèm. Presigned URL SigV4 900 giây (15 phút). |
 
 ---
 
-## 4. Các Điểm Cần Làm Rõ & Xác Nhận Với Giảng Viên (Spec §12)
+## 4. Các Điểm Kỹ Thuật Đã Thống Nhất (Spec §12)
 
-Trong tài liệu đặc tả dự án (Spec §12), nhóm phát triển ghi nhận 3 vấn đề kỹ thuật quan trọng cần báo cáo và xác nhận cùng Giảng viên:
-
-1. **Làm rõ thuật ngữ "cf CLI"**:
-   - *Thực tế*: Tập đoàn Cloudflare **không phát hành CLI chính thức nào có tên là `cf`**. Công cụ dòng lệnh tiêu chuẩn duy nhất của Cloudflare cho Workers, Pages, D1, R2 là **`wrangler`**, và cho Tunnel là **`cloudflared`**. (Lệnh `cf` thường thuộc về hệ sinh thái Cloud Foundry CLI).
-   - *Phương án thống nhất*: Toàn bộ kịch bản triển khai và tài liệu sử dụng chính thức lệnh `wrangler` và `cloudflared`.
-2. **Xác nhận phạm vi lưu trữ Cloudflare D1**:
-   - *Thực tế*: Cloudflare D1 là cơ sở dữ liệu SQLite phân tán tại Edge, thích hợp cho dữ liệu nhẹ hoặc log. Dữ liệu quan hệ nghiệp vụ phức tạp của AssetHub (tài sản, phân cấp người dùng, vòng đời phiếu mượn/trả, báo cáo kiểm kê) đòi hỏi tính toàn vẹn ACID, ràng buộc khóa ngoại chặt chẽ và truy vấn quan hệ của **PostgreSQL 16**.
-   - *Phương án thống nhất*: Cloudflare D1 **chỉ sử dụng độc lập để ghi nhật ký gợi ý của Workers AI** (`ai_suggestion_logs`), không thay thế PostgreSQL quản lý dữ liệu nghiệp vụ chính.
-3. **Xác nhận phương án chạy Docker Compose kết nối qua Cloudflare Tunnel**:
-   - *Thực tế*: Việc đưa toàn bộ cơ sở dữ liệu PostgreSQL lên môi trường Serverless Cloudflare thuần túy không khả thi do thiếu hỗ trợ hệ quản trị CSDL quan hệ truyền thống.
-   - *Phương án thống nhất*: Chạy toàn bộ backend Django + Gunicorn + PostgreSQL trong Docker Compose trên máy chủ/máy trạm của nhóm, kết nối public an toàn ra ngoài qua Cloudflare Tunnel (`api.assethub.example.com`).
+1. **Công cụ dòng lệnh chính thức**:
+   - Sử dụng **`wrangler`** cho Workers, Pages, D1, R2.
+   - Sử dụng **`cloudflared`** cho Cloudflare Tunnel (đã có sẵn binary tại `/usr/local/bin/cloudflared`).
+2. **Vai trò CSDL Cloudflare D1 và PostgreSQL**:
+   - **Cloudflare D1**: Cơ sở dữ liệu vận hành chính của bản demo (`USE_D1_DATABASE=True`), bảo toàn toàn bộ logic Django ORM, PBKDF2 1.000.000 vòng lặp, atomic batch OCC với `_assert_guard`.
+   - **PostgreSQL 16**: CSDL tham chiếu cho phát triển cục bộ (`USE_D1_DATABASE=False`), nguồn nạp dữ liệu kiểm thử và rollback tức thì 2 giai đoạn.
+3. **Phân định ranh giới môi trường**:
+   - Môi trường demo sử dụng dataset giả lập độc lập trên `assethub-test-d1`, tách biệt hoàn toàn với dữ liệu thực tế của ứng dụng.
+   - Chưa triển khai dữ liệu thực tế lên Cloudflare D1 khi chưa có lệnh chính thức.
 
 ---
 

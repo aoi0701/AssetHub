@@ -22,8 +22,8 @@ Built with a **Hybrid Edge-Core Architecture** combining Cloudflare's serverless
          │                                    │                                    │
          ▼                                    ▼                                    ▼
 [ Cloudflare Pages ]                [ Cloudflare Worker ]                 [ Cloudflare R2 ]
-React 18 + Vite SPA                  AI Microservice Proxy                 Private Object Storage
-(Zero Token Storage in localStorage) (Workers AI Llama 3.3 + D1 Logs)      (HMAC Presigned URLs, 60s TTL)
+React 18 + Vite SPA                  Worker Bridge & Workers AI Proxy      Private Object Storage
+(Zero Token Storage in localStorage) (@cf/meta/llama-3.1-8b-instruct-fp8)  (SigV4 Presigned URLs, 900s TTL)
          │                                    │                                    │
          └──────────────────────────┬─────────┴────────────────────────────────────┘
                                     │ Cloudflare Tunnel / HTTPS
@@ -32,11 +32,12 @@ React 18 + Vite SPA                  AI Microservice Proxy                 Priva
                                     │
                    ┌────────────────┴────────────────┐
                    ▼                                 ▼
-      [ Django 5.2 + DRF Core ]             [ PostgreSQL 16 DB ]
-     - Custom Stateless JWT Auth            - Relational schema & constraints
-     - auth_version instant revocation      - Concurrency safe (select_for_update)
-     - Scoped Rate Throttling               - Monotonic sequence generation
-     - Pillow/pypdf magic bytes validator   - ACID compliant transactions
+      [ Django 5.2 + DRF Core ]             [ Database Options ]
+     - Custom Stateless JWT Auth            - Cloudflare D1 (Primary Demo DB, SQLite Edge)
+     - auth_version instant revocation      - PostgreSQL 16 (Local Dev & 1:1 Reconciliation)
+     - Scoped Rate Throttling               - Concurrency safe (D1 atomic batch OCC + _assert_guard)
+     - Pillow/pypdf magic bytes validator   - Monotonic sequence generation (SQLite UPSERT)
+     - Presigned SigV4 R2 storage           - PBKDF2 1M iterations password hashing
 ```
 
 ### Key Architectural Highlights
