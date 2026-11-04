@@ -344,56 +344,50 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 
 ### Task 3: Công Cụ Di Chuyển Dữ Liệu & Đối Soát 1:1 (`migrate_pg_to_d1`)
 
-> **Mục tiêu:** Xây dựng lệnh quản trị Django `migrate_pg_to_d1` trích xuất dữ liệu từ nguồn test/cloned dataset độc lập (tuyệt đối không đưa CSDL production lên cloud trong giai đoạn này), nạp lên D1 theo 4 Tier topo bảo toàn 100% khóa chính gốc của ContentTypes và Permissions, đồng bộ `sqlite_sequence`, và tự động đối soát 1:1 theo 6 tiêu chí kỹ thuật.
+> **Mục tiêu:** Hoàn thiện lệnh quản trị Django `migrate_pg_to_d1` trích xuất dữ liệu từ nguồn test/cloned dataset độc lập (tuyệt đối không đưa CSDL production lên cloud trong giai đoạn này), nạp lên D1 theo 4 Tier topo bảo toàn 100% khóa chính gốc, đồng bộ `sqlite_sequence` an toàn không sinh dòng trùng, đối soát 1:1 theo 7 tiêu chí kỹ thuật (bao gồm đối chiếu nội dung từng dòng/cột theo PK với canonicalization), xử lý dứt khoát lỗi guard không fallback, chặn đích không rỗng theo mặc định, và chặn xung đột định danh nguồn/đích.
 > 
 > **Điều kiện tiên quyết:** Task 2 đã hoàn tất (D1 đã có cấu trúc DDL hoàn chỉnh gồm 19 bảng và triggers).
 
 **Files:**
-- Create: `backend/apps/common/management/commands/migrate_pg_to_d1.py`
-- Create: `backend/apps/common/tests/test_d1_migration.py`
-- Create: `scripts/sync_d1_schema.sh`
+- Modify: `backend/apps/common/management/commands/migrate_pg_to_d1.py`
+- Modify: `backend/apps/common/tests/test_d1_migration.py`
+- Reference: `scripts/sync_d1_schema.sh`
 
 **Interfaces:**
-- Consumes: CSDL PostgreSQL `default` (chế độ chỉ đọc đối soát), CSDL D1 `d1`.
-- Produces: Dữ liệu di chuyển lên D1, báo cáo đối soát 1:1 (`COUNT(*)`, PKs, FKs, PBKDF2 verbatim, counters, UTC datetimes).
+- Consumes: CSDL PostgreSQL `default` hoặc alias test chỉ định rõ, CSDL D1 `d1` hoặc SQLite testbed.
+- Produces: Dữ liệu di chuyển lên CSDL đích, báo cáo đối soát 1:1 (Row count, Key set, Row content canonicalized, FKs, PBKDF2 verbatim, Datetime/bool, Identifier sequence counters theo `(kind, year)`).
 
-- [ ] **Step 1: Viết failing test cho lệnh `migrate_pg_to_d1` và bảo vệ nguồn dữ liệu**
+- [ ] **Step 1: Viết failing regression tests cho 5 nhóm lỗi Task 3**
   Trong `backend/apps/common/tests/test_d1_migration.py`:
-  - Test tham số `--dry-run` không làm biến đổi CSDL D1 và xuất báo cáo đối soát dự kiến.
-  - Test kiểm tra chặn không cho ghi nếu đích D1 không rỗng khi thiếu cờ `--allow-non-empty`.
-  - Test bảo toàn nguyên vẹn ID gốc của `django_content_type`, `auth_permission`, `auth_group` và quan hệ M2M.
-  - Test cập nhật `sqlite_sequence` khớp với `MAX(id)` sau khi import.
-  - Test bảo toàn chuỗi băm PBKDF2 1.000.000 vòng nguyên vẹn từng ký tự.
+  - Test 1 (P1 - Exit non-zero khi đối soát thất bại): `--allow-non-empty` vẫn raise `CommandError` khi đối soát lệch (ví dụ thêm category 999 chỉ ở đích).
+  - Test 2 (P1 - Bắt sai lệch nội dung & quyền): Thay đổi name, status, role, is_active, auth_version, valid FK, JSON nghiệp vụ, nội dung audit log bị `D1Reconciler` phát hiện; các giá trị tương đương (JSON whitespace, bool 1/True, ISO UTC datetime) không báo sai. Lỗi chỉ nêu bảng/PK/cột, không in thông tin nhạy cảm.
+  - Test 3 (P2 - Sequence không trùng & check counter theo `(kind, year)`): `sqlite_sequence` không chứa dòng trùng (COUNT = 1 mỗi bảng), không hạ high-water mark; counter `assets_identifiersequence` kiểm tra theo đúng cặp `(kind, year)` (không gộp năm làm lọt lỗi).
+  - Test 4 (P1 - Lỗi Guard không fallback): Mock `d1_batch` ném lỗi isolation guard / transport phải được truyền ra nguyên trạng, không fallback sang thực thi cursor. Batch SQLite testbed phải rollback khi gặp lỗi giữa chừng.
+  - Test 5 (P1 - Nguồn/đích & Default Non-empty Guard): Nguồn và đích trùng alias hoặc cùng file DB vật lý bị chặn; nguồn thiếu cấu hình bị chặn không fallback ngầm; đích không rỗng bị chặn mặc định khi không truyền `--allow-non-empty`; `--dry-run` không ghi vào nguồn hoặc đích.
 
-- [ ] **Step 2: Chạy kiểm thử để xác nhận thất bại (Red)**
+- [ ] **Step 2: Chạy kiểm thử để xác nhận lỗi (Red)**
   ```bash
   docker compose exec backend pytest apps/common/tests/test_d1_migration.py -v
   ```
-  Mong đợi: FAIL (Command `migrate_pg_to_d1` does not exist).
+  Mong đợi: Các test regression mới FAIL trên mã nguồn hiện tại.
 
-- [ ] **Step 3: Cài đặt lệnh `migrate_pg_to_d1.py` theo 4 Tier Topo**
-  - Thực hiện nhập dữ liệu theo đúng thứ tự 4 Tier topo:
-    - Tier 1: `django_content_type`, `auth_permission`, `auth_group`, `departments_department`, `departments_category`.
-    - Tier 2: `auth_group_permissions`, `authentication_user`.
-    - Tier 3: `authentication_user_groups`, `authentication_user_user_permissions`, `django_admin_log`, `django_migrations`, `django_session`, `assets_identifiersequence`, `assets_asset`.
-    - Tier 4: `requests_assetrequest`, `assets_assethistorylog`, `ai_suggestion_logs`.
-  - Bảo toàn `id` tường minh cho mọi bản ghi, không để D1 tự sinh ID lệch với Django ContentType.
-  - Cập nhật `sqlite_sequence` sau mỗi bảng có autoincrement để tránh xung đột khóa chính về sau.
-  - Bảo toàn chuỗi băm mật khẩu `password` nguyên vẹn 100% từng ký tự (không chạy lại `make_password`).
-  - Ghi dữ liệu lên D1 theo từng chunk 50 dòng thông qua `d1_batch`.
-  - Cài đặt lớp `D1Reconciler` tự động đối chiếu 6 tiêu chí kỹ thuật sau khi nạp xong.
+- [ ] **Step 3: Cải tiến `migrate_pg_to_d1.py`**
+  - Sửa đối soát thất bại luôn raise `CommandError`, loại bỏ dòng in PASS khi có lỗi.
+  - Bổ sung `check_row_content_parity` vào `D1Reconciler` với hàm canonicalization kiểu dữ liệu (JSON, bool, ISO datetime), giữ nguyên chuỗi băm password, kiểm tra bảng/cột bắt buộc, không in nội dung nhạy cảm.
+  - Sửa đồng bộ `sqlite_sequence`: kiểm tra dòng hiện có, giữ `MAX(existing, max_id)`, xóa dòng cũ và insert duy nhất 1 dòng; sửa kiểm tra `assets_identifiersequence` theo `(kind, year)` phân tích mã `AST-YYYY-NNN` và `REQ-YYYY-NNN`.
+  - Sửa `execute_batch_statements`: kiểm tra engine/backend D1 vs SQLite testbed; với D1 truyền lỗi ra ngoài không fallback; với SQLite bọc batch trong transaction có rollback.
+  - Sửa kiểm tra cấu hình: chặn source alias không tồn tại (không đổi ngầm `postgres -> default`), chặn source == target (cả alias lẫn physical DB name), bật kiểm tra đích không rỗng theo mặc định.
 
 - [ ] **Step 4: Chạy kiểm thử xác nhận thành công (Green)**
   ```bash
-  docker compose exec backend python manage.py migrate_pg_to_d1 --dry-run
   docker compose exec backend pytest apps/common/tests/test_d1_migration.py -v
   ```
-  Mong đợi: PASS 100%. Dry-run hoàn tất không có lỗi.
+  Mong đợi: PASS 100% tất cả các unit và regression tests.
 
-- [ ] **Step 5: Commit Task 3**
-  ```bash
-  git add backend/apps/common/management/commands/migrate_pg_to_d1.py backend/apps/common/tests/test_d1_migration.py scripts/sync_d1_schema.sh
-  git commit -m "feat(migration): implement pg-to-d1 data migration tool with 1:1 automated reconciliation"
+- [ ] **Step 5: Thẩm định chéo độc lập & Commit Task 3**
+  - Reviewer độc lập và ponytail-review kiểm tra diff, bảo đảm an toàn dữ liệu và tuân thủ ranh giới.
+  - Commit local riêng cho Task 3:
+    `git commit -m "fix(migration): harden pg-to-d1 migration command with comprehensive content reconciliation and safety guards"`
   ```
 
 ---

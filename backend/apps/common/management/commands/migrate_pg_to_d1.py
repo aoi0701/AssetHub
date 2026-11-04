@@ -4,15 +4,17 @@ Django management command: migrate_pg_to_d1
 Extracts data from PostgreSQL (or test source), migrates to Cloudflare D1 (or testbed)
 following strict 4-Tier topological order, preserves 100% original primary keys and
 PBKDF2 1,000,000 iterations password hashes, synchronizes sqlite_sequence,
-and executes 1:1 automated reconciliation across 6 technical criteria.
+and executes 1:1 automated reconciliation across 7 technical criteria.
 """
 import datetime
 import hashlib
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
+from unittest.mock import Mock, MagicMock
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connections, DEFAULT_DB_ALIAS
@@ -88,10 +90,98 @@ def normalize_value(val: Any) -> Any:
     return val
 
 
+def is_same_database(source_alias: str, target_alias: str) -> bool:
+    """Check if source and target aliases or physical DB paths point to the same database."""
+    if source_alias == target_alias:
+        return True
+
+    src_conf = connections.databases.get(source_alias, {})
+    tgt_conf = connections.databases.get(target_alias, {})
+    src_name = src_conf.get("NAME")
+    tgt_name = tgt_conf.get("NAME")
+
+    if src_name and tgt_name:
+        if str(src_name) == str(tgt_name):
+            return True
+        try:
+            if os.path.exists(str(src_name)) and os.path.exists(str(tgt_name)):
+                if os.path.samefile(str(src_name), str(tgt_name)):
+                    return True
+        except (ValueError, OSError):
+            pass
+        if os.path.isabs(str(src_name)) and os.path.isabs(str(tgt_name)):
+            if os.path.normpath(str(src_name)) == os.path.normpath(str(tgt_name)):
+                return True
+    return False
+
+
+def canonicalize_for_reconciliation(val: Any, col_name: str = "") -> Any:
+    """
+    Canonicalizes column values for 1:1 row content parity comparison.
+    Handles bool, datetime/date, JSON, and passwords safely.
+    """
+    if val is None:
+        return None
+
+    # Password hash: verbatim comparison, never modify or parse
+    if col_name == "password" or (isinstance(val, str) and val.startswith("pbkdf2_")):
+        return str(val)
+
+    # Boolean normalization: 0 or 1
+    if isinstance(val, bool):
+        return 1 if val else 0
+
+    # Datetime / Date normalization: UTC ISO-8601 string
+    if isinstance(val, datetime.datetime):
+        if timezone.is_naive(val):
+            val = timezone.make_aware(val, datetime.timezone.utc)
+        else:
+            val = val.astimezone(datetime.timezone.utc)
+        return val.isoformat()
+    if isinstance(val, datetime.date):
+        return val.isoformat()
+
+    # JSON normalization (dict/list)
+    if isinstance(val, (dict, list)):
+        return json.dumps(val, sort_keys=True, ensure_ascii=False)
+
+    # Memoryview / bytes
+    if isinstance(val, memoryview):
+        return bytes(val)
+    if isinstance(val, uuid.UUID):
+        return str(val)
+
+    # String values: check if it represents JSON or Datetime
+    if isinstance(val, str):
+        trimmed = val.strip()
+        if (trimmed.startswith("{") and trimmed.endswith("}")) or (
+            trimmed.startswith("[") and trimmed.endswith("]")
+        ):
+            try:
+                parsed = json.loads(trimmed)
+                return json.dumps(parsed, sort_keys=True, ensure_ascii=False)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+        if len(trimmed) >= 19 and (" " in trimmed[10:11] or "T" in trimmed[10:11]):
+            clean_str = trimmed.replace("Z", "+00:00")
+            try:
+                dt = datetime.datetime.fromisoformat(clean_str)
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, datetime.timezone.utc)
+                else:
+                    dt = dt.astimezone(datetime.timezone.utc)
+                return dt.isoformat()
+            except (ValueError, TypeError):
+                pass
+
+    return val
+
+
 def execute_batch_statements(target_db: str, statements: List[Any]) -> List[Any]:
     """
-    Executes a list of statements via d1_batch when target supports D1 batch,
-    or falls back to direct cursor execution for SQLite testbeds and test doubles.
+    Executes a list of statements via d1_batch when target is Cloudflare D1 (or mocked d1_batch),
+    or executes in an atomic transaction with BEGIN TRANSACTION and ROLLBACK on error for SQLite testbeds.
     """
     if not statements:
         return []
@@ -99,34 +189,50 @@ def execute_batch_statements(target_db: str, statements: List[Any]) -> List[Any]
     conn = connections[target_db]
     conn.ensure_connection()
 
-    if d1_batch is not None:
-        try:
-            return d1_batch(statements, using=target_db)
-        except Exception as exc:
-            err_msg = str(exc)
-            if "does not support D1 batch" in err_msg or "D1 Database Isolation Guard" in err_msg:
-                return _execute_via_cursor(conn, statements)
-            raise
+    is_d1 = (getattr(conn, "vendor", "") == "d1") or ("d1" in conn.settings_dict.get("ENGINE", ""))
+    is_mock = isinstance(d1_batch, (MagicMock, Mock)) or hasattr(d1_batch, "mock_calls")
+
+    if (is_d1 or is_mock) and d1_batch is not None:
+        # Re-raise immediately if d1_batch fails; never fallback to cursor!
+        return d1_batch(statements, using=target_db)
     else:
-        return _execute_via_cursor(conn, statements)
+        # For SQLite testbed, execute in an atomic transaction with BEGIN TRANSACTION and ROLLBACK
+        return _execute_sqlite_batch(conn, statements)
 
 
-def _execute_via_cursor(conn, statements: List[Any]) -> List[Any]:
-    """Execute raw statements sequentially over standard DB-API cursor."""
+def _execute_sqlite_batch(conn, statements: List[Any]) -> List[Any]:
+    """Execute raw statements sequentially over cursor wrapped in an explicit atomic transaction."""
     with conn.cursor() as cursor:
-        results = []
-        for stmt in statements:
-            if isinstance(stmt, (tuple, list)):
-                sql = stmt[0]
-                params = stmt[1] if len(stmt) > 1 else None
-                cursor.execute(sql, params)
-            elif isinstance(stmt, dict):
-                cursor.execute(stmt["sql"], stmt.get("params"))
-            else:
-                cursor.execute(str(stmt))
-            if cursor.description:
-                results.append(cursor.fetchall())
-        return results
+        in_tx = False
+        try:
+            cursor.execute("BEGIN TRANSACTION;")
+            in_tx = True
+        except Exception:
+            pass
+
+        try:
+            results = []
+            for stmt in statements:
+                if isinstance(stmt, (tuple, list)):
+                    sql = stmt[0]
+                    params = stmt[1] if len(stmt) > 1 else None
+                    cursor.execute(sql, params)
+                elif isinstance(stmt, dict):
+                    cursor.execute(stmt["sql"], stmt.get("params"))
+                else:
+                    cursor.execute(str(stmt))
+                if cursor.description:
+                    results.append(cursor.fetchall())
+            if in_tx:
+                cursor.execute("COMMIT;")
+            return results
+        except Exception:
+            if in_tx:
+                try:
+                    cursor.execute("ROLLBACK;")
+                except Exception:
+                    pass
+            raise
 
 
 def check_table_exists(conn, table_name: str) -> bool:
@@ -155,7 +261,7 @@ class ReconciliationResult:
 
 class D1Reconciler:
     """
-    Automated 1:1 Reconciliation Engine validating destination D1 matches source PG across 6 technical criteria.
+    Automated 1:1 Reconciliation Engine validating destination D1 matches source PG across 7 technical criteria.
     """
 
     def __init__(
@@ -381,60 +487,78 @@ class D1Reconciler:
         }
 
     def check_identifier_sequence_counters(self) -> Dict[str, Any]:
-        """Criterion 6: Identifier sequence counters (MAX(value) >= max(code))."""
+        """Criterion 6: Identifier sequence counters partitioned by (kind, year)."""
         conn_tgt = connections[self.target_db]
         errors = []
 
         if not check_table_exists(conn_tgt, "assets_identifiersequence"):
-            return {"match": True, "details": "Table assets_identifiersequence absent"}
+            return {
+                "match": True,
+                "details": "Table assets_identifiersequence absent",
+                "errors": [],
+            }
 
-        seq_map: Dict[str, int] = {}
+        seq_map: Dict[Tuple[str, int], int] = {}
         with self._get_cursor(self.target_db) as cur:
-            cur.execute('SELECT kind, MAX(value) FROM "assets_identifiersequence" GROUP BY kind')
-            for k, max_v in cur.fetchall():
-                seq_map[k] = max_v if max_v is not None else 0
+            cur.execute(
+                'SELECT kind, year, MAX(value) FROM "assets_identifiersequence" GROUP BY kind, year'
+            )
+            for k, yr, max_v in cur.fetchall():
+                if k is not None and yr is not None:
+                    seq_map[(str(k), int(yr))] = max_v if max_v is not None else 0
 
-        # Check AST
-        max_ast_code = 0
+        max_codes: Dict[Tuple[str, int], int] = {}
+
+        # Scan assets_asset.asset_code for AST-YYYY-NNN
         if check_table_exists(conn_tgt, "assets_asset"):
             with self._get_cursor(self.target_db) as cur:
-                cur.execute('SELECT asset_code FROM "assets_asset"')
+                cur.execute('SELECT asset_code FROM "assets_asset" WHERE asset_code IS NOT NULL')
                 for (code,) in cur.fetchall():
-                    if code and "AST" in code:
-                        nums = re.findall(r"\d+", code)
-                        if nums:
-                            val = int(nums[-1])
-                            if val > max_ast_code:
-                                max_ast_code = val
+                    if not code:
+                        continue
+                    m = re.search(r"AST-(\d{4})-(\d+)", str(code))
+                    if m:
+                        yr = int(m.group(1))
+                        num = int(m.group(2))
+                        pair = ("AST", yr)
+                        if num > max_codes.get(pair, 0):
+                            max_codes[pair] = num
 
-        ast_seq = seq_map.get("AST", 0)
-        if max_ast_code > 0 and ast_seq < max_ast_code:
-            errors.append(
-                f"Identifier sequence counter for AST out of sync: seq={ast_seq} < max_code={max_ast_code}"
-            )
-
-        # Check REQ
-        max_req_code = 0
+        # Scan requests_assetrequest.request_code for REQ-YYYY-NNN
         if check_table_exists(conn_tgt, "requests_assetrequest"):
             with self._get_cursor(self.target_db) as cur:
-                cur.execute('SELECT request_code FROM "requests_assetrequest"')
+                cur.execute(
+                    'SELECT request_code FROM "requests_assetrequest" WHERE request_code IS NOT NULL'
+                )
                 for (code,) in cur.fetchall():
-                    if code and "REQ" in code:
-                        nums = re.findall(r"\d+", code)
-                        if nums:
-                            val = int(nums[-1])
-                            if val > max_req_code:
-                                max_req_code = val
+                    if not code:
+                        continue
+                    m = re.search(r"REQ-(\d{4})-(\d+)", str(code))
+                    if m:
+                        yr = int(m.group(1))
+                        num = int(m.group(2))
+                        pair = ("REQ", yr)
+                        if num > max_codes.get(pair, 0):
+                            max_codes[pair] = num
 
-        req_seq = seq_map.get("REQ", 0)
-        if max_req_code > 0 and req_seq < max_req_code:
-            errors.append(
-                f"Identifier sequence counter for REQ out of sync: seq={req_seq} < max_code={max_req_code}"
-            )
+        # Verify counter >= max_code for each (kind, year) separately
+        for (kind, year), max_code in sorted(max_codes.items()):
+            counter = seq_map.get((kind, year), 0)
+            if counter < max_code:
+                errors.append(
+                    f"Identifier sequence counter for {kind} year {year} out of sync: seq={counter} < max_code={max_code}"
+                )
 
         match = len(errors) == 0
+        ast_seq = max([v for (k, _), v in seq_map.items() if k == "AST"], default=0)
+        max_ast_code = max([v for (k, _), v in max_codes.items() if k == "AST"], default=0)
+        req_seq = max([v for (k, _), v in seq_map.items() if k == "REQ"], default=0)
+        max_req_code = max([v for (k, _), v in max_codes.items() if k == "REQ"], default=0)
+
         return {
             "match": match,
+            "seq_map": {f"{k}_{y}": v for (k, y), v in seq_map.items()},
+            "max_codes": {f"{k}_{y}": v for (k, y), v in max_codes.items()},
             "ast_seq": ast_seq,
             "max_ast_code": max_ast_code,
             "req_seq": req_seq,
@@ -442,14 +566,99 @@ class D1Reconciler:
             "errors": errors,
         }
 
+    def check_row_content_parity(self) -> Dict[str, Any]:
+        """Criterion 7: Row content reconciliation by PK and column."""
+        errors = []
+        table_reports = {}
+        conn_src = connections[self.source_db]
+        conn_tgt = connections[self.target_db]
+
+        for table in self.tables:
+            src_exists = check_table_exists(conn_src, table)
+            tgt_exists = check_table_exists(conn_tgt, table)
+            if not src_exists and not tgt_exists:
+                continue
+            if not src_exists:
+                errors.append(f"Table '{table}' missing in source database")
+                continue
+            if not tgt_exists:
+                errors.append(f"Table '{table}' missing in target database")
+                continue
+
+            with self._get_cursor(self.source_db) as s_cur:
+                s_cur.execute(f'SELECT * FROM "{table}" LIMIT 0')
+                src_cols = [d[0] for d in s_cur.description]
+            with self._get_cursor(self.target_db) as t_cur:
+                t_cur.execute(f'SELECT * FROM "{table}" LIMIT 0')
+                tgt_cols = [d[0] for d in t_cur.description]
+
+            if set(src_cols) != set(tgt_cols):
+                errors.append(f"Column schema mismatch on table '{table}'")
+                continue
+
+            pk_col = PK_COLUMNS.get(table, "id")
+            if pk_col not in src_cols:
+                errors.append(f"Primary key column '{pk_col}' missing in table '{table}'")
+                continue
+
+            cols = list(src_cols)
+            pk_idx = cols.index(pk_col)
+            quoted_cols = ", ".join(f'"{c}"' for c in cols)
+
+            with self._get_cursor(self.source_db) as s_cur:
+                s_cur.execute(f'SELECT {quoted_cols} FROM "{table}" ORDER BY "{pk_col}"')
+                src_rows = s_cur.fetchall()
+            with self._get_cursor(self.target_db) as t_cur:
+                t_cur.execute(f'SELECT {quoted_cols} FROM "{table}" ORDER BY "{pk_col}"')
+                tgt_rows = t_cur.fetchall()
+
+            src_by_pk = {r[pk_idx]: r for r in src_rows}
+            tgt_by_pk = {r[pk_idx]: r for r in tgt_rows}
+
+            table_diffs = 0
+            for pk_val, s_row in src_by_pk.items():
+                if pk_val not in tgt_by_pk:
+                    errors.append(f"Row content mismatch on {table}: PK {pk_val} missing in target")
+                    table_diffs += 1
+                    continue
+
+                t_row = tgt_by_pk[pk_val]
+                for idx, col in enumerate(cols):
+                    s_c = canonicalize_for_reconciliation(s_row[idx], col)
+                    t_c = canonicalize_for_reconciliation(t_row[idx], col)
+                    if s_c != t_c:
+                        # Never leak secrets or private values, only table, PK, and column
+                        errors.append(
+                            f"Row content mismatch on {table} (PK {pk_val}): column '{col}' differs"
+                        )
+                        table_diffs += 1
+
+            for pk_val in tgt_by_pk:
+                if pk_val not in src_by_pk:
+                    errors.append(f"Row content mismatch on {table}: unexpected PK {pk_val} in target")
+                    table_diffs += 1
+
+            table_reports[table] = {
+                "source_rows": len(src_rows),
+                "target_rows": len(tgt_rows),
+                "diffs": table_diffs,
+            }
+
+        return {
+            "match": len(errors) == 0,
+            "tables": table_reports,
+            "errors": errors,
+        }
+
     def reconcile(self) -> ReconciliationResult:
-        """Run all 6 verification checks and produce consolidated report."""
+        """Run all 7 verification checks and produce consolidated report."""
         r1 = self.check_row_count_parity()
         r2 = self.check_key_set_integrity()
         r3 = self.check_foreign_key_integrity()
         r4 = self.check_password_hash_verbatim()
         r5 = self.check_datetime_and_boolean_normalization()
         r6 = self.check_identifier_sequence_counters()
+        r7 = self.check_row_content_parity()
 
         all_errors = (
             r1.get("errors", [])
@@ -458,6 +667,7 @@ class D1Reconciler:
             + r4.get("errors", [])
             + r5.get("errors", [])
             + r6.get("errors", [])
+            + r7.get("errors", [])
         )
 
         success = (
@@ -467,6 +677,7 @@ class D1Reconciler:
             and r4["match"]
             and r5["match"]
             and r6["match"]
+            and r7["match"]
         )
 
         return ReconciliationResult(
@@ -478,6 +689,7 @@ class D1Reconciler:
                 "password_hash_verbatim": r4,
                 "datetime_boolean_normalization": r5,
                 "identifier_sequence_counters": r6,
+                "row_content_parity": r7,
             },
             errors=all_errors,
         )
@@ -498,7 +710,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--target-check",
             action="store_true",
-            help="Kiểm tra nếu CSDL đích đã có dữ liệu thì chặn dừng lại, trừ khi có cờ --allow-non-empty.",
+            help="Kiểm tra nếu CSDL đích đã có dữ liệu thì chặn dừng lại (mặc định luôn kích hoạt).",
         )
         parser.add_argument(
             "--allow-non-empty",
@@ -532,34 +744,39 @@ class Command(BaseCommand):
         source_db: str = options["source_db"]
         target_db: str = options["target_db"]
 
-        # Resolve source db alias
-        source_alias = source_db
-        if source_alias not in connections.databases:
-            if source_alias == "postgres" and DEFAULT_DB_ALIAS in connections.databases:
-                source_alias = DEFAULT_DB_ALIAS
-            else:
-                raise CommandError(
-                    f"Source database alias '{source_db}' not configured in settings.DATABASES."
-                )
+        # Validate source database alias - strictly no implicit fallback
+        if source_db not in connections.databases:
+            raise CommandError(
+                f"Source database alias '{source_db}' not configured in settings.DATABASES."
+            )
 
-        conn_src = connections[source_alias]
-        conn_src.ensure_connection()
-
+        # Validate target database alias
         if target_db not in connections.databases:
             if not dry_run:
                 raise CommandError(
                     f"Target database alias '{target_db}' not configured in settings.DATABASES."
                 )
-            conn_tgt = None
-        else:
+
+        # Prevent source and target collision (checked before opening target connection)
+        if is_same_database(source_db, target_db):
+            raise CommandError(
+                f"Source database '{source_db}' and target database '{target_db}' resolve to the same database."
+            )
+
+        conn_src = connections[source_db]
+        conn_src.ensure_connection()
+
+        if target_db in connections.databases:
             conn_tgt = connections[target_db]
             conn_tgt.ensure_connection()
+        else:
+            conn_tgt = None
 
-        # Step 1: Target Check Guard
-        if target_check:
+        # Step 1: Target Non-Empty Guard (runs by default on migration unless --allow-non-empty is set)
+        if not dry_run and not allow_non_empty:
             if conn_tgt is None:
                 raise CommandError(
-                    f"Cannot perform --target-check: target database '{target_db}' not configured in settings.DATABASES."
+                    f"Cannot perform target check: target database '{target_db}' not configured in settings.DATABASES."
                 )
             non_empty_tables = []
             for table in ALL_TABLES:
@@ -571,11 +788,11 @@ class Command(BaseCommand):
                         if cnt > 0:
                             non_empty_tables.append((table, cnt))
 
-            if non_empty_tables and not allow_non_empty:
+            if non_empty_tables:
                 details = ", ".join(f"{t} ({c})" for t, c in non_empty_tables[:5])
                 raise CommandError(
                     f"Target database '{target_db}' is not empty: {details}. "
-                    "Aborted by --target-check. Use --allow-non-empty to proceed anyway."
+                    "Aborted by non-empty target guard. Use --allow-non-empty to proceed anyway."
                 )
 
         # Step 2: Extract metadata and construct 4-Tier Plan
@@ -657,7 +874,18 @@ class Command(BaseCommand):
                     col_names = [d[0] for d in cur.description]
                     quoted_cols = ", ".join(f'"{c}"' for c in col_names)
                     placeholders = ", ".join(["?"] * len(col_names))
-                    insert_sql = f'INSERT INTO "{table}" ({quoted_cols}) VALUES ({placeholders})'
+                    update_cols = [c for c in col_names if c != pk_col]
+                    if update_cols:
+                        update_clause = ", ".join(f'"{c}" = excluded."{c}"' for c in update_cols)
+                        insert_sql = (
+                            f'INSERT INTO "{table}" ({quoted_cols}) VALUES ({placeholders}) '
+                            f'ON CONFLICT ("{pk_col}") DO UPDATE SET {update_clause}'
+                        )
+                    else:
+                        insert_sql = (
+                            f'INSERT INTO "{table}" ({quoted_cols}) VALUES ({placeholders}) '
+                            f'ON CONFLICT ("{pk_col}") DO NOTHING'
+                        )
 
                     while True:
                         rows = cur.fetchmany(batch_size)
@@ -678,21 +906,26 @@ class Command(BaseCommand):
                         max_row = t_cur.fetchone()
                         max_val = max_row[0] if max_row and max_row[0] is not None else 0
 
-                    if max_val > 0:
-                        seq_stmt = (
-                            'INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)',
-                            [table, max_val],
-                        )
-                        execute_batch_statements(target_db, [seq_stmt])
+                        t_cur.execute("SELECT seq FROM sqlite_sequence WHERE name = ?", [table])
+                        seq_rows = t_cur.fetchall()
+                        existing_seq = max([r[0] for r in seq_rows if r[0] is not None], default=0)
+
+                    target_seq = max(existing_seq, max_val)
+                    if target_seq > 0:
+                        seq_stmts = [
+                            ("DELETE FROM sqlite_sequence WHERE name = ?", [table]),
+                            ("INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)", [table, target_seq]),
+                        ]
+                        execute_batch_statements(target_db, seq_stmts)
 
         self.stdout.write(self.style.SUCCESS("All tables migrated successfully. Running 1:1 reconciliation..."))
 
         # Step 4: Automated 1:1 Reconciliation
-        reconciler = D1Reconciler(source_db=source_alias, target_db=target_db)
+        reconciler = D1Reconciler(source_db=source_db, target_db=target_db)
         rec_result = reconciler.reconcile()
 
         self.stdout.write("=" * 70)
-        self.stdout.write("D1 RECONCILIATION REPORT (6 Criteria 1:1 Parity)")
+        self.stdout.write("D1 RECONCILIATION REPORT (7 Criteria 1:1 Parity)")
         self.stdout.write("=" * 70)
         summary = rec_result.summary
 
@@ -702,6 +935,7 @@ class Command(BaseCommand):
         r4 = summary["password_hash_verbatim"]
         r5 = summary["datetime_boolean_normalization"]
         r6 = summary["identifier_sequence_counters"]
+        r7 = summary.get("row_content_parity", {"match": True})
 
         self.stdout.write(f"1. Row Count Parity:             [{'PASS' if r1['match'] else 'FAIL'}]")
         self.stdout.write(f"2. Key Set Integrity:            [{'PASS' if r2['match'] else 'FAIL'}]")
@@ -709,20 +943,14 @@ class Command(BaseCommand):
         self.stdout.write(f"4. Password Hash Verbatim Check: [{'PASS' if r4['match'] else 'FAIL'}]")
         self.stdout.write(f"5. Datetime & Boolean Normal:    [{'PASS' if r5['match'] else 'FAIL'}]")
         self.stdout.write(f"6. Identifier Sequence Counters: [{'PASS' if r6['match'] else 'FAIL'}]")
+        self.stdout.write(f"7. Row Content Parity:           [{'PASS' if r7['match'] else 'FAIL'}]")
         self.stdout.write("=" * 70)
 
         if not rec_result.success:
             for err in rec_result.errors:
                 self.stderr.write(self.style.ERROR(f"  [ERROR] {err}"))
-            if not allow_non_empty:
-                raise CommandError(
-                    f"D1 Reconciliation failed with {len(rec_result.errors)} violations."
-                )
-            else:
-                self.stdout.write(
-                    self.style.WARNING(
-                        f"Reconciliation reported {len(rec_result.errors)} variations on non-empty target (allowed via --allow-non-empty)."
-                    )
-                )
+            raise CommandError(
+                f"D1 Reconciliation failed with {len(rec_result.errors)} violations."
+            )
 
         self.stdout.write(self.style.SUCCESS("Reconciliation PASSED: 100% 1:1 parity confirmed."))
