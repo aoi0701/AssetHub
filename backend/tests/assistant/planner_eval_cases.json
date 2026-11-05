@@ -11,7 +11,9 @@
           "name": "assets.summary",
           "arguments": {
             "category": "Laptop",
-            "statuses": ["AVAILABLE"],
+            "statuses": [
+              "AVAILABLE"
+            ],
             "group_by": null
           }
         }
@@ -19,7 +21,10 @@
       "clarification": null,
       "reason": null
     },
-    "expected_tool_result_status": "ok"
+    "expected_tool_result_status": "ok",
+    "expected_result": {
+      "total": 23
+    }
   },
   {
     "id": "E2",
@@ -33,7 +38,9 @@
           "name": "assets.summary",
           "arguments": {
             "category": "Laptop",
-            "statuses": ["AVAILABLE"],
+            "statuses": [
+              "AVAILABLE"
+            ],
             "department": "IT",
             "group_by": null
           }
@@ -42,7 +49,10 @@
       "clarification": null,
       "reason": null
     },
-    "expected_tool_result_status": "ok"
+    "expected_tool_result_status": "ok",
+    "expected_result": {
+      "total": 23
+    }
   },
   {
     "id": "E3",
@@ -57,7 +67,9 @@
           "arguments": {
             "category": "Laptop",
             "department": "IT",
-            "statuses": ["AVAILABLE"],
+            "statuses": [
+              "AVAILABLE"
+            ],
             "group_by": null
           }
         }
@@ -65,7 +77,10 @@
       "clarification": null,
       "reason": null
     },
-    "expected_tool_result_status": "ok"
+    "expected_tool_result_status": "ok",
+    "expected_result": {
+      "total": 23
+    }
   },
   {
     "id": "F1",
@@ -85,7 +100,11 @@
       "clarification": null,
       "reason": null
     },
-    "expected_tool_result_status": "ok"
+    "expected_tool_result_status": "ok",
+    "expected_result": {
+      "asset_code": "{held_asset.asset_code}",
+      "holder": "{user_it.full_name}"
+    }
   },
   {
     "id": "F2",
@@ -114,7 +133,11 @@
       "clarification": null,
       "reason": null
     },
-    "expected_tool_result_status": "ok"
+    "expected_tool_result_status": "ok",
+    "expected_result": {
+      "asset_code": "{held_asset.asset_code}",
+      "holder": "{user_it.full_name}"
+    }
   },
   {
     "id": "A1",
@@ -127,7 +150,7 @@
       "clarification": "Bạn đang hỏi về thiết bị hoặc mã tài sản nào?",
       "reason": null
     },
-    "expected_tool_result_status": "clarify"
+    "expected_tool_result_status": null
   },
   {
     "id": "A2",
@@ -138,10 +161,10 @@
         "question": "Tìm các máy MacBook và Dell trong kho",
         "refs": [
           {
-            "asset_code": "IT-L24"
+            "asset_code": "{held_asset.asset_code}"
           },
           {
-            "asset_code": "IT-L25"
+            "asset_code": "W5-IT-L25"
           }
         ]
       }
@@ -149,10 +172,10 @@
     "expected_decision": {
       "kind": "clarify",
       "calls": [],
-      "clarification": "Bạn muốn kiểm tra tình trạng của máy IT-L24 hay IT-L25?",
+      "clarification": "Bạn muốn kiểm tra tình trạng của máy {held_asset.asset_code} hay W5-IT-L25?",
       "reason": null
     },
-    "expected_tool_result_status": "clarify"
+    "expected_tool_result_status": null
   },
   {
     "id": "O1",
@@ -165,7 +188,7 @@
       "clarification": null,
       "reason": null
     },
-    "expected_tool_result_status": "unsupported"
+    "expected_tool_result_status": null
   },
   {
     "id": "O2",
@@ -178,7 +201,7 @@
       "clarification": null,
       "reason": null
     },
-    "expected_tool_result_status": "unsupported"
+    "expected_tool_result_status": null
   },
   {
     "id": "P1",
@@ -233,6 +256,6 @@
       "clarification": null,
       "reason": "missing_knowledge"
     },
-    "expected_tool_result_status": "unsupported"
+    "expected_tool_result_status": null
   }
 ]
