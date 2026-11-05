@@ -654,7 +654,22 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
     - Tạo `backend/tests/e2e/test_smoke_local_http.py`: khởi chạy backend WSGI thật với `USE_D1_DATABASE=True` trên loopback port ngẫu nhiên; kích hoạt `test_d1_cloud_smoke.py` qua `pytest` subprocess với `RUN_CLOUD_SMOKE=1`; xác nhận toàn bộ luồng HTTP thật, D1 readback và cleanup PASS 100%.
   - **Coordinator & Agent D:**
     - Review độc lập chéo diff qua `ponytail:ponytail-review`.
-    - Cập nhật tài liệu runbook và tiến độ; commit local trên `feat/cloudflare-d1`.
+    - Cập nhật tài liệu runbook và tiến độ; commit local trên `feat/cloudflare-d1` (`19ca834`).
+
+- [x] **Step 8: Sửa An Toàn Cleanup Smoke & Zero-Cloud Rehearsal (Review 19ca834)**
+  - **Agent A (Smoke Cleanup Ownership & Preflight Guard):**
+    - Trong `backend/tests/e2e/test_d1_cloud_smoke.py`:
+      - Thêm preflight check trước mutation đầu tiên: kiểm tra D1 có ít nhất một Admin active nền; nếu không có thì dừng/skip rõ ràng, không seed trước để tránh vướng last-admin trigger.
+      - Xác minh quyền sở hữu (`run_id` trong department, category, user, asset, request, R2 key) trước khi xóa; nếu ID không thuộc run (sentinel), giữ nguyên và báo mismatch, không dùng raw SQL xóa trần theo ID.
+      - Xóa theo thứ tự FK nghiêm ngặt và xác nhận `COUNT(*) == 0`.
+  - **Agent B (Rehearsal Opt-In Marker, Zero-Cloud Env & Cleanup Regressions):**
+    - Trong `backend/tests/e2e/test_smoke_local_http.py`:
+      - Đánh dấu `@pytest.mark.rehearsal` để opt-in theo `conftest.py` (chạy khi có `--rehearsal`).
+      - Vô hiệu hóa triệt để biến môi trường R2/AI cloud cả ở server process lẫn subprocess env (`R2_*="", AI_*=""`).
+      - Bổ sung regression tests kiểm chứng: Negative A (sentinel asset được bảo toàn, báo mismatch), Negative B (D1 trống dừng ở preflight, bảng vẫn trống), và dọn dẹp partial failure.
+  - **Coordinator & Agent C:**
+    - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review`.
+    - Cập nhật tài liệu tiến độ và commit local trên `feat/cloudflare-d1`.
 
 ---
 

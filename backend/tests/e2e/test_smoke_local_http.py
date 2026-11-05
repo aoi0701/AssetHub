@@ -18,6 +18,7 @@ import urllib.request
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from typing import Generator
+from unittest.mock import patch
 from wsgiref.simple_server import WSGIServer, make_server
 
 import pytest
@@ -30,6 +31,8 @@ from apps.common.tests.harness_d1_target import D1TargetHarness
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 TEST_BRIDGE_PORT = 8787
 TEST_BRIDGE_TOKEN = "test-bridge-token-with-minimum-32-chars-long"
+
+pytestmark = pytest.mark.rehearsal
 
 
 class ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
@@ -116,6 +119,19 @@ def live_rehearsal_server(django_db_blocker) -> Generator[dict, None, None]:
         orig_default = dict(settings.DATABASES.get("default", {}))
         orig_allowed_hosts = list(getattr(settings, "ALLOWED_HOSTS", []))
 
+        # Cloud settings neutralization (guarantee zero cloud calls in rehearsal)
+        orig_r2_key = getattr(settings, "R2_ACCESS_KEY_ID", None)
+        orig_r2_secret = getattr(settings, "R2_SECRET_ACCESS_KEY", None)
+        orig_r2_bucket = getattr(settings, "R2_BUCKET_NAME", None)
+        orig_ai_url = getattr(settings, "AI_WORKER_URL", None)
+        orig_ai_token = getattr(settings, "AI_SERVICE_TOKEN", None)
+
+        settings.R2_ACCESS_KEY_ID = None
+        settings.R2_SECRET_ACCESS_KEY = None
+        settings.R2_BUCKET_NAME = None
+        settings.AI_WORKER_URL = None
+        settings.AI_SERVICE_TOKEN = None
+
         # Close existing connections before redirecting to D1
         for alias in ("default", "d1_cloud_smoke"):
             if alias in connections:
@@ -197,7 +213,176 @@ def live_rehearsal_server(django_db_blocker) -> Generator[dict, None, None]:
                 connections.databases["default"] = orig_default
             settings.ALLOWED_HOSTS = orig_allowed_hosts
 
+            # 4. Restore original cloud settings
+            settings.R2_ACCESS_KEY_ID = orig_r2_key
+            settings.R2_SECRET_ACCESS_KEY = orig_r2_secret
+            settings.R2_BUCKET_NAME = orig_r2_bucket
+            settings.AI_WORKER_URL = orig_ai_url
+            settings.AI_SERVICE_TOKEN = orig_ai_token
 
+
+@pytest.mark.rehearsal
+def test_rehearsal_negative_preflight_unbootstrapped_d1(django_db_blocker):
+    """
+    Negative Regression Test:
+    Ensures preflight check halts immediately if D1 has no baseline admin.
+    Verifies test skips cleanly without writing test entities to unbootstrapped D1.
+    """
+    from tests.e2e.test_d1_cloud_smoke import ALIAS, smoke_context
+
+    with django_db_blocker.unblock():
+        harness = None
+        created_harness = False
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            in_use = s.connect_ex(("127.0.0.1", TEST_BRIDGE_PORT)) == 0
+
+        if not in_use:
+            run_id = secrets.token_hex(6)
+            harness = D1TargetHarness(
+                port=TEST_BRIDGE_PORT,
+                token=TEST_BRIDGE_TOKEN,
+                run_id=f"smk_preflight_{run_id}",
+            )
+            harness.setup(clean_first=True)
+            created_harness = True
+        else:
+            from assethub_api.backends.d1.client import D1Client
+            client = D1Client(f"http://127.0.0.1:{TEST_BRIDGE_PORT}", TEST_BRIDGE_TOKEN)
+            client.query("DELETE FROM authentication_user;")
+
+        try:
+            # Wire settings for D1 bridge
+            d1_conf = {
+                "ENGINE": "assethub_api.backends.d1",
+                "NAME": "assethub-test-d1",
+                "BRIDGE_URL": f"http://127.0.0.1:{TEST_BRIDGE_PORT}",
+                "BRIDGE_TOKEN": TEST_BRIDGE_TOKEN,
+                "TIMEOUT": 45.0,
+                "AUTOCOMMIT": True,
+                "ATOMIC_REQUESTS": False,
+                "OPTIONS": {},
+            }
+            orig_alias_db = settings.DATABASES.get(ALIAS)
+            settings.DATABASES[ALIAS] = d1_conf
+            connections.databases[ALIAS] = d1_conf
+
+            with patch.dict(
+                os.environ,
+                {
+                    "RUN_CLOUD_SMOKE": "1",
+                    "D1_BRIDGE_URL": f"http://127.0.0.1:{TEST_BRIDGE_PORT}",
+                    "D1_BRIDGE_TOKEN": TEST_BRIDGE_TOKEN,
+                },
+            ):
+                smoke_fn = getattr(smoke_context, "__wrapped__", smoke_context)
+                gen = smoke_fn(django_db_blocker)
+                with pytest.raises(pytest.skip.Exception) as exc_info:
+                    next(gen)
+
+                assert "no pre-existing active baseline Admin" in str(exc_info.value)
+
+            # Verify D1 remains completely empty (no departments or users created)
+            from assethub_api.backends.d1.client import D1Client
+            client = D1Client(f"http://127.0.0.1:{TEST_BRIDGE_PORT}", TEST_BRIDGE_TOKEN)
+            user_res = client.query("SELECT count(*) as cnt FROM authentication_user;")
+            dept_res = client.query("SELECT count(*) as cnt FROM departments_department;")
+            cat_res = client.query("SELECT count(*) as cnt FROM departments_category;")
+
+            assert user_res["results"][0]["cnt"] == 0
+            assert dept_res["results"][0]["cnt"] == 0
+            assert cat_res["results"][0]["cnt"] == 0
+
+        finally:
+            if orig_alias_db:
+                settings.DATABASES[ALIAS] = orig_alias_db
+                connections.databases[ALIAS] = orig_alias_db
+            else:
+                settings.DATABASES.pop(ALIAS, None)
+                connections.databases.pop(ALIAS, None)
+
+            if created_harness and harness:
+                harness.teardown()
+            elif in_use:
+                client.query(
+                    """
+                    INSERT INTO authentication_user (
+                        id, username, password, email, role, is_active, is_staff, is_superuser, auth_version, date_joined
+                    ) VALUES (
+                        99999, 'cloud_baseline_admin', 'pbkdf2_sha256$test$dummy', 'baseline@assethub.local', 'ADMIN', 1, 1, 1, 1, '2026-01-01 00:00:00'
+                    );
+                    """
+                )
+
+
+@pytest.mark.rehearsal
+def test_rehearsal_negative_cleanup_sentinel_preservation(live_rehearsal_server):
+    """
+    Negative Regression Test:
+    Ensures execute_smoke_teardown NEVER deletes sentinel assets not owned by the run.
+    Detects ownership mismatch and leaves the sentinel record intact in D1.
+    """
+    from tests.e2e.test_d1_cloud_smoke import execute_smoke_teardown
+
+    harness: D1TargetHarness = live_rehearsal_server["harness"]
+
+    # 1. Insert sentinel department 77, category 77, and asset 77 directly into D1
+    harness.query(
+        """
+        INSERT OR REPLACE INTO departments_department (id, name, code, description)
+        VALUES (77, 'Sentinel Department 77', 'SENTINEL_77', 'Sentinel Dept');
+
+        INSERT OR REPLACE INTO departments_category (id, name, description)
+        VALUES (77, 'Sentinel Category 77', 'Sentinel Cat');
+
+        INSERT OR REPLACE INTO assets_asset (
+            id, asset_code, name, category_id, department_id, serial_number, specification, status
+        ) VALUES (
+            77, 'AST-SENTINEL-77', 'Sentinel Asset 77', 77, 77, 'SN-77', '{}', 'AVAILABLE'
+        );
+        """
+    )
+
+    try:
+        # 2. Construct mock smoke context where tracked_ids has asset 77, but run_id is 'sentinel_test'
+        # and department/category point to run-specific IDs (e.g. 9999) rather than 77
+        mock_ctx = {
+            "run_id": "sentinel_test",
+            "alias": "default",
+            "tracked_ids": {
+                "requests": [],
+                "assets": [77],
+                "categories": [],
+                "departments": [],
+                "users": [],
+                "r2_keys": [],
+            },
+            "department": {"id": 9999, "code": "SMK_sentinel_test"},
+            "category": {"id": 9999, "name": "SmokeCat_sentinel_test"},
+        }
+
+        # 3. Call execute_smoke_teardown(mock_ctx)
+        with pytest.raises(RuntimeError) as exc_info:
+            execute_smoke_teardown(mock_ctx)
+
+        assert "Ownership mismatch" in str(exc_info.value)
+        assert "77" in str(exc_info.value)
+
+        # 4. Assert sentinel asset 77 STILL EXISTS in D1!
+        res = harness.query("SELECT id, asset_code, name FROM assets_asset WHERE id = 77;")
+        assert res.get("success") is True
+        assert len(res.get("results", [])) == 1
+        assert res["results"][0]["id"] == 77
+        assert res["results"][0]["asset_code"] == "AST-SENTINEL-77"
+    finally:
+        # Clean up sentinel records cleanly afterwards
+        harness.query(
+            "DELETE FROM assets_asset WHERE id = 77; "
+            "DELETE FROM departments_category WHERE id = 77; "
+            "DELETE FROM departments_department WHERE id = 77;"
+        )
+
+
+@pytest.mark.rehearsal
 def test_local_http_smoke_subprocess_rehearsal(live_rehearsal_server):
     """
     Execute pytest subprocess on backend/tests/e2e/test_d1_cloud_smoke.py
@@ -221,6 +406,12 @@ def test_local_http_smoke_subprocess_rehearsal(live_rehearsal_server):
             "PYTHONPATH": str(BACKEND_DIR),
         }
     )
+    # Explicitly wipe R2 and AI environment variables (Zero-Cloud guarantee)
+    for cloud_key in [
+        "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "R2_ENDPOINT_URL",
+        "AI_WORKER_URL", "AI_SERVICE_TOKEN",
+    ]:
+        env[cloud_key] = ""
 
     cmd = [
         sys.executable,

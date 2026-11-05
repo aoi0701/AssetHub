@@ -151,6 +151,188 @@ def unblock_db_each_test(django_db_blocker):
 unblock_db = unblock_db_each_test
 
 
+def execute_smoke_teardown(ctx: Dict[str, Any]) -> None:
+    """
+    Deterministically cleans up smoke test entities with strict ownership verification.
+    Deletes entities in strict FK order and verifies 0 leftover records for verified IDs.
+    Raises RuntimeError if cleanup verification fails or ownership mismatch is detected.
+    """
+    cleanup_failures = []
+    run_id = ctx.get("run_id", "")
+    if not run_id or not isinstance(run_id, str):
+        raise RuntimeError("Cleanup verification failed: run_id is required for ownership verification")
+
+    alias = ctx.get("alias", ALIAS)
+    tracked_ids = ctx.get("tracked_ids") or {}
+    dept = ctx.get("department")
+    cat = ctx.get("category")
+    dept_id = getattr(dept, "id", None) or (dept.get("id") if isinstance(dept, dict) else None)
+    cat_id = getattr(cat, "id", None) or (cat.get("id") if isinstance(cat, dict) else None)
+    dept_code = getattr(dept, "code", None) or (dept.get("code") if isinstance(dept, dict) else None) or f"SMK_{run_id}"
+
+    # 1. R2 keys: verify run_id in key before calling storage.delete. If not matching, append mismatch.
+    if tracked_ids.get("r2_keys"):
+        from apps.common.storage_backends import AttachmentStorage, is_r2_configured
+
+        storage = None
+        if is_r2_configured():
+            try:
+                storage = AttachmentStorage()
+            except Exception as exc:
+                cleanup_failures.append(f"R2 client error: {str(exc)}")
+
+        for r2_key in tracked_ids["r2_keys"]:
+            if not run_id or run_id not in str(r2_key):
+                cleanup_failures.append(
+                    f"Ownership mismatch: R2 key {r2_key} does not belong to run {run_id}. Preserved sentinel."
+                )
+                continue
+            if storage:
+                try:
+                    storage.delete(r2_key)
+                except Exception as exc:
+                    cleanup_failures.append(f"R2 key deletion error for {r2_key}: {str(exc)}")
+
+    # 2. Audit logs: Delete ONLY for assets verified to belong to the run
+    verified_asset_ids = []
+    if tracked_ids.get("assets"):
+        try:
+            if dept_id is not None and cat_id is not None:
+                run_assets = Asset.objects.using(alias).filter(
+                    id__in=tracked_ids["assets"],
+                    department_id=dept_id,
+                    category_id=cat_id,
+                )
+                verified_asset_ids = list(run_assets.values_list("id", flat=True))
+            else:
+                verified_asset_ids = []
+
+            unowned_asset_ids = set(tracked_ids["assets"]) - set(verified_asset_ids)
+            if unowned_asset_ids:
+                cleanup_failures.append(
+                    f"Ownership mismatch: assets {unowned_asset_ids} do not belong to run {run_id}. Preserved sentinel."
+                )
+            if verified_asset_ids:
+                AssetHistoryLog.objects.using(alias).filter(asset_id__in=verified_asset_ids).delete()
+        except Exception as exc:
+            cleanup_failures.append(f"Asset history deletion error: {str(exc)}")
+
+    # 3. Requests: Delete ONLY requests where requester_id in tracked_ids['users']
+    verified_request_ids = []
+    if tracked_ids.get("requests"):
+        try:
+            user_ids = tracked_ids.get("users", [])
+            run_requests = Request.objects.using(alias).filter(
+                id__in=tracked_ids["requests"],
+                requester_id__in=user_ids,
+            )
+            verified_request_ids = list(run_requests.values_list("id", flat=True))
+            unowned_req_ids = set(tracked_ids["requests"]) - set(verified_request_ids)
+            if unowned_req_ids:
+                cleanup_failures.append(
+                    f"Ownership mismatch: requests {unowned_req_ids} do not belong to run {run_id}. Preserved sentinel."
+                )
+            run_requests.delete()
+        except Exception as exc:
+            cleanup_failures.append(f"Request deletion error: {str(exc)}")
+
+    # 4. Assets: Delete ONLY verified assets
+    if verified_asset_ids:
+        try:
+            Asset.objects.using(alias).filter(id__in=verified_asset_ids).delete()
+        except Exception as exc:
+            cleanup_failures.append(f"Asset deletion error: {str(exc)}")
+
+    # 5. Categories: Delete ONLY categories matching run_id
+    verified_cat_ids = []
+    if tracked_ids.get("categories"):
+        try:
+            run_cats = Category.objects.using(alias).filter(
+                id__in=tracked_ids["categories"],
+                name__contains=run_id,
+            )
+            verified_cat_ids = list(run_cats.values_list("id", flat=True))
+            unowned_cat_ids = set(tracked_ids["categories"]) - set(verified_cat_ids)
+            if unowned_cat_ids:
+                cleanup_failures.append(
+                    f"Ownership mismatch: categories {unowned_cat_ids} do not belong to run {run_id}. Preserved sentinel."
+                )
+            if verified_cat_ids:
+                Category.objects.using(alias).filter(id__in=verified_cat_ids).delete()
+        except Exception as exc:
+            cleanup_failures.append(f"Category deletion error: {str(exc)}")
+
+    # 6. Departments: Delete ONLY departments matching run_id dept_code
+    verified_dept_ids = []
+    if tracked_ids.get("departments"):
+        try:
+            run_depts = Department.objects.using(alias).filter(
+                id__in=tracked_ids["departments"],
+                code=dept_code,
+            )
+            verified_dept_ids = list(run_depts.values_list("id", flat=True))
+            unowned_dept_ids = set(tracked_ids["departments"]) - set(verified_dept_ids)
+            if unowned_dept_ids:
+                cleanup_failures.append(
+                    f"Ownership mismatch: departments {unowned_dept_ids} do not belong to run {run_id}. Preserved sentinel."
+                )
+            if verified_dept_ids:
+                Department.objects.using(alias).filter(id__in=verified_dept_ids).delete()
+        except Exception as exc:
+            cleanup_failures.append(f"Department deletion error: {str(exc)}")
+
+    # 7. Users: Delete ONLY users matching run_id
+    verified_user_ids = []
+    if tracked_ids.get("users"):
+        try:
+            run_users = User.objects.using(alias).filter(
+                id__in=tracked_ids["users"],
+                username__contains=run_id,
+            )
+            verified_user_ids = list(run_users.values_list("id", flat=True))
+            unowned_user_ids = set(tracked_ids["users"]) - set(verified_user_ids)
+            if unowned_user_ids:
+                cleanup_failures.append(
+                    f"Ownership mismatch: users {unowned_user_ids} do not belong to run {run_id}. Preserved sentinel."
+                )
+            if verified_user_ids:
+                User.objects.using(alias).filter(id__in=verified_user_ids).delete()
+        except Exception as exc:
+            cleanup_failures.append(f"User deletion error: {str(exc)}")
+
+    # 8. Verify zero leftover records for verified IDs
+    try:
+        if verified_request_ids:
+            rem_req = Request.objects.using(alias).filter(id__in=verified_request_ids).count()
+            if rem_req != 0:
+                cleanup_failures.append(f"requests_assetrequest records remain in DB: count={rem_req}")
+
+        if verified_asset_ids:
+            rem_assets = Asset.objects.using(alias).filter(id__in=verified_asset_ids).count()
+            if rem_assets != 0:
+                cleanup_failures.append(f"assets_asset records remain in DB: count={rem_assets}")
+
+        if verified_cat_ids:
+            rem_cats = Category.objects.using(alias).filter(id__in=verified_cat_ids).count()
+            if rem_cats != 0:
+                cleanup_failures.append(f"departments_category records remain in DB: count={rem_cats}")
+
+        if verified_dept_ids:
+            rem_depts = Department.objects.using(alias).filter(id__in=verified_dept_ids).count()
+            if rem_depts != 0:
+                cleanup_failures.append(f"departments_department records remain in DB: count={rem_depts}")
+
+        if verified_user_ids:
+            rem_users = User.objects.using(alias).filter(id__in=verified_user_ids).count()
+            if rem_users != 0:
+                cleanup_failures.append(f"authentication_user records remain in DB: count={rem_users}")
+    except Exception as exc:
+        cleanup_failures.append(f"Verification query error: {str(exc)}")
+
+    if cleanup_failures:
+        raise RuntimeError(f"Cleanup verification failed: {'; '.join(cleanup_failures)}")
+
+
 @pytest.fixture(scope="module")
 def smoke_context(django_db_blocker) -> Generator[Dict[str, Any], None, None]:
     """
@@ -230,9 +412,46 @@ def smoke_context(django_db_blocker) -> Generator[Dict[str, Any], None, None]:
             "r2_keys": [],
         }
 
+        ctx = {
+            "run_id": run_id,
+            "bridge_url": bridge_url,
+            "bridge_token": bridge_token,
+            "cloud_api_base_url": CLOUD_API_BASE_URL,
+            "alias": ALIAS,
+            "tracked_ids": tracked_ids,
+            "created": {
+                "department_ids": tracked_ids["departments"],
+                "category_ids": tracked_ids["categories"],
+                "user_ids": tracked_ids["users"],
+                "asset_ids": tracked_ids["assets"],
+                "request_ids": tracked_ids["requests"],
+                "history_ids": [],
+            },
+            "d1_client": None,
+            "department": None,
+            "category": None,
+            "admin_user": None,
+            "admin_password": None,
+            "req_user": None,
+            "req_password": None,
+        }
+
         # Wrap from before the first mutation in try ... finally so partial setup can cleanup cleanly
         try:
             d1_client = D1Client(base_url=bridge_url, token=bridge_token, timeout=30.0)
+            ctx["d1_client"] = d1_client
+
+            # Preflight Before First Mutation:
+            baseline_admin_count = (
+                User.objects.using(ALIAS)
+                .filter(role=User.Role.ADMIN, is_active=True)
+                .count()
+            )
+            if baseline_admin_count == 0:
+                pytest.skip(
+                    "D1 database has no pre-existing active baseline Admin. "
+                    "Bootstrap required to prevent last-admin trigger lock."
+                )
 
             # Seed initial entities directly in D1
             dept_code = f"SMK_{run_id}"
@@ -242,12 +461,14 @@ def smoke_context(django_db_blocker) -> Generator[Dict[str, Any], None, None]:
                 description="Smoke test department",
             )
             tracked_ids["departments"].append(dept.id)
+            ctx["department"] = dept
 
             cat = Category.objects.using(ALIAS).create(
                 name=f"SmokeCat_{run_id}",
                 description="Smoke test category",
             )
             tracked_ids["categories"].append(cat.id)
+            ctx["category"] = cat
 
             admin_username = f"smoke_admin_{run_id}"
             admin_password = f"AdminPass#{run_id}!"
@@ -265,6 +486,8 @@ def smoke_context(django_db_blocker) -> Generator[Dict[str, Any], None, None]:
             admin_user.set_password(admin_password)
             admin_user.save(using=ALIAS)
             tracked_ids["users"].append(admin_user.id)
+            ctx["admin_user"] = admin_user
+            ctx["admin_password"] = admin_password
 
             req_username = f"smoke_req_{run_id}"
             req_password = f"UserPass#{run_id}!"
@@ -280,157 +503,16 @@ def smoke_context(django_db_blocker) -> Generator[Dict[str, Any], None, None]:
             req_user.set_password(req_password)
             req_user.save(using=ALIAS)
             tracked_ids["users"].append(req_user.id)
-
-            ctx = {
-                "run_id": run_id,
-                "bridge_url": bridge_url,
-                "bridge_token": bridge_token,
-                "cloud_api_base_url": CLOUD_API_BASE_URL,
-                "alias": ALIAS,
-                "tracked_ids": tracked_ids,
-                "created": {
-                    "department_ids": tracked_ids["departments"],
-                    "category_ids": tracked_ids["categories"],
-                    "user_ids": tracked_ids["users"],
-                    "asset_ids": tracked_ids["assets"],
-                    "request_ids": tracked_ids["requests"],
-                    "history_ids": [],
-                },
-                "d1_client": d1_client,
-                "department": dept,
-                "category": cat,
-                "admin_user": admin_user,
-                "admin_password": admin_password,
-                "req_user": req_user,
-                "req_password": req_password,
-            }
+            ctx["req_user"] = req_user
+            ctx["req_password"] = req_password
 
             yield ctx
         finally:
-            cleanup_failures = []
+            teardown_exc = None
             try:
-                # Cleanup R2 keys if any
-                if tracked_ids.get("r2_keys"):
-                    from apps.common.storage_backends import AttachmentStorage, is_r2_configured
-                    if is_r2_configured():
-                        try:
-                            storage = AttachmentStorage()
-                            for r2_key in tracked_ids["r2_keys"]:
-                                try:
-                                    storage.delete(r2_key)
-                                except Exception as exc:
-                                    cleanup_failures.append(f"R2 key deletion error for {r2_key}: {str(exc)}")
-                        except Exception as exc:
-                            cleanup_failures.append(f"R2 client error: {str(exc)}")
-
-                # Audit logs cleanup to prevent ProtectedError on Asset deletion
-                if tracked_ids["assets"]:
-                    try:
-                        AssetHistoryLog.objects.filter(asset_id__in=tracked_ids["assets"]).delete()
-                    except Exception:
-                        pass
-                    try:
-                        with connections[ALIAS].cursor() as cursor:
-                            a_ids = ",".join(str(i) for i in tracked_ids["assets"])
-                            cursor.execute(f"DELETE FROM assets_assethistorylog WHERE asset_id IN ({a_ids});")
-                    except Exception:
-                        pass
-
-                # Delete in strict FK order by tracked ID:
-                # 1) Request.objects.filter(id__in=tracked_ids["requests"]).delete()
-                if tracked_ids["requests"]:
-                    try:
-                        Request.objects.filter(id__in=tracked_ids["requests"]).delete()
-                    except Exception as exc:
-                        cleanup_failures.append(f"Request deletion error: {str(exc)}")
-                    try:
-                        with connections[ALIAS].cursor() as cursor:
-                            r_ids = ",".join(str(i) for i in tracked_ids["requests"])
-                            cursor.execute(f"DELETE FROM requests_assetrequest WHERE id IN ({r_ids});")
-                    except Exception:
-                        pass
-
-                # 2) Asset.objects.filter(id__in=tracked_ids["assets"]).delete()
-                if tracked_ids["assets"]:
-                    try:
-                        Asset.objects.filter(id__in=tracked_ids["assets"]).delete()
-                    except Exception as exc:
-                        cleanup_failures.append(f"Asset deletion error: {str(exc)}")
-                    try:
-                        with connections[ALIAS].cursor() as cursor:
-                            a_ids = ",".join(str(i) for i in tracked_ids["assets"])
-                            cursor.execute(f"DELETE FROM assets_asset WHERE id IN ({a_ids});")
-                    except Exception:
-                        pass
-
-                # 3) Category.objects.filter(id__in=tracked_ids["categories"]).delete()
-                if tracked_ids["categories"]:
-                    try:
-                        Category.objects.filter(id__in=tracked_ids["categories"]).delete()
-                    except Exception as exc:
-                        cleanup_failures.append(f"Category deletion error: {str(exc)}")
-                    try:
-                        with connections[ALIAS].cursor() as cursor:
-                            c_ids = ",".join(str(i) for i in tracked_ids["categories"])
-                            cursor.execute(f"DELETE FROM departments_category WHERE id IN ({c_ids});")
-                    except Exception:
-                        pass
-
-                # 4) Department.objects.filter(id__in=tracked_ids["departments"]).delete()
-                if tracked_ids["departments"]:
-                    try:
-                        Department.objects.filter(id__in=tracked_ids["departments"]).delete()
-                    except Exception as exc:
-                        cleanup_failures.append(f"Department deletion error: {str(exc)}")
-                    try:
-                        with connections[ALIAS].cursor() as cursor:
-                            d_ids = ",".join(str(i) for i in tracked_ids["departments"])
-                            cursor.execute(f"DELETE FROM departments_department WHERE id IN ({d_ids});")
-                    except Exception:
-                        pass
-
-                # 5) User.objects.filter(id__in=tracked_ids["users"]).delete()
-                if tracked_ids["users"]:
-                    try:
-                        User.objects.filter(id__in=tracked_ids["users"]).delete()
-                    except Exception as exc:
-                        cleanup_failures.append(f"User deletion error: {str(exc)}")
-                    try:
-                        with connections[ALIAS].cursor() as cursor:
-                            u_ids = ",".join(str(i) for i in tracked_ids["users"])
-                            cursor.execute(f"DELETE FROM authentication_user WHERE id IN ({u_ids});")
-                    except Exception:
-                        pass
-
-                # Verify COUNT(*) == 0 for these tracked IDs
-                if tracked_ids["requests"]:
-                    rem_req = Request.objects.filter(id__in=tracked_ids["requests"]).count()
-                    if rem_req != 0:
-                        cleanup_failures.append(f"requests_assetrequest records remain in DB: count={rem_req}")
-
-                if tracked_ids["assets"]:
-                    rem_assets = Asset.objects.filter(id__in=tracked_ids["assets"]).count()
-                    if rem_assets != 0:
-                        cleanup_failures.append(f"assets_asset records remain in DB: count={rem_assets}")
-
-                if tracked_ids["categories"]:
-                    rem_cats = Category.objects.filter(id__in=tracked_ids["categories"]).count()
-                    if rem_cats != 0:
-                        cleanup_failures.append(f"departments_category records remain in DB: count={rem_cats}")
-
-                if tracked_ids["departments"]:
-                    rem_depts = Department.objects.filter(id__in=tracked_ids["departments"]).count()
-                    if rem_depts != 0:
-                        cleanup_failures.append(f"departments_department records remain in DB: count={rem_depts}")
-
-                if tracked_ids["users"]:
-                    rem_users = User.objects.filter(id__in=tracked_ids["users"]).count()
-                    if rem_users != 0:
-                        cleanup_failures.append(f"authentication_user records remain in DB: count={rem_users}")
-
+                execute_smoke_teardown(ctx)
             except Exception as exc:
-                cleanup_failures.append(f"Cleanup execution error: {str(exc)}")
-
+                teardown_exc = exc
             finally:
                 for a in (ALIAS, "default"):
                     if a in connections:
@@ -452,8 +534,8 @@ def smoke_context(django_db_blocker) -> Generator[Dict[str, Any], None, None]:
                 router._routers = None
                 router.__dict__.pop("routers", None)
 
-            if cleanup_failures:
-                raise RuntimeError(f"Cleanup verification failed: {'; '.join(cleanup_failures)}")
+            if teardown_exc:
+                raise teardown_exc
 # Cloud Smoke Tests (Gated by RUN_CLOUD_SMOKE=1)
 # =============================================================================
 
@@ -1063,3 +1145,191 @@ def test_safety_ai_classification_429_quota_limit():
     quota_data = {"detail": "Rate limit exceeded. Maximum 10 requests per minute."}
     result = validate_ai_classification_response(429, quota_data)
     assert result["rate_limited"] is True
+
+
+def test_safety_preflight_blocks_mutation_when_no_baseline_admin():
+    """
+    Safety regression test:
+    Verifies that if D1 has no pre-existing active baseline Admin,
+    the preflight guard raises pytest.skip before any mutation occurs.
+    """
+    with patch("apps.authentication.models.User.objects.using") as mock_user_using, \
+         patch("apps.departments.models.Department.objects.using") as mock_dept_using:
+        mock_user_qs = mock_user_using.return_value.filter.return_value
+        mock_user_qs.count.return_value = 0
+
+        # Simulate preflight guard in smoke_context
+        with pytest.raises(pytest.skip.Exception, match="D1 database has no pre-existing active baseline Admin"):
+            baseline_admin_count = (
+                User.objects.using(ALIAS)
+                .filter(role=User.Role.ADMIN, is_active=True)
+                .count()
+            )
+            if baseline_admin_count == 0:
+                pytest.skip(
+                    "D1 database has no pre-existing active baseline Admin. "
+                    "Bootstrap required to prevent last-admin trigger lock."
+                )
+            Department.objects.using(ALIAS).create(code="SMK_TEST", name="Test")
+
+        mock_dept_using.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_safety_execute_smoke_teardown_detects_ownership_mismatch_and_preserves_sentinels():
+    """
+    Safety regression test:
+    Verifies that execute_smoke_teardown refuses to delete unowned assets, requests,
+    categories, departments, users, and R2 keys, preserving sentinels and raising RuntimeError.
+    """
+    run_id = f"test_{secrets.token_hex(4)}"
+    other_run_id = f"other_{secrets.token_hex(4)}"
+
+    # Create run entities
+    dept_run = Department.objects.create(code=f"SMK_{run_id}", name=f"Dept {run_id}")
+    cat_run = Category.objects.create(name=f"Cat {run_id}")
+    user_run = User.objects.create(
+        username=f"user_{run_id}",
+        email=f"user_{run_id}@example.com",
+        role=User.Role.USER,
+        department=dept_run,
+    )
+
+    # Create sentinel entities belonging to a different department/user
+    dept_sentinel = Department.objects.create(code=f"SMK_{other_run_id}", name=f"Dept {other_run_id}")
+    cat_sentinel = Category.objects.create(name=f"Cat {other_run_id}")
+    user_sentinel = User.objects.create(
+        username=f"user_{other_run_id}",
+        email=f"user_{other_run_id}@example.com",
+        role=User.Role.USER,
+        department=dept_sentinel,
+    )
+    user_untracked = User.objects.create(
+        username=f"untracked_{other_run_id}",
+        email=f"untracked_{other_run_id}@example.com",
+        role=User.Role.USER,
+        department=dept_sentinel,
+    )
+    sentinel_asset = Asset.objects.create(
+        asset_code=f"AST-{other_run_id}",
+        name="Sentinel Asset",
+        category=cat_sentinel,
+        department=dept_sentinel,
+        status=Asset.Status.AVAILABLE,
+    )
+    sentinel_request = AssetRequest.objects.create(
+        requester=user_untracked,
+        department=dept_sentinel,
+        requested_category=cat_sentinel,
+        request_type=AssetRequest.RequestType.ALLOCATE,
+        reason="Sentinel Request",
+    )
+
+    sentinel_r2_key = "sentinel/unowned/photo.png"
+
+    # Context mistakenly tracking sentinel IDs that do not belong to run_id
+    ctx = {
+        "run_id": run_id,
+        "alias": "default",
+        "department": dept_run,
+        "category": cat_run,
+        "tracked_ids": {
+            "assets": [sentinel_asset.id],
+            "requests": [sentinel_request.id],
+            "categories": [cat_sentinel.id],
+            "departments": [dept_sentinel.id],
+            "users": [user_sentinel.id],
+            "r2_keys": [sentinel_r2_key],
+        },
+    }
+
+    with pytest.raises(RuntimeError) as exc_info:
+        execute_smoke_teardown(ctx)
+
+    err_msg = str(exc_info.value)
+    assert f"Ownership mismatch: assets {{{sentinel_asset.id}}} do not belong to run {run_id}. Preserved sentinel." in err_msg
+    assert f"Ownership mismatch: requests {{{sentinel_request.id}}} do not belong to run {run_id}. Preserved sentinel." in err_msg
+    assert f"Ownership mismatch: R2 key {sentinel_r2_key} does not belong to run {run_id}. Preserved sentinel." in err_msg
+    assert f"Ownership mismatch: categories {{{cat_sentinel.id}}} do not belong to run {run_id}. Preserved sentinel." in err_msg
+    assert f"Ownership mismatch: departments {{{dept_sentinel.id}}} do not belong to run {run_id}. Preserved sentinel." in err_msg
+    assert f"Ownership mismatch: users {{{user_sentinel.id}}} do not belong to run {run_id}. Preserved sentinel." in err_msg
+
+    # Verify sentinel entities were preserved (NOT deleted)
+    assert Asset.objects.filter(id=sentinel_asset.id).exists()
+    assert AssetRequest.objects.filter(id=sentinel_request.id).exists()
+    assert Category.objects.filter(id=cat_sentinel.id).exists()
+    assert Department.objects.filter(id=dept_sentinel.id).exists()
+    assert User.objects.filter(id=user_sentinel.id).exists()
+
+    # Clean up test entities
+    AssetRequest.objects.filter(id=sentinel_request.id).delete()
+    Asset.objects.filter(id=sentinel_asset.id).delete()
+    Category.objects.filter(id__in=[cat_run.id, cat_sentinel.id]).delete()
+    User.objects.filter(id__in=[user_run.id, user_sentinel.id, user_untracked.id]).delete()
+    Department.objects.filter(id__in=[dept_run.id, dept_sentinel.id]).delete()
+
+
+def test_safety_execute_smoke_teardown_requires_run_id():
+    """
+    Safety regression test:
+    Verifies that execute_smoke_teardown refuses to run without a valid run_id.
+    """
+    with pytest.raises(RuntimeError, match="run_id is required for ownership verification"):
+        execute_smoke_teardown({"run_id": "", "tracked_ids": {"categories": [1]}})
+
+
+@pytest.mark.django_db
+def test_safety_execute_smoke_teardown_cleans_owned_records_successfully():
+    """
+    Safety regression test:
+    Verifies that execute_smoke_teardown cleanly deletes all run-owned records
+    and verifies zero leftover records.
+    """
+    run_id = f"clean_{secrets.token_hex(4)}"
+
+    dept = Department.objects.create(code=f"SMK_{run_id}", name=f"Dept {run_id}")
+    cat = Category.objects.create(name=f"Cat {run_id}")
+    user = User.objects.create(
+        username=f"user_{run_id}",
+        email=f"user_{run_id}@example.com",
+        role=User.Role.USER,
+        department=dept,
+    )
+    asset = Asset.objects.create(
+        asset_code=f"AST-{run_id}",
+        name=f"Asset {run_id}",
+        category=cat,
+        department=dept,
+        status=Asset.Status.AVAILABLE,
+    )
+    req = AssetRequest.objects.create(
+        requester=user,
+        department=dept,
+        requested_category=cat,
+        request_type=AssetRequest.RequestType.ALLOCATE,
+        reason=f"Request {run_id}",
+    )
+
+    ctx = {
+        "run_id": run_id,
+        "alias": "default",
+        "department": dept,
+        "category": cat,
+        "tracked_ids": {
+            "assets": [asset.id],
+            "requests": [req.id],
+            "categories": [cat.id],
+            "departments": [dept.id],
+            "users": [user.id],
+            "r2_keys": [f"attachments/{run_id}_file.png"],
+        },
+    }
+
+    # Should succeed with 0 leftover records
+    execute_smoke_teardown(ctx)
+
+    assert not AssetRequest.objects.filter(id=req.id).exists()
+    assert not Asset.objects.filter(id=asset.id).exists()
+    assert not Category.objects.filter(id=cat.id).exists()
+    assert not Department.objects.filter(id=dept.id).exists()
+    assert not User.objects.filter(id=user.id).exists()

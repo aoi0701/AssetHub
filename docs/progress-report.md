@@ -800,6 +800,80 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 - Cổng 5434, 8787, 8001 sạch. Các container `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) nguyên vẹn.
 - Sẵn sàng commit local và chờ Codex kiểm duyệt gói chuẩn bị deploy.
 
+---
+
+## 22. Nghiệm Thu Khắc Phục Cleanup Ownership, Preflight Bootstrap & Zero-Cloud Rehearsal (Review 19ca834)
+
+- **Thời điểm:** 2026-11-05 13:30 (GMT+7)
+- **Trạng thái:** **Step 8 Sửa an toàn cleanup smoke & Zero-Cloud Rehearsal PASS 100% — Đã qua review độc lập Ponytail Agent C (Verdict: SHIP) & sẵn sàng để Codex kiểm tra.**
+- **Ranh giới an toàn tuyệt đối:**
+  - Zero cloud mutation, zero live Workers AI call, zero R2 billing, zero public Tunnel.
+  - Zero install / upgrade (`npm`, `pip`, `uv`), zero Docker image pull, zero model download.
+  - Không reset / thay đổi database thật hay container stack đang chạy (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+  - Toàn bộ kiểm thử dùng dữ liệu giả độc lập trên test database / local harness.
+  - 1 tab AGY, 0 worktree, 0 push/merge trên nhánh `feat/cloudflare-d1`.
+
+### 22.1. Chi Tiết Khắc Phục Kỹ Thuật
+1. **Preflight Guard Trước Mutation Đầu Tiên (`smoke_context`):**
+   - Đọc và kiểm tra có ít nhất 1 Admin active nền trong D1 trước khi tạo bất kỳ department/category/user test nào.
+   - Nếu `baseline_admin_count == 0`: dừng bằng `pytest.skip` rõ ràng, không seed trước để tránh trigger lock `Cannot delete the last active Admin`.
+   - Bổ sung regression test: `test_safety_preflight_blocks_mutation_when_no_baseline_admin` và `test_rehearsal_negative_preflight_unbootstrapped_d1` xác nhận D1 hoàn toàn trống (count == 0 ở mọi bảng liên quan).
+2. **Xác Minh Quyền Sở Hữu Teardown & Bảo Tồn Sentinel (`execute_smoke_teardown`):**
+   - Yêu cầu bắt buộc `run_id` hợp lệ, chặn rủi ro wildcard matching.
+   - Không xóa theo ID trần từ API; kiểm tra thực sự thuộc `run_id` qua:
+     - `r2_keys`: `run_id in r2_key`.
+     - `assets`: `department_id == dept.id` và `category_id == cat.id`.
+     - `requests`: `requester_id in tracked_users`.
+     - `categories`: `name__contains=run_id`.
+     - `departments`: `code == dept_code`.
+     - `users`: `username__contains=run_id`.
+   - Nếu phát hiện ID trần không thuộc quyền sở hữu (sentinel data), giữ nguyên bản ghi, append thông báo mismatch và ném `RuntimeError`.
+   - Xóa đúng theo thứ tự FK và chỉ xóa `verified_*_ids`, xác nhận `count == 0` sau khi xóa.
+   - Bổ sung unit regressions: `test_safety_execute_smoke_teardown_detects_ownership_mismatch_and_preserves_sentinels`, `test_safety_execute_smoke_teardown_cleans_owned_records_successfully`, `test_safety_execute_smoke_teardown_requires_run_id`.
+3. **Đánh Dấu Rehearsal Marker & Cô Lập Môi Trường Zero-Cloud (`test_smoke_local_http.py`):**
+   - Đánh dấu `pytestmark = pytest.mark.rehearsal`. Lượt chạy default pytest skip toàn bộ trong 0.01s.
+   - Chạy diễn tập qua opt-in flag `--rehearsal` hoặc `ASSETHUB_RUN_REHEARSAL=1`.
+   - Vô hiệu hóa triệt để biến môi trường và settings R2 / AI cloud ở cả server process và subprocess environment (`R2_*=""`, `AI_*=""`).
+   - Khôi phục nguyên vẹn settings / env sau khi kết thúc diễn tập.
+
+### 22.2. Kết Quả Kiểm Thử Thực Nghiệm
+1. **Targeted Backend Unit / Gating Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_settings_runtime.py backend/tests/test_cors.py backend/apps/assets/tests/test_r2_storage.py backend/tests/test_storage.py backend/tests/e2e/test_d1_cloud_smoke.py -v`
+   - Kết quả: **71 passed, 7 skipped in 4.85s (100% PASS)**.
+2. **Rehearsal Default Gating Check (Không cờ opt-in):**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/e2e/test_smoke_local_http.py -v`
+   - Kết quả: **3 skipped in 0.01s (100% GATED)**.
+3. **Rehearsal Opt-In Execution (`--rehearsal`):**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/e2e/test_smoke_local_http.py --rehearsal -v -s`
+   - Kết quả: **3 passed in 16.33s (Wrapper: 3/3 passed; Subprocess smoke: 15 passed, 2 skipped [R2/AI cloud skipped])**.
+
+### 22.3. Báo Cáo Kế Hoạch Triển Khai (Deployment Package) Cho Codex Review
+- **Tài nguyên Cloudflare dự kiến sử dụng (khi deploy thật sau review):**
+  - Cloudflare D1 Database: `assethub-production-d1` (ID: binding qua wrangler).
+  - Cloudflare R2 Bucket: `assethub-attachments`.
+  - Cloudflare Worker Bridge: `assethub-d1-bridge.workers.dev` (kèm D1 Client binding nội bộ).
+  - Cloudflare Tunnel: `tunnel.assethub.local` trỏ container demo backend cổng 8001.
+  - Cloudflare Pages: `assethub.pages.dev` phục vụ static frontend SPA.
+- **Tập dữ liệu demo tối thiểu đề xuất (Chưa seed, chưa reset):**
+  - 1 Department: `Công nghệ thông tin` (mã `IT`).
+  - 1 Category: `Laptop & Máy trạm` (`LAPTOP`).
+  - 2 Users: 1 Admin (`demo_admin`), 1 User (`demo_user`).
+  - 2 Assets: 1 Laptop đang sẵn sàng (`AST-DEMO-001`), 1 Máy trạm đang sử dụng (`AST-DEMO-002`).
+  - 1 Request: Yêu cầu cấp phát laptop đang chờ duyệt (`REQ-DEMO-001`).
+- **Thứ tự triển khai (Deploy sequence) chuẩn bị:**
+  1. Review toàn bộ git diff và commit local trên `feat/cloudflare-d1`.
+  2. Áp dụng schema D1 qua D1 migrations.
+  3. Deploy Cloudflare Worker D1 Bridge.
+  4. Khởi chạy demo container backend (port 8001, source mount `ro`, read-only `postgres`).
+  5. Thiết lập Cloudflare Tunnel nội bộ trỏ về 8001.
+  6. Deploy Cloudflare Pages frontend với URL backend Tunnel.
+  7. Thực hiện end-to-end smoke test xác nhận.
+- **Thứ tự hoàn tác (Rollback sequence):**
+  1. Tắt Tunnel và dừng container demo backend (port 8001).
+  2. Revert DNS/Route Cloudflare Pages về trạng thái bảo trì hoặc bản build trước.
+  3. Dữ liệu PostgreSQL production trên port 5433 và 8000 hoàn toàn nguyên vẹn, sẵn sàng tiếp tục phục vụ mà không cần khôi phục dữ liệu.
+
+
 
 
 
