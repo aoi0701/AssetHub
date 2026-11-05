@@ -205,6 +205,10 @@ if not api_url or not api_url.startswith("https://"):
     sys.exit("Error: CLOUD_API_BASE_URL must be provided and start with https://")
 
 env = os.environ.copy()
+for k, v in env_vals.items():
+    if v is not None:
+        env[k] = v
+
 env.update({
     "USE_D1_DATABASE": "True",
     "RUN_CLOUD_SMOKE": "1",

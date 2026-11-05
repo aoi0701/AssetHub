@@ -1025,6 +1025,7 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
    - Ghi trực tiếp vào file cục bộ, tuyệt đối không in bí mật ra màn hình terminal hay shell history.
 2. **Khởi Chạy Cloud Smoke Kín Đáo & Đầy Đủ Biến Môi Trường (Step 11):**
    - Thay thế lệnh thủ công bằng Python launcher sử dụng `backend/.venv/bin/python` nạp cấu hình kín từ `deploy/.env.demo` qua `dotenv_values`, không echo token ra terminal.
+   - Nạp toàn bộ các biến cấu hình không-None từ `deploy/.env.demo` (bao gồm `DJANGO_SECRET_KEY`, `R2_*`, `AI_*`) sang môi trường tiến trình con; các biến rỗng trong file sẽ vô hiệu hóa triệt để giá trị cũ ở process cha, đảm bảo test không skip giả khi có cấu hình thật.
    - Truyền đồng thời cả hai biến môi trường bắt buộc: `D1_BRIDGE_SECRET_TOKEN` (yêu cầu bởi Django runtime `settings.py`) và `D1_BRIDGE_TOKEN` (yêu cầu bởi `D1Client`).
    - Kiểm tra xác thực trước khi chạy: `D1_BRIDGE_SECRET_TOKEN` phải >= 32 ký tự và không phải placeholder; `D1_BRIDGE_URL` và `CLOUD_API_BASE_URL` phải là URL https hợp lệ.
    - Chuyển tiếp mã thoát `res.returncode` trực tiếp ra shell, không nuốt lỗi test.
