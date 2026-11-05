@@ -1,4 +1,5 @@
 import io
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -186,6 +187,48 @@ def test_r2_presigned_url_inline_for_images_and_attachment_for_documents(monkeyp
     # 3. Explicit as_attachment override on image -> attachment
     storage.get_presigned_download_url("assets/1/image/photo.png", as_attachment=True)
     assert mock_client.generate_presigned_url.call_args[1]['Params']['ResponseContentDisposition'] == 'attachment; filename="photo.png"'
+
+
+def test_r2_presigned_url_boto3_sigv4_regression_no_mock(monkeypatch):
+    """
+    [UNIT REGRESSION TEST - Real boto3 Client, Zero Network Call]
+    Verifies that R2AttachmentStorage generates authentic AWS SigV4 presigned URLs:
+    - Algorithm is strictly X-Amz-Algorithm=AWS4-HMAC-SHA256
+    - Expiration is set via X-Amz-Expires (900s default, and custom overrides like 300s)
+    - Zero network calls executed; presigning is performed entirely client-side.
+    - NEVER mock generate_presigned_url to catch regressions back to SigV2.
+    """
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "dummy_access_key_id")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "dummy_secret_access_key")
+    monkeypatch.setenv("R2_BUCKET_NAME", "dummy-r2-bucket")
+    monkeypatch.setenv("R2_ENDPOINT_URL", "https://dummy-account.r2.cloudflarestorage.com")
+
+    storage = AttachmentStorage()
+    assert isinstance(storage, R2AttachmentStorage)
+
+    # 1. Default 900s TTL check with real boto3 presigning
+    url_default = storage.get_presigned_download_url("assets/10/image/sample.png")
+    parsed_default = urlparse(url_default)
+    params_default = parse_qs(parsed_default.query)
+
+    assert params_default.get("X-Amz-Algorithm") == ["AWS4-HMAC-SHA256"]
+    assert params_default.get("X-Amz-Expires") == ["900"]
+    assert "X-Amz-Credential" in params_default
+    assert "X-Amz-Signature" in params_default
+    assert "X-Amz-Date" in params_default
+    # SigV2 parameters must NOT appear
+    assert "AWSAccessKeyId" not in params_default
+    assert "Signature" not in params_default
+
+    # 2. Overridden TTL (300s) check with real boto3 presigning
+    url_override = storage.get_presigned_download_url("assets/10/document/manual.pdf", expire_seconds=300)
+    parsed_override = urlparse(url_override)
+    params_override = parse_qs(parsed_override.query)
+
+    assert params_override.get("X-Amz-Algorithm") == ["AWS4-HMAC-SHA256"]
+    assert params_override.get("X-Amz-Expires") == ["300"]
+    assert "X-Amz-Signature" in params_override
+    assert "AWSAccessKeyId" not in params_override
 
 
 # ===========================================================================

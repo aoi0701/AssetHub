@@ -1278,25 +1278,46 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
    - Endpoint: `https://5e76c2bf4e09587a010d31ea416ec8d3.r2.cloudflarestorage.com`.
 
 ### 30.2. Cấu Hình & Tương Thích Chuẩn SigV4 (`backend/apps/common/storage_backends.py`)
-- Cloudflare R2 bắt buộc sử dụng chuẩn chữ ký AWS Signature Version 4 (`SigV4`).
-- Bổ sung cấu hình tường minh `signature_version = 's3v4'` trên `R2AttachmentStorage` để bảo đảm URL có chữ ký sinh ra theo định dạng `AWS4-HMAC-SHA256` với thời hạn 900 giây (15 phút).
+- **Nguyên nhân gốc rễ (Root Cause):** Cloudflare R2 từ chối hoàn toàn chuẩn AWS Signature Version 2 (`SigV2`) với mã lỗi `HTTP 401: SigV2 authorization is not supported. Please use SigV4 instead.`. Mặc định thư viện `boto3` khi kết nối endpoint tùy chỉnh (custom endpoint) có thể quay về SigV2 nếu không được chỉ định tường minh.
+- **Bản sửa:** Thiết lập `signature_version = 's3v4'` trên class `R2AttachmentStorage` trong `backend/apps/common/storage_backends.py`.
 
-### 30.3. Bằng Chứng Kiểm Thử Live Cloud Thực Tế (Live Verification)
-Đã thực thi kịch bản kiểm chứng end-to-end có kiểm soát từ container backend:
-1. **Upload object thật lên R2:**
-   - Object Key: `test_proof/smoke_r2_1793876812.txt`
-   - Nội dung: `AssetHub Cloudflare R2 Proof of Operation - 2026-11-05 live verification` (72 bytes).
-   - Xác thực: `head_object` trả về chính xác `ContentLength: 72`.
-2. **Sinh Presigned URL (SigV4, 900s TTL):**
-   - URL: `https://5e76c2bf4e09587a010d31ea416ec8d3.r2.cloudflarestorage.com/assethub-attachments/test_proof/smoke_r2_1793876812.txt?response-content-disposition=inline&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=900...`
-3. **Tải về từ Cloudflare R2 qua Presigned URL:**
-   - Mã phản hồi HTTP: **HTTP 200 OK**.
-   - Đối soát tính toàn vẹn: **Byte parity match: True (100% khớp dữ liệu gốc)**.
-4. **Dọn dẹp an toàn (Cleanup):**
-   - Xóa object thử nghiệm khỏi bucket R2: `delete_object`.
-   - `list_objects_v2` xác nhận: **0 objects remaining in bucket** (sạch 100%, 0 để lại file rác).
+### 30.3. Kiểm Thử Hồi Quy Local & Runner Cô Lập (Agent A)
+- **Unit Regression Test:** Thêm test `test_r2_presigned_url_boto3_sigv4_regression_no_mock` vào `backend/apps/assets/tests/test_r2_storage.py`.
+  - Khởi tạo client `boto3` thật với thông tin xác thực giả lập và endpoint giả lập, 0 cuộc gọi mạng (client-side signing thuần túy).
+  - Không mock `generate_presigned_url` nhằm phát hiện chính xác mọi trường hợp bị thụt lùi về SigV2.
+  - Kiểm tra các tham số truy vấn chuẩn SigV4: `X-Amz-Algorithm=AWS4-HMAC-SHA256`, `X-Amz-Expires=900` (mặc định) và `X-Amz-Expires=300` (khi override); xác nhận không xuất hiện tham số SigV2 (`AWSAccessKeyId`, `Signature`).
+- **Chứng minh Red / Green:**
+  - **RED:** Khi ép kiểm tra với `signature_version = 's3'` (SigV2), test fail ngay lập tức: `AssertionError: assert None == ['AWS4-HMAC-SHA256']`.
+  - **GREEN:** Với `signature_version = 's3v4'`, test pass 100% (URL có `X-Amz-Algorithm=AWS4-HMAC-SHA256`).
+- **Thực thi Test Suite Storage Cô Lập:**
+  - Tái sử dụng `PGSourceHarness` chạy container PostgreSQL cô lập trên cổng động được cấp phát tự động, run_id ngẫu nhiên, credential chỉ lưu trong bộ nhớ.
+  - Áp dụng migration Django đầy đủ và chạy pytest có chỉ định biến môi trường `DB_HOST=127.0.0.1`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`.
+  - Khối `finally` bảo đảm giải phóng (teardown) container ngay khi kết thúc, không đụng cổng 5433 / `assethub-db-1` / `pg-test`.
+  - **Kết quả: 31/31 passed in 5.36s:**
+    - `backend/tests/test_storage.py`: **13 passed**
+    - `backend/apps/assets/tests/test_r2_storage.py`: **18 passed**
 
-### 30.4. Tổng Kết Toàn Bộ Hạ Tầng Cloudflare Tuần 4
+### 30.4. Kiểm Chứng Attachment Qua HTTP Cloud & Cloudflare R2 (Agent B)
+Thực thi kiểm chứng HTTP thực tế qua Cloudflare Quick Tunnel (`https://away-server-pot-catalogue.trycloudflare.com`) và Cloudflare D1 UUID `3850e3a1-7c57-42f4-afd6-1fa1655bbcf1` (run_id: `4886b9d5d1f1`):
+1. **Preflight Guards & Connectivity:**
+   - Quick Tunnel `/api/`: HTTP 401 (service sống, DRF authentication hoạt động).
+   - D1 Bridge Worker `/health`: HTTP 200 `{"status":"ok","service":"d1-bridge"}`.
+   - D1 SQL ping (`SELECT 1`): `success: true`.
+   - Baseline Admin guard: 2 tài khoản active admin tồn tại (pass guard bảo vệ admin cuối).
+2. **Kiểm chứng vòng đời Attachment qua API:**
+   - **Upload multipart:** `POST /api/assets/83/attachments/` gửi tệp ảnh thật -> **HTTP 200 OK**, trả về storage key: `assets/83/image/d4a37b1451754c9580a81e7847aa81df_smoke_attachment_4886b9d5d1f1.png`.
+   - **Xin Presigned URL tải về:** `GET /api/assets/83/attachments/image/download/` -> **HTTP 200 OK**, trả về URL chứa host `5e76c2bf4e09587a010d31ea416ec8d3.r2.cloudflarestorage.com`, `expires_in: 900`, chữ ký SigV4 hợp lệ.
+   - **Tải file thật & đối soát byte:** Tải dữ liệu từ URL ký -> **HTTP 200 OK**, nội dung 77 bytes khớp 100% với dữ liệu tải lên (SHA256 parity match).
+   - **Readback D1 Database:** Truy vấn trực tiếp `SELECT image FROM assets_asset WHERE id=83` trên D1 khớp chính xác storage key.
+   - **Kiểm tra tính riêng tư (Private ACL Check):** Truy cập URL gốc đã loại bỏ chuỗi tham số chữ ký SigV4 -> **HTTP 400 Bad Request / Access Denied** (chứng minh tệp hoàn toàn riêng tư, không bị lộ ra public).
+   - **Dọn dẹp an toàn (Teardown Cleanup):** Xóa object khỏi R2 bucket (`exists = False`). Xóa fixture run_id (Asset 83, Category 69, Department 460, User 87), D1 leftover: `0 records` còn lại.
+
+### 30.5. Phạm Vi & Hạn Chế Còn Lại (Ponytail Boundaries)
+- **Đã kiểm chứng:** Luồng nghiệp vụ tải lên, ký URL SigV4, tải về đối soát byte, lưu vết D1, bảo mật private ACL, dọn dẹp fixture qua HTTP API và Cloudflare R2 thực tế.
+- **Chưa kiểm chứng trong đợt này:** Thao tác đính kèm tệp trực tiếp từ giao diện người dùng (UI frontend). Giao diện UI sẽ được tích hợp và kiểm thử toàn diện tại Tuần 5.
+- **Rủi ro còn lại:** Quick tunnel `trycloudflare.com` là tunnel thử nghiệm tạm thời (sẽ thay đổi URL nếu tiến trình bị khởi động lại). Presigned URL hết hạn sau 900 giây (15 phút), phía client cần xin cấp lại URL mới khi phiên làm việc kéo dài.
+
+### 30.6. Tổng Kết Toàn Bộ Hạ Tầng Cloudflare Tuần 4
 - **Pages Frontend:** `https://assethub-97m.pages.dev` (SPA login, dashboard hoạt động mượt mà).
 - **Public API Tunnel:** `https://away-server-pot-catalogue.trycloudflare.com` (Cloudflare Quick Tunnel trỏ về demo container 8001).
 - **Primary Operational DB:** Cloudflare D1 `assethub-test-d1` (`3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`, 19 bảng SQLite, trigger bảo vệ Admin).
