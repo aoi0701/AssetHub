@@ -1,0 +1,100 @@
+{
+  "topics": {
+    "allocate": {
+      "version": "2026-11-05",
+      "title": "Quy trình xin cấp phát tài sản",
+      "roles": {
+        "USER": {
+          "body": "Vào trang Phiếu của tôi và tạo phiếu Cấp phát, chọn danh mục cần cấp và nhập lý do.\nBạn cần thuộc một phòng ban thì mới gửi được phiếu; bạn không chọn tài sản cụ thể khi gửi phiếu.\nPhiếu ở trạng thái Chờ duyệt cho đến khi quản lý phòng ban hoặc quản trị viên xử lý.\nKhi được duyệt, người duyệt chọn một tài sản Có sẵn (AVAILABLE) cùng danh mục, thuộc phòng ban của phiếu; tài sản chuyển sang Đang sử dụng (IN_USE) và do bạn giữ.\nNếu phiếu bị từ chối, trang Phiếu của tôi hiển thị lý do từ chối.",
+          "actions": [{ "label": "Mở Phiếu của tôi", "href": "/my-requests" }]
+        },
+        "MANAGER": {
+          "body": "Nhân viên gửi phiếu Cấp phát kèm danh mục và lý do; phiếu vào hàng chờ duyệt của phòng ban.\nBạn chỉ duyệt được phiếu thuộc phòng ban mình, tại trang Phiếu yêu cầu.\nKhi duyệt, chọn một tài sản Có sẵn (AVAILABLE) cùng danh mục, thuộc phòng ban của phiếu; tài sản chuyển sang Đang sử dụng (IN_USE).\nPhiếu không duyệt được nếu người gửi đã nghỉ hoặc đã chuyển phòng ban. Khi từ chối, phải nhập lý do.",
+          "actions": [{ "label": "Mở Phiếu yêu cầu", "href": "/requests" }]
+        },
+        "ADMIN": {
+          "body": "Nhân viên gửi phiếu Cấp phát kèm danh mục và lý do; phiếu thuộc phòng ban của người gửi.\nQuản trị viên duyệt được phiếu của mọi phòng ban, tại trang Phiếu yêu cầu.\nKhi duyệt, chọn một tài sản Có sẵn (AVAILABLE) cùng danh mục, thuộc phòng ban của phiếu; tài sản chuyển sang Đang sử dụng (IN_USE).\nPhiếu không duyệt được nếu người gửi đã nghỉ hoặc đã chuyển phòng ban. Khi từ chối, phải nhập lý do.",
+          "actions": [{ "label": "Mở Phiếu yêu cầu", "href": "/requests" }]
+        }
+      }
+    },
+    "return": {
+      "version": "2026-11-05",
+      "title": "Quy trình trả tài sản",
+      "roles": {
+        "USER": {
+          "body": "Vào trang Phiếu của tôi và tạo phiếu Trả tài sản, chọn tài sản bạn đang giữ và nhập lý do.\nChỉ trả được tài sản Đang sử dụng (IN_USE) do chính bạn giữ; mỗi tài sản chỉ có một phiếu trả đang chờ duyệt.\nNgười duyệt xác nhận đã nhận và ghi nhận tình trạng: còn tốt thì tài sản về Có sẵn (AVAILABLE), bị hỏng thì chuyển sang Hỏng, chờ sửa chữa (DAMAGED_PENDING_REPAIR). Sau đó bạn không còn giữ tài sản.",
+          "actions": [
+            { "label": "Mở Phiếu của tôi", "href": "/my-requests" },
+            { "label": "Xem tài sản đang giữ", "href": "/my-assets" }
+          ]
+        },
+        "MANAGER": {
+          "body": "Nhân viên gửi phiếu Trả tài sản cho tài sản Đang sử dụng do chính họ giữ; mỗi tài sản chỉ có một phiếu trả đang chờ duyệt.\nKhi duyệt phiếu của phòng ban mình, bạn phải xác nhận đã nhận tài sản và chọn tình trạng.\nTình trạng GOOD đưa tài sản về AVAILABLE; tình trạng DAMAGED đưa tài sản sang DAMAGED_PENDING_REPAIR. Người giữ được gỡ khỏi tài sản.",
+          "actions": [{ "label": "Mở Phiếu yêu cầu", "href": "/requests" }]
+        },
+        "ADMIN": {
+          "body": "Nhân viên gửi phiếu Trả tài sản cho tài sản Đang sử dụng do chính họ giữ; mỗi tài sản chỉ có một phiếu trả đang chờ duyệt.\nKhi duyệt, bạn phải xác nhận đã nhận tài sản và chọn tình trạng.\nTình trạng GOOD đưa tài sản về AVAILABLE; tình trạng DAMAGED đưa tài sản sang DAMAGED_PENDING_REPAIR. Người giữ được gỡ khỏi tài sản.",
+          "actions": [{ "label": "Mở Phiếu yêu cầu", "href": "/requests" }]
+        }
+      }
+    },
+    "damage_report": {
+      "version": "2026-11-05",
+      "title": "Quy trình báo hỏng tài sản",
+      "roles": {
+        "USER": {
+          "body": "Vào trang Phiếu của tôi và tạo phiếu Báo hỏng, chọn tài sản bạn đang giữ và mô tả lý do.\nChỉ báo hỏng được tài sản Đang sử dụng (IN_USE) do chính bạn giữ; mỗi tài sản chỉ có một phiếu báo hỏng đang chờ duyệt.\nKhi phiếu được duyệt, tài sản chuyển sang Hỏng, chờ sửa chữa (DAMAGED_PENDING_REPAIR).",
+          "actions": [
+            { "label": "Mở Phiếu của tôi", "href": "/my-requests" },
+            { "label": "Xem tài sản đang giữ", "href": "/my-assets" }
+          ]
+        },
+        "MANAGER": {
+          "body": "Nhân viên gửi phiếu Báo hỏng cho tài sản Đang sử dụng do chính họ giữ.\nKhi bạn duyệt phiếu của phòng ban mình, tài sản chuyển sang DAMAGED_PENDING_REPAIR.\nSau đó bạn có thể đưa tài sản đi bảo trì (UNDER_MAINTENANCE) hoặc đề xuất thanh lý.",
+          "actions": [{ "label": "Mở Phiếu yêu cầu", "href": "/requests" }]
+        },
+        "ADMIN": {
+          "body": "Nhân viên gửi phiếu Báo hỏng cho tài sản Đang sử dụng do chính họ giữ.\nKhi phiếu được duyệt, tài sản chuyển sang DAMAGED_PENDING_REPAIR.\nSau đó có thể đưa tài sản đi bảo trì (UNDER_MAINTENANCE) hoặc đề xuất thanh lý.",
+          "actions": [{ "label": "Mở Phiếu yêu cầu", "href": "/requests" }]
+        }
+      }
+    },
+    "roles": {
+      "version": "2026-11-05",
+      "title": "Vai trò và phạm vi trong AssetHub",
+      "roles": {
+        "USER": {
+          "body": "USER (nhân viên): xem tài sản mình đang giữ, lịch sử của chính mình và phiếu của mình; gửi phiếu cấp phát, trả và báo hỏng.\nMANAGER (quản lý phòng ban): xem tài sản và phiếu thuộc phòng ban mình; duyệt phiếu và thực hiện cấp phát, thu hồi, báo hỏng, bảo trì, đề xuất thanh lý trong phòng ban.\nADMIN (quản trị viên): xem toàn hệ thống; ngoài các việc trên còn tạo và sửa tài sản, điều chuyển và xác nhận thanh lý.",
+          "actions": [{ "label": "Xem tài sản đang giữ", "href": "/my-assets" }]
+        },
+        "MANAGER": {
+          "body": "USER (nhân viên): xem tài sản mình đang giữ, lịch sử của chính mình và phiếu của mình; gửi phiếu cấp phát, trả và báo hỏng.\nMANAGER (quản lý phòng ban): xem tài sản và phiếu thuộc phòng ban mình; duyệt phiếu và thực hiện cấp phát, thu hồi, báo hỏng, bảo trì, đề xuất thanh lý trong phòng ban. MANAGER không tạo hoặc sửa hồ sơ tài sản, không điều chuyển và không xác nhận thanh lý.\nADMIN (quản trị viên): xem toàn hệ thống; ngoài các việc trên còn tạo và sửa tài sản, điều chuyển và xác nhận thanh lý.",
+          "actions": [{ "label": "Mở danh sách tài sản", "href": "/assets" }]
+        },
+        "ADMIN": {
+          "body": "USER (nhân viên): xem tài sản mình đang giữ, lịch sử của chính mình và phiếu của mình; gửi phiếu cấp phát, trả và báo hỏng.\nMANAGER (quản lý phòng ban): xem tài sản và phiếu thuộc phòng ban mình; duyệt phiếu và thực hiện cấp phát, thu hồi, báo hỏng, bảo trì, đề xuất thanh lý trong phòng ban.\nADMIN (quản trị viên): xem toàn hệ thống; ngoài các việc trên còn tạo và sửa tài sản, điều chuyển và xác nhận thanh lý.",
+          "actions": [{ "label": "Mở danh sách tài sản", "href": "/assets" }]
+        }
+      }
+    },
+    "asset_statuses": {
+      "version": "2026-11-05",
+      "title": "Ý nghĩa trạng thái tài sản",
+      "roles": {
+        "USER": {
+          "body": "AVAILABLE — Có sẵn: chưa có người giữ.\nIN_USE — Đang sử dụng: có người giữ cùng phòng ban.\nDAMAGED_PENDING_REPAIR — Hỏng, chờ sửa chữa.\nUNDER_MAINTENANCE — Đang bảo trì.\nPENDING_DISPOSAL — Chờ thanh lý: đã được đề xuất, chờ quản trị viên xác nhận.\nDISPOSED — Đã thanh lý: không còn sử dụng.",
+          "actions": [{ "label": "Xem tài sản đang giữ", "href": "/my-assets" }]
+        },
+        "MANAGER": {
+          "body": "AVAILABLE — Có sẵn: chưa có người giữ.\nIN_USE — Đang sử dụng: có người giữ cùng phòng ban.\nDAMAGED_PENDING_REPAIR — Hỏng, chờ sửa chữa.\nUNDER_MAINTENANCE — Đang bảo trì; khi hoàn tất, tài sản về IN_USE nếu vẫn có người giữ, nếu không thì về AVAILABLE.\nPENDING_DISPOSAL — Chờ thanh lý: đề xuất được từ AVAILABLE, DAMAGED_PENDING_REPAIR hoặc UNDER_MAINTENANCE, chờ quản trị viên xác nhận.\nDISPOSED — Đã thanh lý: không còn sử dụng.",
+          "actions": [{ "label": "Mở danh sách tài sản", "href": "/assets" }]
+        },
+        "ADMIN": {
+          "body": "AVAILABLE — Có sẵn: chưa có người giữ.\nIN_USE — Đang sử dụng: có người giữ cùng phòng ban.\nDAMAGED_PENDING_REPAIR — Hỏng, chờ sửa chữa.\nUNDER_MAINTENANCE — Đang bảo trì; khi hoàn tất, tài sản về IN_USE nếu vẫn có người giữ, nếu không thì về AVAILABLE.\nPENDING_DISPOSAL — Chờ thanh lý: đề xuất được từ AVAILABLE, DAMAGED_PENDING_REPAIR hoặc UNDER_MAINTENANCE, chờ quản trị viên xác nhận.\nDISPOSED — Đã thanh lý: không còn sử dụng.",
+          "actions": [{ "label": "Mở danh sách tài sản", "href": "/assets" }]
+        }
+      }
+    }
+  }
+}
