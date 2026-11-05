@@ -60,6 +60,7 @@ staticfiles/
 *.sql
 !**/schema.sql
 !scripts/reset_d1_test_db.sql
+!backend/assethub_api/backends/d1/sql/0002_week5_assistant.sql
 *.dump
 dumps/
 backups/

@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'apps.requests.apps.RequestsConfig',
     'apps.reports.apps.ReportsConfig',
     'apps.ai.apps.AiConfig',
+    'apps.assistant.apps.AssistantConfig',
 ]
 
 MIDDLEWARE = [

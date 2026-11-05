@@ -21,7 +21,9 @@ def auth_client_for(user):
 
 
 @pytest.fixture(autouse=True)
-def clean_ai_service_state():
+def clean_ai_service_state(settings):
+    settings.AI_WORKER_URL = "http://127.0.0.1:8787"
+    settings.AI_SERVICE_TOKEN = "test-ai-service-token"
     AiProxyService.reset_circuit_breaker()
     AiProxyService.reset_rate_limit()
     yield

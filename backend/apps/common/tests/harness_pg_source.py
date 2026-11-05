@@ -309,7 +309,7 @@ class PGSourceHarness:
                 )
 
         cmd = [
-            "docker", "run", "-d",
+            "docker", "run", "-d", "--pull=never",
             "--name", self.container_name,
             "--label", f"assethub.run_id={self.run_id}",
             "--label", "assethub.owner=rehearsal",
