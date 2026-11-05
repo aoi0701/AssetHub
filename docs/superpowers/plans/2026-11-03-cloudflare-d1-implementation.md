@@ -698,9 +698,12 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
     - Đặt mặc định credentials R2 và AI service token rỗng (`R2_ACCESS_KEY_ID=`, `R2_SECRET_ACCESS_KEY=`, `AI_SERVICE_TOKEN=`) để kích hoạt chế độ unconfigured/skip an toàn.
     - `frontend/public/_headers`: Xóa `https://api.assethub.example.com` và `https://*.workers.dev` khỏi CSP `connect-src`.
     - Viết regression test thực tế cho `CorsMiddleware` với RequestFactory trong `backend/tests/test_cors.py` (chứng minh chặn origin ngoài project và prefix giả).
-  - **Coordinator & Agent C:**
-    - Cập nhật Section 25 trong `docs/progress-report.md`.
-    - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review`.
+  - **Sửa 2 Đoạn Xử Lý Secret Trong Runbook (Review 5dc68ce):**
+    - Đoạn sinh `DJANGO_SECRET_KEY`: Phân biệt thiếu/rỗng/placeholder với key tùy chỉnh; chỉ sinh khi cần; bảo tồn nguyên vẹn byte-for-byte key đã cấu hình khi chạy lại; không in ra terminal.
+    - Đoạn Cloud Smoke: Nạp `deploy/.env.demo` qua `dotenv_values`, truyền đồng thời `D1_BRIDGE_SECRET_TOKEN` (runtime settings) và `D1_BRIDGE_TOKEN` (D1Client); xác thực token >= 32 ký tự và URL https trước khi khởi chạy pytest; không để lộ token vào command line/history.
+  - **Coordinator & Agent B Review:**
+    - Cập nhật Section 26 trong `docs/progress-report.md`.
+    - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review` và kiểm chứng trên môi trường giả lập temp.
     - Chốt xác minh qua `superpowers:verification-before-completion`, commit local và báo cáo Codex duyệt bước Cloud.
 
 ---

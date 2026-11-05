@@ -54,15 +54,41 @@ Kết quả khảo sát tài nguyên thực tế qua Cloudflare OAuth (Account: 
 
    # Tạo DJANGO_SECRET_KEY an toàn và ghi trực tiếp vào file (KHÔNG in bí mật ra màn hình terminal hay shell history):
    python3 -c '
-   import secrets, re
-   with open("deploy/.env.demo", "r") as f:
-       content = f.read()
-   if "insecure-default-secret-key" in content or "DJANGO_SECRET_KEY=" in content:
-       key = secrets.token_urlsafe(50)
-       content = re.sub(r"DJANGO_SECRET_KEY=.*", f"DJANGO_SECRET_KEY={key}", content)
-       with open("deploy/.env.demo", "w") as f:
-           f.write(content)
-   '
+import os, re, secrets, sys
+
+env_path = "deploy/.env.demo"
+if not os.path.exists(env_path):
+    sys.exit(f"File not found: {env_path}")
+
+with open(env_path, "r", encoding="utf-8") as f:
+    content = f.read()
+
+match = re.search(r"^DJANGO_SECRET_KEY=(.*?)(\r?)$", content, flags=re.MULTILINE)
+placeholders = {
+    "",
+    "change-this-to-a-secure-random-64-character-string-for-demo!",
+    "insecure-default-secret-key-for-dev-only",
+}
+
+def should_replace(val):
+    v = val.strip().strip("\"'\''")
+    return v in placeholders or v.startswith("placeholder")
+
+if match:
+    raw_val = match.group(1)
+    if should_replace(raw_val):
+        new_key = secrets.token_urlsafe(50)
+        eol = match.group(2)
+        content = content[:match.start()] + f"DJANGO_SECRET_KEY={new_key}{eol}" + content[match.end():]
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write(content)
+else:
+    new_key = secrets.token_urlsafe(50)
+    sep = "\n" if content and not content.endswith("\n") else ""
+    content = content + f"{sep}DJANGO_SECRET_KEY={new_key}\n"
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write(content)
+'
    ```
    *Lưu ý bảo toàn bí mật:* Điền `D1_BRIDGE_SECRET_TOKEN` trong `deploy/.env.demo` bằng token đã được deploy trên Worker hiện tại; không tự ý rotate bí mật trừ khi có yêu cầu bảo mật cụ thể.
 
@@ -160,12 +186,40 @@ Kết quả khảo sát tài nguyên thực tế qua Cloudflare OAuth (Account: 
 11. **Thực thi Cloud Smoke Test**:
     ```bash
     cd /home/truong/Downloads/AssetHub
-    RUN_CLOUD_SMOKE=1 \
     CLOUD_API_BASE_URL="https://asset-demo-xyz.trycloudflare.com" \
-    D1_BRIDGE_URL="https://assethub-test-worker.hnhoa494-assethub.workers.dev" \
-    D1_BRIDGE_TOKEN="<token-lay-tu-.env.demo>" \
-    USE_D1_DATABASE=True \
-    backend/.venv/bin/pytest backend/tests/e2e/test_d1_cloud_smoke.py -m cloud_smoke -v -s
+    backend/.venv/bin/python -c '
+import os, sys, subprocess, dotenv
+
+env_vals = dotenv.dotenv_values("deploy/.env.demo")
+bridge_url = (env_vals.get("D1_BRIDGE_URL") or os.environ.get("D1_BRIDGE_URL") or "").strip()
+token = (env_vals.get("D1_BRIDGE_SECRET_TOKEN") or os.environ.get("D1_BRIDGE_SECRET_TOKEN") or "").strip()
+api_url = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else os.environ.get("CLOUD_API_BASE_URL") or env_vals.get("CLOUD_API_BASE_URL") or "").strip()
+
+if not bridge_url or not bridge_url.startswith("https://"):
+    sys.exit("Error: D1_BRIDGE_URL must be set and start with https://")
+
+if not token or len(token) < 32 or token.startswith("placeholder"):
+    sys.exit("Error: D1_BRIDGE_SECRET_TOKEN must be set, >= 32 chars, and not start with placeholder")
+
+if not api_url or not api_url.startswith("https://"):
+    sys.exit("Error: CLOUD_API_BASE_URL must be provided and start with https://")
+
+env = os.environ.copy()
+env.update({
+    "USE_D1_DATABASE": "True",
+    "RUN_CLOUD_SMOKE": "1",
+    "CLOUD_API_BASE_URL": api_url,
+    "D1_BRIDGE_URL": bridge_url,
+    "D1_BRIDGE_SECRET_TOKEN": token,
+    "D1_BRIDGE_TOKEN": token,
+})
+
+res = subprocess.run(
+    ["backend/.venv/bin/pytest", "backend/tests/e2e/test_d1_cloud_smoke.py", "-m", "cloud_smoke", "-v", "-s"],
+    env=env,
+)
+sys.exit(res.returncode)
+'
     ```
     - Xác nhận toàn bộ 5 bước HTTP cốt lõi (Health, Auth JWT, Asset CRUD, Last Admin Trigger, Teardown Ownership) PASSED 100%.
     - Nếu R2 chưa kích hoạt, các kiểm tra liên quan đến R2 sẽ tự động skip an toàn (PASSED/SKIPPED).

@@ -1003,6 +1003,33 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
    - Hoàn tác CSDL D1 bằng Cloudflare D1 Time Travel: `$WRANGLER d1 time-travel restore assethub-test-d1 --bookmark=<bookmark>` (hoặc `--timestamp=<RFC3339>`), kết hợp file SQL export làm offline safety backup.
    - Stack PostgreSQL production 5433/8000 hoàn toàn nguyên vẹn với RPO = 0s.
 
+---
+
+## 26. Nghiệm Thu Sửa 2 Đoạn Xử Lý Secret Trong Runbook (Review 5dc68ce)
+
+- **Thời điểm:** 2026-11-05 15:20 (GMT+7)
+- **Trạng thái:** **Sửa hoàn tất 2 đoạn xử lý secret trong Runbook — Sẵn sàng cho Codex kiểm duyệt.**
+- **Ranh giới an toàn:**
+  - Zero cloud mutation, zero live Workers AI calls, zero public Tunnel, zero billing activation.
+  - Zero package install (`npm`, `pip`, `uv`), zero Docker image pull/build.
+  - Không sửa file `.env` đang dùng, không chạm stack phục vụ (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+  - Bảo lưu nguyên trạng 2 tài liệu Tuần 5 untracked thuộc phiên khác.
+  - 1 tab AGY, 0 worktree, 0 push/merge trên nhánh `feat/cloudflare-d1`.
+
+### 26.1. Chi Tiết Khắc Phục 2 Đoạn Executable Runbook
+1. **Sinh `DJANGO_SECRET_KEY` An Toàn Khi Chạy Lại (Step 2):**
+   - Loại bỏ điều kiện lỗi `"insecure-default-secret-key" in content or "DJANGO_SECRET_KEY=" in content`.
+   - Bóc tách chính xác giá trị thực tế của `DJANGO_SECRET_KEY` trong file env; phân biệt rõ giá trị rỗng/thiếu/placeholder với key tùy chỉnh.
+   - Chỉ tự động sinh khóa ngẫu nhiên khi giá trị là rỗng hoặc khớp chính xác danh sách placeholder đã biết (`change-this-to-a-secure-random-64-character-string-for-demo!`, `insecure-default-secret-key-for-dev-only`, hoặc tiền tố `placeholder`).
+   - Bảo toàn nguyên vẹn từng byte khóa bí mật tùy chỉnh đã cấu hình; chạy lặp lại nhiều lần không bao giờ xoay vòng khóa ngoài ý muốn.
+   - Ghi trực tiếp vào file cục bộ, tuyệt đối không in bí mật ra màn hình terminal hay shell history.
+2. **Khởi Chạy Cloud Smoke Kín Đáo & Đầy Đủ Biến Môi Trường (Step 11):**
+   - Thay thế lệnh thủ công bằng Python launcher sử dụng `backend/.venv/bin/python` nạp cấu hình kín từ `deploy/.env.demo` qua `dotenv_values`, không echo token ra terminal.
+   - Truyền đồng thời cả hai biến môi trường bắt buộc: `D1_BRIDGE_SECRET_TOKEN` (yêu cầu bởi Django runtime `settings.py`) và `D1_BRIDGE_TOKEN` (yêu cầu bởi `D1Client`).
+   - Kiểm tra xác thực trước khi chạy: `D1_BRIDGE_SECRET_TOKEN` phải >= 32 ký tự và không phải placeholder; `D1_BRIDGE_URL` và `CLOUD_API_BASE_URL` phải là URL https hợp lệ.
+   - Chuyển tiếp mã thoát `res.returncode` trực tiếp ra shell, không nuốt lỗi test.
+
+
 
 
 
