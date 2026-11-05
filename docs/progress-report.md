@@ -1107,3 +1107,71 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 2. **Giới hạn Quick Tunnel:** Quick Tunnel `away-server-pot-catalogue.trycloudflare.com` là đường truyền tạm thời. Nếu tiến trình `cloudflared` bị dừng hoặc máy khởi động lại, URL tunnel sẽ thay đổi và Pages frontend cần được build lại với URL mới.
 3. **Vận hành Tunnel:** Tiến trình tunnel đang chạy nền dưới quyền người dùng. Để dừng: tắt tiến trình `cloudflared` hoặc dừng task nền.
 4. **Trạng thái Git:** Giữ nguyên commit cục bộ, không push/merge nhánh `feat/cloudflare-d1`, bảo lưu tài liệu Tuần 5 untracked.
+
+
+---
+
+## 28. Nghiệm Thu Sửa Lớp AI Worker, Khắc Phục Triệt Để INVALID_SUGGESTION & Live Cloud Verification
+
+- **Thời điểm:** 2026-11-05 16:25 (GMT+7)
+- **Trạng thái:** **Sửa lỗi AI Worker thành công 100%, Live Cloud Inference trả về HTTP 200 & ghi nhận D1 — Sẵn sàng cho Codex kiểm duyệt.**
+- **Ranh giới an toàn tuyệt đối:**
+  - Giữ nguyên Pages frontend (`assethub-97m.pages.dev`), demo backend container (port 8001), Quick Tunnel (`away-server-pot-catalogue.trycloudflare.com`) và core stack PostgreSQL (8000/5433).
+  - Tối đa đúng 1 lượt inference bổ sung trong hạn mức Free đã xác minh, 0 vi phạm quota.
+  - Chưa kích hoạt R2 / thẻ thanh toán / billing (Error 10042).
+  - Không push, không merge, bảo lưu 2 file Tuần 5 untracked.
+
+### 28.1. Phân Tích Nguyên Nhân Gốc Rễ (Root Cause Analysis)
+1. **Prompt template thiếu ràng buộc chặt chẽ:** Template cũ `{"suggested_category_id": <id>, "explanation": "..."}` dùng placeholder `<id>` trừu tượng, không yêu cầu `suggested_category_name` và không cấm markdown fence. LLaMA 3.1 8B sinh chuỗi dạng `"ID 1"`, đưa tên danh mục vào ID hoặc kèm markdown fence ` ```json ... ``` `.
+2. **Parser JSON mong manh:** Regex cũ `\{[\s\S]*\}` tham lam (greedy) bị lỗi `SyntaxError` khi model sinh preamble/postscript hoặc trailing commas `{"key": "val",}`.
+3. **`parsePositiveInteger` thiếu hỗ trợ định dạng tiền tố:** Chỉ nhận dạng regex `^\d+$`, từ chối các định dạng phổ biến như `"ID 1"`, `"ID: 1"`.
+4. **Thiếu tham số điều khiển sinh:** Gọi `env.AI.run` mặc định không có `temperature: 0.1` hay `max_tokens`, làm tăng tính ngẫu nhiên (chattiness) của model.
+
+### 28.2. Giải Pháp Khắc Phục Đúng Lớp (`cloudflare-worker/src/index.js`)
+1. **Chuẩn hóa Prompt & Ràng Buộc Kiểu Dữ Liệu:**
+   - Cung cấp ví dụ cụ thể số nguyên `${sampleCat.id}` (ví dụ: `1`) và tên `${sampleCat.name}` (`Laptop`).
+   - Yêu cầu bắt buộc trả về cả `suggested_category_id` lẫn `suggested_category_name`.
+   - Cấm markdown code block và văn bản thừa.
+2. **Tham Số Nhiệt Độ & Giới Hạn Token:**
+   - Bổ sung `temperature: 0.1` (deterministic output) và `max_tokens: 256` trong lệnh gọi `env.AI.run`.
+3. **Parser Bóc Tách Đa Tầng:**
+   - Tự động bóc tách markdown fences (` ```json ` và ` ``` `).
+   - Bóc tách theo cặp ngoặc nhọn `{` đầu tiên và `}` cuối cùng hợp lệ.
+   - Làm sạch trailing commas trước `JSON.parse`.
+4. **Mở Rộng `parsePositiveInteger` & Name Fallback:**
+   - Hỗ trợ regex tiền tố `^ID\s*[:#-]?\s*(\d+)$` an toàn (vẫn từ chối float, infinity, bool, array).
+   - Hỗ trợ đa key fallback (`suggested_category_name`, `category_name`, `suggested_category`, `category`, `name`).
+   - So khớp danh mục không phân biệt hoa thường và không dấu tiếng Việt (`normalize('NFD')`).
+
+### 28.3. Kết Quả Kiểm Thử Unit Test Cục Bộ
+- Test suite: `cloudflare-worker/tests/worker.test.js`
+- Bổ sung 5 test case mới (markdown fence, conversational preamble/postscript, ID prefix `"ID 1"`, trailing comma, accent-insensitive fallback).
+- Kết quả: **26 passed in 361ms (100% PASS)**.
+- Backend unit test: `backend/tests/test_ai_proxy.py` đạt **32 passed in 4.51s (100% PASS)**.
+
+### 28.4. Triển Khai Cloud & Kết Quả Suy Luận Live Thực Tế (Agent B)
+1. **Deploy Worker mới:**
+   - Version ID: `9c636cf0-3147-4839-8dbb-1dac84185730`
+   - Trigger URL: `https://assethub-ai-worker.hnhoa494-assethub.workers.dev`
+   - Model bind: `@cf/meta/llama-3.1-8b-instruct-fp8`
+2. **Lượt suy luận duy nhất bổ sung (`req-live-ai-002`):**
+   - Payload: `Dell Latitude 7420 Laptop` | Danh mục: `[{"id": 1, "name": "Laptop"}, {"id": 2, "name": "Monitor"}]`
+   - Phản hồi HTTP: **HTTP/2 200 OK**
+   - Response body:
+     ```json
+     {
+       "request_id": "req-live-ai-002",
+       "suggested_category_id": 1,
+       "suggested_category_name": "Laptop",
+       "explanation": "Là một chiếc laptop dành cho công việc, được sử dụng bởi kỹ sư với 16GB RAM",
+       "log_saved": true
+     }
+     ```
+3. **Đối soát CSDL D1 thực tế (`ai_suggestion_logs`):**
+   - Query remote D1 xác nhận bản ghi tồn tại:
+     - `id`: `req-live-ai-002`
+     - `asset_name`: `Dell Latitude 7420 Laptop`
+     - `suggested_category_id`: `1`
+     - `suggested_category_name`: `Laptop`
+     - `model`: `@cf/meta/llama-3.1-8b-instruct-fp8`
+4. **Bảo toàn ranh giới:** Dừng ngay sau 1 request duy nhất, 0 gọi thêm request suy luận nào khác.

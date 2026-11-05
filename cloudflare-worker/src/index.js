@@ -8,6 +8,11 @@ function parsePositiveInteger(val) {
       const num = Number(trimmed);
       return (Number.isSafeInteger(num) && num > 0) ? num : null;
     }
+    const match = trimmed.match(/^ID\s*[:#-]?\s*(\d+)$/i);
+    if (match) {
+      const num = Number(match[1]);
+      return (Number.isSafeInteger(num) && num > 0) ? num : null;
+    }
   }
   return null;
 }
@@ -83,10 +88,22 @@ export default {
     }
 
     const categoryListStr = categories
-      .map((c) => `- ID ${c.id}: ${c.name}`)
+      .map((c) => `- ID ${c.id}: "${c.name}"`)
       .join('\n');
 
-    const systemPrompt = `Bạn là trợ lý phân loại tài sản thiết bị. Hãy chọn danh mục phù hợp nhất từ danh sách sau:\n${categoryListStr}\nChỉ trả về JSON hợp lệ theo đúng cấu trúc: {"suggested_category_id": <id>, "explanation": "<giải thích ngắn gọn>"}`;
+    const sampleCat = categories[0] || { id: 1, name: 'Default' };
+    const systemPrompt = `Bạn là trợ lý AI chuyên phân loại tài sản thiết bị.
+Nhiệm vụ: Chọn đúng 1 danh mục phù hợp nhất từ danh sách sau:
+${categoryListStr}
+
+Yêu cầu bắt buộc:
+1. "suggested_category_id": Số nguyên ID danh mục phù hợp nhất (ví dụ: ${sampleCat.id}).
+2. "suggested_category_name": Tên danh mục tương ứng (ví dụ: "${sampleCat.name}").
+3. "explanation": Giải thích ngắn gọn (tối đa 50 từ).
+4. Chỉ trả về một JSON object hợp lệ duy nhất, không kèm markdown code block, không thêm lời mở đầu hay kết luận.
+
+Ví dụ định dạng:
+{"suggested_category_id": ${sampleCat.id}, "suggested_category_name": "${sampleCat.name}", "explanation": "Giải thích phù hợp"}`;
     const userPrompt = `Tên tài sản: ${name}\nMô tả: ${description || 'Không có mô tả'}`;
 
     const model = env.AI_MODEL || '@cf/meta/llama-3.1-8b-instruct-fp8';
@@ -97,6 +114,8 @@ export default {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
+        temperature: 0.1,
+        max_tokens: 256,
       });
     } catch (err) {
       const errStr = `${String(err)} ${err?.message || ''}`;
@@ -149,21 +168,50 @@ export default {
     ) {
       parsedObj = aiOutput.response;
     } else {
-      const rawResponse =
+      let rawResponse =
         typeof aiOutput === 'string'
           ? aiOutput
-          : aiOutput?.response || (typeof aiOutput === 'object' ? JSON.stringify(aiOutput) : '');
+          : typeof aiOutput?.response === 'string'
+            ? aiOutput.response
+            : typeof aiOutput === 'object'
+              ? JSON.stringify(aiOutput)
+              : '';
 
+      let text = rawResponse.trim();
+      // 1. Strip markdown code fence ```json ... ``` or ``` ... ```
+      text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+      // 2. Direct JSON parse
       try {
-        const jsonMatch = typeof rawResponse === 'string' ? rawResponse.match(/\{[\s\S]*\}/) : null;
-        parsedObj = jsonMatch ? JSON.parse(jsonMatch[0]) : (typeof rawResponse === 'string' ? JSON.parse(rawResponse) : null);
+        parsedObj = JSON.parse(text);
       } catch {
-        // JSON parsing fallback
+        // 3. Extract outermost JSON object
+        const firstBrace = text.indexOf('{');
+        const lastBrace = text.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          const candidate = text.slice(firstBrace, lastBrace + 1);
+          try {
+            parsedObj = JSON.parse(candidate);
+          } catch {
+            // 4. Strip trailing commas
+            try {
+              const sanitized = candidate.replace(/,\s*([\}\]])/g, '$1');
+              parsedObj = JSON.parse(sanitized);
+            } catch {
+              // Extraction failed
+            }
+          }
+        }
       }
     }
 
     if (parsedObj && typeof parsedObj === 'object') {
-      const rawId = parsedObj?.suggested_category_id ?? parsedObj?.category_id;
+      const rawId =
+        parsedObj?.suggested_category_id ??
+        parsedObj?.category_id ??
+        parsedObj?.id ??
+        parsedObj?.category?.id ??
+        parsedObj?.suggested_category?.id;
       suggestedId = parsePositiveInteger(rawId);
       if (parsedObj?.explanation) {
         explanation = String(parsedObj.explanation);
@@ -176,18 +224,37 @@ export default {
     }
     if (!matchedCategory && parsedObj && typeof parsedObj === 'object') {
       const catNameProp =
-        parsedObj.suggested_category_name ?? parsedObj.category_name;
+        parsedObj.suggested_category_name ??
+        parsedObj.category_name ??
+        parsedObj.suggested_category ??
+        parsedObj.category ??
+        parsedObj.name ??
+        parsedObj.category?.name ??
+        (typeof parsedObj.suggested_category_id === 'string' &&
+        !/^\d+$/.test(parsedObj.suggested_category_id.trim()) &&
+        !/^ID\s*[:#-]?\s*\d+$/i.test(parsedObj.suggested_category_id.trim())
+          ? parsedObj.suggested_category_id
+          : null);
       if (
         catNameProp !== undefined &&
         catNameProp !== null &&
         typeof catNameProp === 'string' &&
         catNameProp.trim() !== ''
       ) {
+        const cleanProp = catNameProp.trim().toLowerCase();
         matchedCategory = categories.find(
           (c) =>
             typeof c.name === 'string' &&
-            c.name.trim().toLowerCase() === String(catNameProp).trim().toLowerCase()
+            c.name.trim().toLowerCase() === cleanProp
         );
+        if (!matchedCategory) {
+          matchedCategory = categories.find(
+            (c) =>
+              typeof c.name === 'string' &&
+              c.name.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D') ===
+              cleanProp.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D')
+          );
+        }
       }
     }
 

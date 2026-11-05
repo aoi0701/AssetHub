@@ -579,4 +579,138 @@ describe('Cloudflare AI Worker', () => {
     expect(data.suggested_category_name).toBe('Laptop');
     expect(env.DB.prepare).toHaveBeenCalled();
   });
+
+  it('handles AI output wrapped in markdown code fence with 200', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: '```json\n{\n  "suggested_category_id": 1,\n  "suggested_category_name": "Laptop",\n  "explanation": "Dell Latitude là máy tính xách tay."\n}\n```',
+    });
+
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    env.DB.prepare = vi.fn().mockReturnValue({
+      bind: vi.fn().mockReturnValue({ run: runMock }),
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.suggested_category_id).toBe(1);
+    expect(data.suggested_category_name).toBe('Laptop');
+  });
+
+  it('handles AI output with conversational preamble and postscript with 200', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: 'Dưới đây là kết quả phân loại cho bạn:\n{"suggested_category_id": 1, "explanation": "Phù hợp"}\nHy vọng câu trả lời này giúp ích cho bạn!',
+    });
+
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    env.DB.prepare = vi.fn().mockReturnValue({
+      bind: vi.fn().mockReturnValue({ run: runMock }),
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.suggested_category_id).toBe(1);
+  });
+
+  it('handles AI output with ID prefix format like "ID 1" with 200', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: JSON.stringify({
+        suggested_category_id: 'ID 1',
+        explanation: 'ID prefix format test',
+      }),
+    });
+
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    env.DB.prepare = vi.fn().mockReturnValue({
+      bind: vi.fn().mockReturnValue({ run: runMock }),
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.suggested_category_id).toBe(1);
+    expect(data.suggested_category_name).toBe('Laptop');
+  });
+
+  it('handles AI output with trailing comma with 200', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: '{\n  "suggested_category_id": 1,\n  "explanation": "Trailing comma test",\n}',
+    });
+
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    env.DB.prepare = vi.fn().mockReturnValue({
+      bind: vi.fn().mockReturnValue({ run: runMock }),
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.suggested_category_id).toBe(1);
+  });
+
+  it('matches category by accent-insensitive name fallback with 200', async () => {
+    env.AI.run = vi.fn().mockResolvedValue({
+      response: JSON.stringify({
+        suggested_category_name: 'Man hinh',
+        explanation: 'Màn hình hiển thị không dấu',
+      }),
+    });
+
+    const runMock = vi.fn().mockResolvedValue({ success: true });
+    env.DB.prepare = vi.fn().mockReturnValue({
+      bind: vi.fn().mockReturnValue({ run: runMock }),
+    });
+
+    const req = new Request('http://localhost/api/suggest-category', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(samplePayload),
+    });
+
+    const res = await worker.fetch(req, env);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.suggested_category_id).toBe(2);
+    expect(data.suggested_category_name).toBe('Màn hình');
+  });
 });
