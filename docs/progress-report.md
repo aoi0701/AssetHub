@@ -1258,12 +1258,12 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 
 ## 30. Nghiệm Thu Hoàn Tất Cloudflare R2 Object Storage & Khép Lại Toàn Bộ Hạng Mục Tuần 4
 
-- **Thời điểm:** 2026-11-05 18:05 (GMT+7)
-- **Trạng thái:** **Cloudflare R2 PASS 100% — Toàn bộ hạng mục Cloudflare Tuần 4 (D1 + AI Worker + Pages + Tunnel + R2) đã hoàn thành.**
+- **Thời điểm:** 2026-11-05 18:45 (GMT+7)
+- **Trạng thái:** **Cloudflare R2 PASS 100% — Toàn bộ hạng mục Cloudflare Tuần 4 (D1 + AI Worker + Pages + Tunnel + R2) đã được Codex chính thức nghiệm thu và duyệt chốt.**
 - **Ranh giới an toàn:**
   - Không rò rỉ secret token/credentials trong git history (biến môi trường lưu tại `deploy/.env.demo` được gitignore chặt chẽ).
-  - Không push, không merge nhánh `feat/cloudflare-d1`.
-  - Giữ nguyên 2 file Tuần 5 untracked.
+  - Push duy nhất nhánh `feat/cloudflare-d1` lên origin theo phê duyệt của Codex, không merge.
+  - Giữ nguyên 2 file Tuần 5 untracked, không đụng worktree Claude Tuần 5.
 
 ### 30.1. Kích Hoạt Dịch Vụ & Khởi Tạo Tài Nguyên R2
 1. **Kích hoạt tài khoản:** Người dùng đã kích hoạt R2 trên Cloudflare Dashboard thành công (mã lỗi Cloudflare Error `10042` đã giải quyết triệt để).
@@ -1312,10 +1312,11 @@ Thực thi kiểm chứng HTTP thực tế qua Cloudflare Quick Tunnel (`https:/
    - **Kiểm tra tính riêng tư (Private ACL Check):** Truy cập URL gốc đã loại bỏ chuỗi tham số chữ ký SigV4 -> **HTTP 400 Bad Request / Access Denied** (chứng minh tệp hoàn toàn riêng tư, không bị lộ ra public).
    - **Dọn dẹp an toàn (Teardown Cleanup):** Xóa object khỏi R2 bucket (`exists = False`). Xóa fixture run_id (Asset 83, Category 69, Department 460, User 87), D1 leftover: `0 records` còn lại.
 
-### 30.5. Phạm Vi & Hạn Chế Còn Lại (Ponytail Boundaries)
+### 30.5. Phạm Vi & Giới Hạn Nghiệm Thu (Ponytail Boundaries)
 - **Đã kiểm chứng:** Luồng nghiệp vụ tải lên, ký URL SigV4, tải về đối soát byte, lưu vết D1, bảo mật private ACL, dọn dẹp fixture qua HTTP API và Cloudflare R2 thực tế.
-- **Chưa kiểm chứng trong đợt này:** Thao tác đính kèm tệp trực tiếp từ giao diện người dùng (UI frontend). Giao diện UI sẽ được tích hợp và kiểm thử toàn diện tại Tuần 5.
+- **Giới hạn nghiệm thu:** Nghiệm thu kỹ thuật trọn vẹn ở tầng backend, HTTP API, cơ sở dữ liệu Cloudflare D1 và lưu trữ Cloudflare R2. Không đánh đồng kiểm thử HTTP là đã kiểm thử UI frontend; phần tương tác giao diện người dùng (UI frontend) đối với attachments được phân định rõ để tích hợp trong Tuần 5.
 - **Rủi ro còn lại:** Quick tunnel `trycloudflare.com` là tunnel thử nghiệm tạm thời (sẽ thay đổi URL nếu tiến trình bị khởi động lại). Presigned URL hết hạn sau 900 giây (15 phút), phía client cần xin cấp lại URL mới khi phiên làm việc kéo dài.
+- **Duyệt chốt:** Codex đã chính thức duyệt nghiệm thu toàn bộ các hạng mục Tuần 4.
 
 ### 30.6. Tổng Kết Toàn Bộ Hạ Tầng Cloudflare Tuần 4
 - **Pages Frontend:** `https://assethub-97m.pages.dev` (SPA login, dashboard hoạt động mượt mà).
