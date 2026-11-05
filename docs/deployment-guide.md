@@ -2,6 +2,8 @@
 
 Tài liệu hướng dẫn chi tiết quy trình chuẩn bị cấu hình, đối chiếu tài nguyên thực tế và các bước triển khai hệ thống **AssetHub** theo mô hình Hybrid Edge-Core: Backend Origin phục vụ tại cổng độc lập 8001 qua Cloudflare Tunnel kết hợp Cloudflare D1, Workers AI, R2 và Pages.
 
+Mọi lệnh trong tài liệu này mặc định thực thi từ thư mục gốc repository: `/home/truong/Downloads/AssetHub`.
+
 ---
 
 ## 1. Bảng Đối Chiếu Tài Nguyên Thực Tế & Trạng Thái Cloudflare
@@ -12,13 +14,13 @@ Kết quả khảo sát tài nguyên thực tế qua Cloudflare OAuth (Account: 
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Cloudflare Account** | PRESENT | `Hnhoa494@gmail.com's Account`<br>`5e76c2bf4e09587a010d31ea416ec8d3` | — | `deploy/.env.demo.example` | Token OAuth Wrangler có sẵn |
 | **Worker Subdomain** | PRESENT | `hnhoa494-assethub` | `*.hnhoa494-assethub.workers.dev` | `wrangler.toml` (tự động) | — |
-| **D1 Database** | PRESENT | `assethub-test-d1`<br>UUID: `3850e3a1-7c57-42f4-afd6-1fa1655bbcf1` | — | `cloudflare-worker/bridge/wrangler.toml`<br>`cloudflare-worker/wrangler.toml` | — *(Dữ liệu hiện có: 3 users, 5 depts, 2 assets — PHẢI GIỮ)* |
-| **D1 Bridge Worker** | PRESENT | `assethub-test-worker` | `https://assethub-test-worker.hnhoa494-assethub.workers.dev` | `cloudflare-worker/bridge/wrangler.toml` | `D1_BRIDGE_SECRET_TOKEN` (khớp `BRIDGE_SECRET_TOKEN` trên Worker) |
-| **AI Worker** | MISSING | `assethub-ai-worker` *(dự kiến)* | `https://assethub-ai-worker.hnhoa494-assethub.workers.dev` | `cloudflare-worker/wrangler.toml` | `AI_SERVICE_TOKEN` (tối thiểu 32 ký tự, nạp lúc deploy) |
-| **R2 Storage** | BLOCKED | `assethub-attachments` *(dự kiến)* | `https://5e76c2bf4e09587a010d31ea416ec8d3.r2.cloudflarestorage.com` | `deploy/.env.demo.example` | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`<br>*(Cần kích hoạt R2 trên Cloudflare Dashboard)* |
-| **Demo Backend Origin**| READY (LOCAL)| Container `assethub-demo-backend`<br>(Cổng 8001, mount `ro`, pull `never`)| `http://127.0.0.1:8001` | `deploy/docker-compose.demo.yml`<br>`deploy/.env.demo` | `DJANGO_SECRET_KEY` (sinh ngẫu nhiên 64 ký tự) |
+| **D1 Database** | PRESENT | `assethub-test-d1`<br>UUID: `3850e3a1-7c57-42f4-afd6-1fa1655bbcf1` | — | `cloudflare-worker/bridge/wrangler.toml`<br>`cloudflare-worker/wrangler.toml` | — *(Dữ liệu hiện có: 3 users, 5 departments, 2 assets — chứng minh data đã tồn tại và PHẢI BẢO TỒN; không tự ý xóa/reset)* |
+| **D1 Bridge Worker** | PRESENT | `assethub-test-worker` | `https://assethub-test-worker.hnhoa494-assethub.workers.dev` | `cloudflare-worker/bridge/wrangler.toml` | `D1_BRIDGE_SECRET_TOKEN` *(Khớp `BRIDGE_SECRET_TOKEN` đã deploy trên Worker; bảo toàn bí mật, không rotate không cần thiết)* |
+| **AI Worker** | MISSING | `assethub-ai-worker` *(dự kiến)* | `https://assethub-ai-worker.hnhoa494-assethub.workers.dev` | `cloudflare-worker/wrangler.toml` | `AI_SERVICE_TOKEN` (tối thiểu 32 ký tự, nạp lúc deploy nếu kích hoạt) |
+| **R2 Storage** | DISABLED | `assethub-attachments` *(dự kiến)* | `https://5e76c2bf4e09587a010d31ea416ec8d3.r2.cloudflarestorage.com` | `deploy/.env.demo.example` | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`<br>*(Cloudflare Error 10042: R2 chưa kích hoạt trên account, cần kích hoạt thủ công trên Dashboard; khi chưa bật, để trống credentials và smoke test tự skip)* |
+| **Demo Backend Origin**| READY (LOCAL)| Service `backend`<br>(Container cổng 8001, mount `ro`, pull `never`)| `http://127.0.0.1:8001` | `deploy/docker-compose.demo.yml`<br>`deploy/.env.demo` | `DJANGO_SECRET_KEY` (sinh ngẫu nhiên 64 ký tự, ghi trực tiếp vào file không in ra terminal) |
 | **Cloudflare Tunnel** | PENDING | Quick Tunnel qua binary host `/usr/local/bin/cloudflared` | Lấy lúc mở Tunnel: `https://<subdomain>.trycloudflare.com` | `deploy/.env.demo` | — *(Không mở tunnel trước khi deploy)* |
-| **Frontend Pages** | MISSING | `assethub` *(dự kiến)* | Lấy sau deploy: `https://<pages-project>.pages.dev` | `frontend/dist` | — |
+| **Frontend Pages** | MISSING | `assethub` *(chưa tạo trên Cloudflare)* | Lấy sau deploy: `https://assethub.pages.dev` | `frontend/dist` | Khởi tạo với production branch `main` |
 
 ---
 
@@ -26,90 +28,147 @@ Kết quả khảo sát tài nguyên thực tế qua Cloudflare OAuth (Account: 
 
 > [!IMPORTANT]
 > **Ranh giới an toàn:** Tất cả các lệnh deploy cloud dưới đây CHỈ được thực thi sau khi Codex kiểm duyệt và người dùng chấp thuận. Hiện tại hệ thống đang ở trạng thái chuẩn bị cấu hình cục bộ (Local Staging).
+> **Quy tắc thư mục làm việc (CWD):** Mọi lệnh chạy từ thư mục gốc `/home/truong/Downloads/AssetHub`. Đối với các tác vụ trong thư mục con, sử dụng subshell `(cd ... && ...)` để không làm thay đổi thư mục làm việc của terminal hiện tại.
 
 ### Giai đoạn 1: Chuẩn bị Cấu Hình & Môi Trường Local (Hoàn toàn Read/Local - ĐÃ SẴN SÀNG)
+
 1. **Kiểm tra công cụ dòng lệnh đã có sẵn**:
    ```bash
+   cd /home/truong/Downloads/AssetHub
+
    # Dùng binary Wrangler sẵn có trong hệ thống (KHÔNG chạy npm install hoặc npx tự tải):
    WRANGLER="node /home/truong/.npm/_npx/32026684e21afda6/node_modules/wrangler/bin/wrangler.js"
    $WRANGLER whoami
    /usr/local/bin/cloudflared --version
    ```
+
 2. **Chuẩn bị file cấu hình `deploy/.env.demo` từ template**:
    ```bash
-   cp deploy/.env.demo.example deploy/.env.demo
-   # Sinh DJANGO_SECRET_KEY ngẫu nhiên an toàn:
-   python3 -c "import secrets; print('DJANGO_SECRET_KEY=' + secrets.token_urlsafe(50))"
+   cd /home/truong/Downloads/AssetHub
+
+   # Copy template mà không ghi đè nếu file đã tồn tại:
+   cp -n deploy/.env.demo.example deploy/.env.demo
+
+   # Xác minh file tồn tại:
+   test -f deploy/.env.demo && echo "deploy/.env.demo is present"
+
+   # Tạo DJANGO_SECRET_KEY an toàn và ghi trực tiếp vào file (KHÔNG in bí mật ra màn hình terminal hay shell history):
+   python3 -c '
+   import secrets, re
+   with open("deploy/.env.demo", "r") as f:
+       content = f.read()
+   if "insecure-default-secret-key" in content or "DJANGO_SECRET_KEY=" in content:
+       key = secrets.token_urlsafe(50)
+       content = re.sub(r"DJANGO_SECRET_KEY=.*", f"DJANGO_SECRET_KEY={key}", content)
+       with open("deploy/.env.demo", "w") as f:
+           f.write(content)
+   '
    ```
+   *Lưu ý bảo toàn bí mật:* Điền `D1_BRIDGE_SECRET_TOKEN` trong `deploy/.env.demo` bằng token đã được deploy trên Worker hiện tại; không tự ý rotate bí mật trừ khi có yêu cầu bảo mật cụ thể.
 
 ### Giai đoạn 2: Sao Lưu & Chuẩn Bị Cloud Resources (Mutation / Cloud)
-3. **Sao lưu CSDL D1 hiện tại trước khi thực hiện bất kỳ thao tác nào**:
+
+3. **Ghi nhận mốc Time Travel và Sao lưu Snapshot CSDL D1**:
    ```bash
+   cd /home/truong/Downloads/AssetHub
+
+   # 3a. Ghi nhận mốc D1 Time Travel trước khi thực hiện bất kỳ thao tác mutation nào:
+   $WRANGLER d1 time-travel info assethub-test-d1 --timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+   # 3b. Xuất bản snapshot SQL ngoại tuyến làm kho dự phòng thảm họa (backups/ đã được gitignore):
+   mkdir -p backups
    $WRANGLER d1 export assethub-test-d1 --remote --output=./backups/d1_backup_$(date +%Y%m%d_%H%M%S).sql
    ```
-4. **Đối chiếu Schema D1**:
-   - Schema D1 `assethub-test-d1` đã có sẵn 19 bảng và triggers bảo vệ. Tuyệt đối **KHÔNG DROP**, không reset và không chạy `migrate_pg_to_d1` đè dữ liệu.
-5. **Kích hoạt R2 (Nếu người dùng muốn kiểm tra tính năng đính kèm file)**:
-   - Người dùng truy cập Cloudflare Dashboard kích hoạt R2 (nhập thông tin thanh toán nếu tài khoản yêu cầu).
-   - Tạo bucket `assethub-attachments` và API Token có quyền Object Read & Write.
-   - Điền `R2_ACCESS_KEY_ID` và `R2_SECRET_ACCESS_KEY` vào `deploy/.env.demo`.
-   *(Nếu chưa kích hoạt R2, hệ thống vẫn hoạt động bình thường; test R2 sẽ skip sạch sẽ).*
-6. **Deploy Workers lên Cloudflare**:
-   ```bash
-   # 6a. Cập nhật Bridge Worker (nếu cần deploy phiên bản mới):
-   cd cloudflare-worker/bridge
-   $WRANGLER secret put BRIDGE_SECRET_TOKEN   # Nhập token >= 32 ký tự
-   $WRANGLER deploy
 
-   # 6b. Deploy AI Worker (gợi ý danh mục @cf/meta/llama-3.1-8b-instruct-fp8):
-   cd ..
-   $WRANGLER secret put AI_SERVICE_TOKEN       # Nhập token >= 32 ký tự
-   $WRANGLER deploy
+4. **Đối chiếu Schema & Bảo Vệ Dữ Liệu D1 Hiện Hữu**:
+   - Schema D1 `assethub-test-d1` đã có sẵn 19 bảng, triggers bảo vệ và dữ liệu đã kiểm chứng (COUNT: 3 users, 5 departments, 2 assets).
+   - Tuyệt đối **KHÔNG DROP**, không reset và không chạy `migrate_pg_to_d1` đè dữ liệu.
+   - Bản SQL export chỉ đóng vai trò snapshot an toàn offline, **tuyệt đối không** nạp đè SQL dump trực tiếp vào CSDL đang có bảng/dữ liệu bằng lệnh `d1 execute`.
+
+5. **Trạng thái Cloudflare R2 (Error 10042)**:
+   - R2 hiện chưa được bật trên tài khoản Cloudflare (lỗi API 10042: R2 is not enabled on this account).
+   - Nếu cần kiểm thử upload đính kèm file: Người dùng cần truy cập Cloudflare Dashboard để kích hoạt R2 thủ công (kèm phương thức thanh toán nếu tài khoản yêu cầu), tạo bucket `assethub-attachments` và API Token tương ứng, sau đó điền `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` vào `deploy/.env.demo`.
+   - Nếu chưa kích hoạt R2: Để trống các giá trị R2 trong `deploy/.env.demo`. Hệ thống backend và test suite sẽ tự động bỏ qua (skip gracefully) các bài test upload tệp mà không làm gián đoạn hệ thống.
+
+6. **Deploy Workers lên Cloudflare (nếu cần cập nhật)**:
+   - Sử dụng subshell để không rời khỏi thư mục repo root `/home/truong/Downloads/AssetHub`:
+   ```bash
+   # 6a. Deploy Bridge Worker (bảo toàn BRIDGE_SECRET_TOKEN hiện hữu):
+   (cd cloudflare-worker/bridge && $WRANGLER deploy)
+
+   # 6b. Deploy AI Worker (chỉ thực hiện nếu triển khai tính năng AI):
+   (cd cloudflare-worker && $WRANGLER secret put AI_SERVICE_TOKEN && $WRANGLER deploy)
    ```
 
 ### Giai đoạn 3: Khởi Động Backend Origin & Mở Ingress Tunnel
+
 7. **Khởi động Demo Backend Container (Cổng 8001)**:
    ```bash
-   docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d
+   cd /home/truong/Downloads/AssetHub
+
+   # Khởi động service backend trong stack demo (pull never, không build lại image):
+   docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d --no-build --pull never backend
+
+   # Kiểm tra endpoint healthcheck cục bộ:
    curl -f http://127.0.0.1:8001/api/health/
    ```
-   *Lưu ý:* Backend sử dụng `pull_policy: never` và gắn `backend:/app:ro`, hoàn toàn độc lập với stack cổng 8000.
+   *Lưu ý:* Service name trong compose file là `backend` (thuộc project `assethub-demo`, không phải `backend-demo`). Image sử dụng `assethub-backend:latest` với volume `backend:/app:ro`, hoàn toàn độc lập với stack dev cổng 8000.
+
 8. **Mở Quick Tunnel qua binary host**:
    ```bash
+   cd /home/truong/Downloads/AssetHub
    /usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8001
    ```
    - Ghi lại URL công khai in ra trên terminal, ví dụ: `https://asset-demo-xyz.trycloudflare.com`.
-   - Cập nhật URL này vào `DJANGO_ALLOWED_HOSTS` trong `deploy/.env.demo` và khởi động lại container demo:
+   - Cập nhật URL này vào `DJANGO_ALLOWED_HOSTS` trong `deploy/.env.demo`.
+   - **Tái tạo container backend** để nạp cấu hình môi trường mới (KHÔNG dùng `docker compose restart` vì lệnh restart không đọc lại file env):
      ```bash
-     docker compose -p assethub-demo -f deploy/docker-compose.demo.yml restart backend-demo
+     cd /home/truong/Downloads/AssetHub
+     docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d --no-build --pull never backend
      ```
 
 ### Giai đoạn 4: Build & Deploy Frontend SPA lên Cloudflare Pages
+
 9. **Build Frontend SPA với URL Backend Tunnel**:
    ```bash
+   cd /home/truong/Downloads/AssetHub
    export VITE_API_BASE_URL="https://asset-demo-xyz.trycloudflare.com"
    npm --prefix frontend run build
    ```
    Xác minh thư mục `frontend/dist` đã chứa `_headers` và `_redirects`.
-10. **Deploy lên Cloudflare Pages**:
+
+10. **Tạo Project và Deploy lên Cloudflare Pages**:
     ```bash
-    $WRANGLER pages deploy frontend/dist --project-name=assethub
+    cd /home/truong/Downloads/AssetHub
+
+    # 10a. Do Pages project assethub chưa tồn tại trên tài khoản Cloudflare, tạo project với production branch main:
+    $WRANGLER pages project create assethub --production-branch main
+
+    # 10b. Triển khai thư mục frontend/dist lên Pages project assethub nhánh main:
+    $WRANGLER pages deploy frontend/dist --project-name assethub --branch main
     ```
-    - Ghi lại URL Pages được cấp (ví dụ: `https://assethub.pages.dev`).
-    - Cập nhật `CORS_ALLOWED_ORIGINS=https://assethub.pages.dev` trong `deploy/.env.demo` và reload backend demo.
+    - Ghi lại URL thực tế từ output deployment (ví dụ: `https://assethub.pages.dev`).
+    - Cập nhật `CORS_ALLOWED_ORIGINS=https://assethub.pages.dev` trong `deploy/.env.demo`.
+    - Tái tạo container backend để áp dụng cấu hình CORS mới:
+      ```bash
+      cd /home/truong/Downloads/AssetHub
+      docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d --no-build --pull never backend
+      ```
 
 ### Giai đoạn 5: Kiểm Thử Toàn Tuyến (End-to-End Cloud Smoke)
+
 11. **Thực thi Cloud Smoke Test**:
     ```bash
+    cd /home/truong/Downloads/AssetHub
     RUN_CLOUD_SMOKE=1 \
     CLOUD_API_BASE_URL="https://asset-demo-xyz.trycloudflare.com" \
     D1_BRIDGE_URL="https://assethub-test-worker.hnhoa494-assethub.workers.dev" \
-    D1_BRIDGE_TOKEN="<token>" \
+    D1_BRIDGE_TOKEN="<token-lay-tu-.env.demo>" \
     USE_D1_DATABASE=True \
     backend/.venv/bin/pytest backend/tests/e2e/test_d1_cloud_smoke.py -m cloud_smoke -v -s
     ```
     - Xác nhận toàn bộ 5 bước HTTP cốt lõi (Health, Auth JWT, Asset CRUD, Last Admin Trigger, Teardown Ownership) PASSED 100%.
-    - R2 và Workers AI có log kiểm chứng riêng biệt.
+    - Nếu R2 chưa kích hoạt, các kiểm tra liên quan đến R2 sẽ tự động skip an toàn (PASSED/SKIPPED).
 
 ---
 
@@ -146,21 +205,49 @@ hashed_pw = make_password("DemoPassword#2026!")
 ## 4. Quy Trình Hoàn Tác Sự Cố (Rollback Sequence)
 
 Nếu xảy ra sự cố trong quá trình triển khai hoặc kiểm thử Cloud:
-1. **Dừng Ingress & Cô Lập Ngay Lập Tức**:
-   - Nhấn `Ctrl + C` hoặc kill tiến trình `cloudflared` Quick Tunnel -> Mọi truy cập từ Internet vào backend lập tức bị ngắt.
-   - Dừng container demo backend:
+
+### 1. Dừng Ingress & Cô Lập Ngay Lập Tức:
+- Nhấn `Ctrl + C` hoặc kill tiến trình `cloudflared` Quick Tunnel -> Mọi truy cập từ Internet vào backend lập tức bị ngắt.
+- Dừng container demo backend:
+  ```bash
+  cd /home/truong/Downloads/AssetHub
+  docker compose -p assethub-demo -f deploy/docker-compose.demo.yml down
+  ```
+
+### 2. Khôi Phục Trạng Thái Frontend Pages:
+> [!NOTE]
+> Cloudflare Pages không hỗ trợ lệnh CLI `wrangler pages rollback`. Mọi thao tác rollback deployment giao diện được thực hiện chính thức qua Cloudflare Dashboard.
+> *Lưu ý:* Đối với lần triển khai đầu tiên (first deployment), chưa tồn tại bản triển khai trước đó để rollback.
+
+Quy trình rollback trên Cloudflare Dashboard:
+1. Đăng nhập vào Cloudflare Dashboard, điều hướng đến **Workers & Pages > Pages > assethub**.
+2. Tìm bản deployment ổn định trước đó trong danh sách Deployments, chọn **View details**.
+3. Nhấp vào menu **Manage deployment** và chọn **Rollback to this deployment**.
+
+### 3. Hoàn Tác CSDL D1 (D1 Time Travel & Snapshot Ngoại Tuyến):
+> [!CAUTION]
+> Tuyệt đối **KHÔNG** import trực tiếp file SQL dump vào CSDL D1 đang có dữ liệu bằng lệnh `d1 execute`. Việc này sẽ gây xung đột cấu trúc, trùng khóa chính và vi phạm trigger bảo vệ.
+
+1. **Khôi phục bằng D1 Time Travel (Khuyến nghị chuẩn Cloudflare)**:
+   - Sử dụng bookmark thu được trước khi thao tác:
      ```bash
-     docker compose -p assethub-demo -f deploy/docker-compose.demo.yml down
+     cd /home/truong/Downloads/AssetHub
+     $WRANGLER d1 time-travel restore assethub-test-d1 --bookmark=<bookmark>
      ```
-2. **Khôi Phục Trạng Thái Frontend Pages**:
-   - Nếu Pages bị lỗi, dùng Wrangler rollback về deployment trước đó:
+   - Hoặc khôi phục về mốc thời gian ISO-8601 trước khi xảy ra sự cố:
      ```bash
-     $WRANGLER pages deployment list --project-name=assethub
-     $WRANGLER pages rollback <deployment-id> --project-name=assethub
+     cd /home/truong/Downloads/AssetHub
+     $WRANGLER d1 time-travel restore assethub-test-d1 --timestamp="<ISO-8601-timestamp>"
      ```
-3. **Bảo Toàn CSDL Gốc**:
-   - Container PostgreSQL production (`assethub-db-1` cổng 5433) và Backend chính (`assethub-backend-1` cổng 8000) không hề bị chỉnh sửa hay restart trong toàn bộ quá trình demo, sẵn sàng phục vụ tiếp tục với RPO = 0s.
-   - Nếu D1 cần khôi phục về trạng thái trước demo:
+   - Để kiểm tra các mốc thời gian và thông tin khôi phục khả dụng:
      ```bash
-     $WRANGLER d1 execute assethub-test-d1 --remote --file=./backups/d1_backup_YYYYMMDD_HHMMSS.sql
+     cd /home/truong/Downloads/AssetHub
+     $WRANGLER d1 time-travel info assethub-test-d1
      ```
+
+2. **Snapshot SQL ngoại tuyến (`backups/d1_backup_*.sql`)**:
+   - File xuất từ `$WRANGLER d1 export` được lưu trữ an toàn trong thư mục `backups/` (đã cấu hình trong `.gitignore`).
+   - Đây là bản lưu trữ ngoại tuyến phục vụ khắc phục thảm họa (Disaster Recovery) trên một CSDL hoàn toàn mới hoặc để kiểm tra đối soát, không dùng để ghi đè lên CSDL đang vận hành.
+
+### 4. Bảo Toàn CSDL Gốc Production:
+- Container PostgreSQL production (`assethub-db-1` cổng 5433) và Backend chính (`assethub-backend-1` cổng 8000) hoàn toàn độc lập, không hề bị chỉnh sửa hay restart trong toàn bộ quá trình demo, duy trì hoạt động với RPO = 0s.

@@ -960,10 +960,49 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 3. **Frontend CSP Headers (`frontend/public/_headers`):**
    - Bổ sung `https://api.assethub.example.com` và `https://*.workers.dev` vào `connect-src`.
 
-### 24.3. Runbook Triển Khai & Quy Trình Hoàn Tác (Coordinator)
-- Toàn bộ Runbook chi tiết từng bước được chuẩn hóa tại `docs/deployment-guide.md`.
-- Tập dữ liệu demo tối thiểu đề xuất: 1 Department (`IT`), 1 Category (`LAPTOP`), 2 Users (`demo_admin`, `demo_user`), 2 Assets, 1 Request. Mật khẩu demo được hướng dẫn băm chuẩn PBKDF2 SHA-256 1.000.000 rounds qua Django shell, không hạ hasher.
-- Kế hoạch Rollback: Dừng Quick Tunnel và tắt container demo port 8001; khôi phục D1 từ bản export; hệ thống PostgreSQL production cổng 5433/8000 hoàn toàn nguyên vẹn với RPO = 0s.
+---
+
+## 25. Nghiệm Thu Tinh Chỉnh CORS, Defaults & Runbook Chuẩn Hóa (Review c68ddb6)
+
+- **Thời điểm:** 2026-11-05 15:10 (GMT+7)
+- **Trạng thái:** **Hoàn tất tinh chỉnh toàn diện CORS, Runbook & Rollback chuẩn xác — Sẵn sàng cho Codex kiểm duyệt.**
+- **Ranh giới an toàn:**
+  - Zero cloud mutation, zero live Workers AI calls, zero public Tunnel, zero billing activation.
+  - Zero package install (`npm`, `pip`, `uv`), zero Docker image pull/build.
+  - Không sửa file `.env` đang dùng, không chạm stack phục vụ (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+  - Bảo lưu nguyên trạng 2 tài liệu Tuần 5 untracked thuộc phiên khác.
+  - 1 tab AGY, 0 worktree, 0 push/merge trên nhánh `feat/cloudflare-d1`.
+
+### 25.1. Tinh Chỉnh CORS, CSP & Environment Defaults (Agent B)
+1. **Khắc phục CORS Regex & Origins (`deploy/.env.demo.example`):**
+   - Loại bỏ wildcard regex `^https:\/\/(?:[a-z0-9-]+\.)*pages\.dev$`. Để `CORS_EXTRA_REGEX` rỗng nhằm sử dụng regex mặc định bảo mật trong `settings.py` (`r"^https:\/\/(?:[a-z0-9-]+\.)?assethub\.pages\.dev$"`).
+   - Chỉ cho phép project `assethub.pages.dev` và các preview branch của chính nó; chặn đứng hoàn toàn `unrelated-project.pages.dev` và `assethub-attacker.pages.dev`.
+   - Xóa placeholder origins không khả dụng (`https://<project-subdomain>.pages.dev`).
+2. **Loại Bỏ Hostnames Không Cần Thiết Khỏi CSP (`frontend/public/_headers`):**
+   - Xóa `https://api.assethub.example.com` và `https://*.workers.dev` khỏi CSP `connect-src`.
+   - Frontend chỉ gọi Django API thông qua Tunnel hoặc localhost, tuyệt đối không gọi trực tiếp D1/AI Worker bằng service secret.
+3. **Mặc Định R2 & AI Safe Unconfigured:**
+   - Đặt rỗng `R2_ACCESS_KEY_ID=` và `R2_SECRET_ACCESS_KEY=` kích hoạt chế độ unconfigured/skip an toàn khi R2 chưa bật trên Dashboard (Error 10042).
+   - Đặt rỗng `AI_SERVICE_TOKEN=` khi AI Worker chưa deploy trên Cloud, tránh gọi nhầm token giả.
+4. **Kiểm Thử Hồi Quy Thực Nghiệm (`backend/tests/test_cors.py`):**
+   - Bổ sung test case nạp cấu hình thực tế từ `deploy/.env.demo.example` và đi qua `CorsMiddleware` thật của Django.
+   - Xác nhận: `assethub.pages.dev` và preview PASS; `unrelated-project.pages.dev` và `assethub-attacker.pages.dev` REJECT 100%.
+
+### 25.2. Chuẩn Hóa Runbook Triển Khai & Quy Trình Rollback Chuẩn (Agent A)
+1. **Cố Định Root CWD & Lệnh Khởi Chạy:**
+   - Mọi giai đoạn triển khai đều giữ thư mục gốc repo `/home/truong/Downloads/AssetHub`. Dùng subshell `(cd cloudflare-worker/bridge && ...)` cho Worker deployment, không làm lệch working directory của các bước tiếp theo.
+2. **Recreate Container Đúng Service Name:**
+   - Service name chuẩn là `backend` (thay vì `backend-demo`).
+   - Loại bỏ hoàn toàn `docker compose restart`. Áp dụng biến môi trường mới bằng lệnh recreate:
+     `docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d --no-build --pull never backend`.
+3. **Quy Trình Tạo Project Pages & Triển Khai:**
+   - Hướng dẫn tạo project bằng CLI có sẵn: `$WRANGLER pages project create assethub --production-branch main`.
+   - Deploy chỉ định branch nhất quán: `$WRANGLER pages deploy frontend/dist --project-name assethub --branch main`.
+4. **Quy Trình Hoàn Tác Chuẩn Xác Theo Tài Liệu Chính Thức:**
+   - Loại bỏ lệnh không tồn tại `wrangler pages rollback`. Hướng dẫn rollback qua Cloudflare Dashboard cho production deployment (lưu ý lần deploy đầu chưa có target rollback).
+   - Hoàn tác CSDL D1 bằng Cloudflare D1 Time Travel: `$WRANGLER d1 time-travel restore assethub-test-d1 --bookmark=<bookmark>` (hoặc `--timestamp=<RFC3339>`), kết hợp file SQL export làm offline safety backup.
+   - Stack PostgreSQL production 5433/8000 hoàn toàn nguyên vẹn với RPO = 0s.
+
 
 
 

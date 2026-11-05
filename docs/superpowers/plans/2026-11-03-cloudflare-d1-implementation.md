@@ -687,20 +687,21 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
     - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review`.
     - Cập nhật Section 23 trong `docs/progress-report.md` và commit local trên `feat/cloudflare-d1` (`a4f8360`).
 
-- [ ] **Step 10: Khảo Sát Tài Nguyên Cloudflare Thực Tế & Chuẩn Bị Gói Triển Khai (Review a4f8360)**
-  - **Agent A (Read-Only Cloudflare Inventory):**
-    - Đọc trạng thái account, quyền, danh sách Workers, D1 databases, Pages projects, R2 buckets qua Wrangler CLI đã có.
-    - Đối chiếu tài nguyên test đã duyệt: D1 `assethub-test-d1` (ID `3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`), Worker `assethub-test-worker`.
-    - Đọc metadata/schema/COUNT tổng hợp (không đọc user data/secrets/hashes).
-    - Xác định URL thật, status billing R2, quyền Workers AI; báo cáo bảng existing/missing cho Agent B & Coordinator.
-  - **Agent B (Manifest/Env/Plumbing Deploy Local):**
-    - Chuẩn bị cấu hình deploy local: đồng bộ binding D1 thực vào `cloudflare-worker/wrangler.toml` và `cloudflare-worker/bridge/wrangler.toml`.
-    - Chuẩn bị `deploy/.env.demo.example` với Account ID thực, mapping Bridge, AI Worker, CORS, ALLOWED_HOSTS, CSP.
-    - Đánh dấu các biến cần điền lúc deploy (Tunnel URL, Pages URL), syntax/dry-run offline, không ghi cloud.
+- [x] **Step 10: Khảo Sát Tài Nguyên Cloudflare Thực Tế & Chuẩn Bị Gói Triển Khai (Commit c68ddb6 & Review c68ddb6)**
+  - **Agent A (Runbook & Rollback Hoàn Chỉnh):**
+    - Cố định root cwd `/home/truong/Downloads/AssetHub` cho mọi phase/step; dùng subshell `(cd ...)` cho worker deploy.
+    - Chuẩn hóa lệnh recreate demo service `backend` qua `docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d --no-build --pull never backend` khi cập nhật env (thay thế restart).
+    - Quy trình Cloudflare Pages: tạo project `assethub` với production branch `main`, deploy gắn branch rõ ràng, lấy URL thật đồng bộ CORS.
+    - Quy trình Rollback: dùng Cloudflare Dashboard cho Pages (lưu ý lần đầu chưa có target); dùng D1 Time Travel restore (`--bookmark` / `--timestamp`) kết hợp SQL export offline.
+  - **Agent B (CORS, Env Defaults & Regression Test):**
+    - `deploy/.env.demo.example`: Giới hạn `CORS_ALLOWED_ORIGINS` chỉ cho project `assethub.pages.dev` và localhost; để `CORS_EXTRA_REGEX` rỗng để dùng default regex an toàn; xóa placeholder không dùng được.
+    - Đặt mặc định credentials R2 và AI service token rỗng (`R2_ACCESS_KEY_ID=`, `R2_SECRET_ACCESS_KEY=`, `AI_SERVICE_TOKEN=`) để kích hoạt chế độ unconfigured/skip an toàn.
+    - `frontend/public/_headers`: Xóa `https://api.assethub.example.com` và `https://*.workers.dev` khỏi CSP `connect-src`.
+    - Viết regression test thực tế cho `CorsMiddleware` với RequestFactory trong `backend/tests/test_cors.py` (chứng minh chặn origin ngoài project và prefix giả).
   - **Coordinator & Agent C:**
-    - Soạn thảo Runbook triển khai trong `docs/deployment-guide.md` và cập nhật Section 24 trong `docs/progress-report.md`.
+    - Cập nhật Section 25 trong `docs/progress-report.md`.
     - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review`.
-    - Xác nhận và commit local; chờ Codex duyệt trước bước triển khai cloud.
+    - Chốt xác minh qua `superpowers:verification-before-completion`, commit local và báo cáo Codex duyệt bước Cloud.
 
 ---
 
