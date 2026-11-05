@@ -79,6 +79,8 @@ deploy/cloudflared/credentials.json
 tools/postman/environment.local.json
 logs/
 reports/
+# App source named reports, not generated output. Children keep the other rules (e.g. __pycache__).
+!backend/apps/reports/
 
 # IDE & OS
 .idea/
