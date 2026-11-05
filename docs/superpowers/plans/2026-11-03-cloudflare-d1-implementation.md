@@ -685,7 +685,22 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
     - Kiểm chứng thứ tự chạy xuôi và ngược độc lập vòng đời.
   - **Coordinator & Agent C:**
     - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review`.
-    - Cập nhật Section 23 trong `docs/progress-report.md` và commit local trên `feat/cloudflare-d1`.
+    - Cập nhật Section 23 trong `docs/progress-report.md` và commit local trên `feat/cloudflare-d1` (`a4f8360`).
+
+- [ ] **Step 10: Khảo Sát Tài Nguyên Cloudflare Thực Tế & Chuẩn Bị Gói Triển Khai (Review a4f8360)**
+  - **Agent A (Read-Only Cloudflare Inventory):**
+    - Đọc trạng thái account, quyền, danh sách Workers, D1 databases, Pages projects, R2 buckets qua Wrangler CLI đã có.
+    - Đối chiếu tài nguyên test đã duyệt: D1 `assethub-test-d1` (ID `3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`), Worker `assethub-test-worker`.
+    - Đọc metadata/schema/COUNT tổng hợp (không đọc user data/secrets/hashes).
+    - Xác định URL thật, status billing R2, quyền Workers AI; báo cáo bảng existing/missing cho Agent B & Coordinator.
+  - **Agent B (Manifest/Env/Plumbing Deploy Local):**
+    - Chuẩn bị cấu hình deploy local: đồng bộ binding D1 thực vào `cloudflare-worker/wrangler.toml` và `cloudflare-worker/bridge/wrangler.toml`.
+    - Chuẩn bị `deploy/.env.demo.example` với Account ID thực, mapping Bridge, AI Worker, CORS, ALLOWED_HOSTS, CSP.
+    - Đánh dấu các biến cần điền lúc deploy (Tunnel URL, Pages URL), syntax/dry-run offline, không ghi cloud.
+  - **Coordinator & Agent C:**
+    - Soạn thảo Runbook triển khai trong `docs/deployment-guide.md` và cập nhật Section 24 trong `docs/progress-report.md`.
+    - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review`.
+    - Xác nhận và commit local; chờ Codex duyệt trước bước triển khai cloud.
 
 ---
 

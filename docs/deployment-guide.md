@@ -1,306 +1,166 @@
 # Hướng Dẫn Triển Khai Hệ Thống AssetHub (Deployment Guide)
 
-Tài liệu hướng dẫn chi tiết quy trình triển khai, cấu hình môi trường và vận hành hệ thống quản lý tài sản doanh nghiệp **AssetHub** theo mô hình kiến trúc Hybrid kết hợp giữa máy chủ nội bộ (On-Premise / Local Server) và nền tảng đám mây Cloudflare.
+Tài liệu hướng dẫn chi tiết quy trình chuẩn bị cấu hình, đối chiếu tài nguyên thực tế và các bước triển khai hệ thống **AssetHub** theo mô hình Hybrid Edge-Core: Backend Origin phục vụ tại cổng độc lập 8001 qua Cloudflare Tunnel kết hợp Cloudflare D1, Workers AI, R2 và Pages.
 
 ---
 
-## 1. Kiến Trúc Triển Khai Hybrid & Cloudflare Edge Demo
+## 1. Bảng Đối Chiếu Tài Nguyên Thực Tế & Trạng Thái Cloudflare
 
-Hệ thống AssetHub áp dụng mô hình kiến trúc **Hybrid Edge-Core Deployment**:
-- **Edge Cloud (Cloudflare)**:
-  - **Frontend SPA**: Triển khai trên **Cloudflare Pages** (React 18 + Vite + TailwindCSS), phân phối toàn cầu qua CDN, bảo vệ bằng CSP headers (`_headers`) và SPA routing rewrites (`_redirects`).
-  - **Primary Operational Database**: **Cloudflare D1** (SQLite phân tán tại Edge, CSDL nghiệp vụ chính cho bản demo) kết nối qua Worker Bridge (`assethub-test-worker`).
-  - **Edge AI Inference**: **Cloudflare Workers AI** chạy mô hình `@cf/meta/llama-3.1-8b-instruct-fp8` gợi ý danh mục tài sản tự động.
-  - **Private Object Storage**: **Cloudflare R2** lưu trữ ảnh tài sản và tệp đính kèm với Presigned URLs chuẩn SigV4 (TTL 900 giây, zero egress fee).
-  - **Secure Ingress**: **Cloudflare Tunnel (`cloudflared`)** tạo kết nối mã hóa outbound từ máy chủ Origin đến Cloudflare Edge, không cần mở port mạng hay mua IP tĩnh.
-- **Origin Server (Docker Compose / Local Host)**:
-  - **Backend API**: Django 5.2, DRF, SimpleJWT, Gunicorn trong Linux Container (hoặc máy chủ riêng).
-  - **PostgreSQL 16**: CSDL quan hệ chuẩn dùng làm môi trường phát triển cục bộ mặc định (`USE_D1_DATABASE=False`), và làm nguồn đối chiếu dữ liệu 1:1 / phương án phục hồi tức thì (RPO = 0s) khi chạy chế độ D1 demo (`USE_D1_DATABASE=True`).
+Kết quả khảo sát tài nguyên thực tế qua Cloudflare OAuth (Account: `hnhoa494@gmail.com`, Account ID: `5e76c2bf4e09587a010d31ea416ec8d3`):
 
-### Bảng Phân Định Thành Phần Kiến Trúc
-
-| Thành Phần | Công Nghệ / Nền Tảng | Nơi Thực Thi | Vai Trò & Chức Năng |
-| :--- | :--- | :--- | :--- |
-| **Frontend SPA** | React 18, Vite, TailwindCSS | **Cloudflare Pages** | Giao diện người dùng web, cache CDN toàn cầu, bảo vệ bằng Security Headers và SPA Rewrites. |
-| **Primary Database (Demo)** | SQLite at Edge (Cloudflare D1) | **Cloudflare D1** | CSDL nghiệp vụ chính cho bản demo: người dùng, phòng ban, tài sản, phiếu yêu cầu, lịch sử, audit guard. |
-| **Reconciliation Source** | PostgreSQL 16 Alpine | **Origin Server (Docker)** | Nguồn đối chiếu 1:1 (`migrate_pg_to_d1`), rollback tức thì và môi trường phát triển cục bộ mặc định. |
-| **AI Microservice** | Cloudflare Workers, `@cf/meta/llama-3.1-8b-instruct-fp8` | **Cloudflare Workers AI** | Gợi ý danh mục tài sản tự động tại Edge, ghi log vào bảng `ai_suggestion_logs` trên D1. |
-| **Object Storage** | S3-Compatible Storage | **Cloudflare R2** | Lưu trữ ảnh và tệp đính kèm tài sản (Private Bucket + Presigned URL SigV4 900s). |
-| **Secure Ingress** | Cloudflare Tunnel (`cloudflared`) | **Cloudflare Zero Trust** | Tạo kết nối mã hóa chiều ra (outbound) từ Origin Server đến Cloudflare Edge, hỗ trợ Quick Tunnel demo. |
-| **Backend API** | Django 5.2, DRF, SimpleJWT, Gunicorn | **Origin Server (Docker)** | Xử lý logic nghiệp vụ, xác thực JWT, RBAC, adapter D1 atomic OCC và kiểm soát quyền truy cập. |
+| Thành phần | Trạng thái Cloud | Tên / Định danh thực tế | URL / Endpoint thực tế | Config sử dụng | Bí mật cần điền (Local) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Cloudflare Account** | PRESENT | `Hnhoa494@gmail.com's Account`<br>`5e76c2bf4e09587a010d31ea416ec8d3` | — | `deploy/.env.demo.example` | Token OAuth Wrangler có sẵn |
+| **Worker Subdomain** | PRESENT | `hnhoa494-assethub` | `*.hnhoa494-assethub.workers.dev` | `wrangler.toml` (tự động) | — |
+| **D1 Database** | PRESENT | `assethub-test-d1`<br>UUID: `3850e3a1-7c57-42f4-afd6-1fa1655bbcf1` | — | `cloudflare-worker/bridge/wrangler.toml`<br>`cloudflare-worker/wrangler.toml` | — *(Dữ liệu hiện có: 3 users, 5 depts, 2 assets — PHẢI GIỮ)* |
+| **D1 Bridge Worker** | PRESENT | `assethub-test-worker` | `https://assethub-test-worker.hnhoa494-assethub.workers.dev` | `cloudflare-worker/bridge/wrangler.toml` | `D1_BRIDGE_SECRET_TOKEN` (khớp `BRIDGE_SECRET_TOKEN` trên Worker) |
+| **AI Worker** | MISSING | `assethub-ai-worker` *(dự kiến)* | `https://assethub-ai-worker.hnhoa494-assethub.workers.dev` | `cloudflare-worker/wrangler.toml` | `AI_SERVICE_TOKEN` (tối thiểu 32 ký tự, nạp lúc deploy) |
+| **R2 Storage** | BLOCKED | `assethub-attachments` *(dự kiến)* | `https://5e76c2bf4e09587a010d31ea416ec8d3.r2.cloudflarestorage.com` | `deploy/.env.demo.example` | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`<br>*(Cần kích hoạt R2 trên Cloudflare Dashboard)* |
+| **Demo Backend Origin**| READY (LOCAL)| Container `assethub-demo-backend`<br>(Cổng 8001, mount `ro`, pull `never`)| `http://127.0.0.1:8001` | `deploy/docker-compose.demo.yml`<br>`deploy/.env.demo` | `DJANGO_SECRET_KEY` (sinh ngẫu nhiên 64 ký tự) |
+| **Cloudflare Tunnel** | PENDING | Quick Tunnel qua binary host `/usr/local/bin/cloudflared` | Lấy lúc mở Tunnel: `https://<subdomain>.trycloudflare.com` | `deploy/.env.demo` | — *(Không mở tunnel trước khi deploy)* |
+| **Frontend Pages** | MISSING | `assethub` *(dự kiến)* | Lấy sau deploy: `https://<pages-project>.pages.dev` | `frontend/dist` | — |
 
 ---
 
-## 2. Điều Kiện Hoạt Động Của Máy Chủ Khi Demo
+## 2. Thứ Tự Triển Khai Theo Phụ Thuộc (Dependency Sequence)
 
-Khi trình diễn (demo) hoặc cho phép người dùng từ bên ngoài Internet truy cập vào hệ thống:
+> [!IMPORTANT]
+> **Ranh giới an toàn:** Tất cả các lệnh deploy cloud dưới đây CHỈ được thực thi sau khi Codex kiểm duyệt và người dùng chấp thuận. Hiện tại hệ thống đang ở trạng thái chuẩn bị cấu hình cục bộ (Local Staging).
 
-1. **Điều kiện máy chủ Origin**:
-   - Máy tính cá nhân (hoặc server on-premise) chạy Docker Compose / Django backend phải ở trạng thái **Bật** và không rơi vào chế độ Sleep/Hibernate.
-   - Container backend (hoặc tiến trình backend Django) và tiến trình Cloudflare Tunnel phải ở trạng thái `running`.
-   - Kết nối mạng Internet của máy chủ phải duy trì liên tục và ổn định.
-2. **Không cần IP tĩnh hay mở port (Port Forwarding)**:
-   - Nhờ sử dụng **Cloudflare Tunnel (`cloudflared`)**, container chỉ thực hiện kết nối outbound (chiều ra) qua giao thức HTTP/2 hoặc QUIC tới mạng Cloudflare Anycast Edge.
-   - Router NAT/firewall tại gia đình hay văn phòng không cần can thiệp mở cổng (không cần cấu hình DDNS, NAT port 80/443).
-   - Địa chỉ IP thực tế của máy chủ hoàn toàn được ẩn giấu (che giấu nguồn gốc), giảm thiểu nguy cơ tấn công DDoS trực tiếp.
-3. **Lựa chọn Quick Tunnel cho buổi Demo**:
-   - Không cần mua tên miền riêng: Sử dụng lệnh Quick Tunnel của Cloudflare:
-     ```bash
-     cloudflared tunnel --url http://127.0.0.1:8000
-     ```
-   - Cloudflare tự động cấp một URL công khai ngẫu nhiên (ví dụ: `https://random-subdomain.trycloudflare.com`).
-   - Cập nhật URL này vào `VITE_API_BASE_URL` của frontend và rebuild/redeploy Pages.
-
----
-
-## 3. Giới Hạn Gói Miễn Phí (Cloudflare Free Tier Limits)
-
-Hệ thống AssetHub được thiết kế tối ưu để có thể vận hành ổn định trong phạm vi gói Free Tier của Cloudflare:
-
-| Dịch Vụ Cloudflare | Giới Hạn Gói Miễn Phí (Free Tier) | Lưu Ý Áp Dụng Cho AssetHub |
-| :--- | :--- | :--- |
-| **Cloudflare Pages** | - 500 builds / tháng<br>- Không giới hạn request<br>- Băng thông không giới hạn | Đủ cho quy trình CI/CD và truy cập frontend không giới hạn. |
-| **Cloudflare Tunnel** | - Hoàn toàn miễn phí<br>- Không giới hạn băng thông<br>- Hỗ trợ Quick Tunnel | Định tuyến API backend từ máy local ra Internet bảo mật tuyệt đối. |
-| **Cloudflare Workers AI**| - ~10,000 Neurons / ngày (miễn phí)<br>- Rate limit theo phút | Dùng mô hình `@cf/meta/llama-3.1-8b-instruct-fp8`. Khi cạn quota, tự động kích hoạt Heuristic Fallback. |
-| **Cloudflare D1** | - 5,000,000 read rows / ngày<br>- 100,000 write rows / ngày<br>- 5 GB dung lượng tổng | Đủ cho toàn bộ 19 bảng CSDL nghiệp vụ demo AssetHub. |
-| **Cloudflare R2** | - 10 GB lưu trữ / tháng<br>- 1,000,000 Class A ops (PUT, LIST) / tháng<br>- 10,000,000 Class B ops (GET) / tháng<br>- **0đ phí tải xuống (Zero Egress Fees)** | Dùng lưu trữ ảnh thiết bị và tệp đính kèm. Presigned URL SigV4 900 giây (15 phút). |
-
----
-
-## 4. Các Điểm Kỹ Thuật Đã Thống Nhất (Spec §12)
-
-1. **Công cụ dòng lệnh chính thức**:
-   - Sử dụng **`wrangler`** cho Workers, Pages, D1, R2.
-   - Sử dụng **`cloudflared`** cho Cloudflare Tunnel (đã có sẵn binary tại `/usr/local/bin/cloudflared`).
-2. **Vai trò CSDL Cloudflare D1 và PostgreSQL**:
-   - **Cloudflare D1**: Cơ sở dữ liệu vận hành chính của bản demo (`USE_D1_DATABASE=True`), bảo toàn toàn bộ logic Django ORM, PBKDF2 1.000.000 vòng lặp, atomic batch OCC với `_assert_guard`.
-   - **PostgreSQL 16**: CSDL tham chiếu cho phát triển cục bộ (`USE_D1_DATABASE=False`), nguồn nạp dữ liệu kiểm thử và rollback tức thì 2 giai đoạn.
-3. **Phân định ranh giới môi trường**:
-   - Môi trường demo sử dụng dataset giả lập độc lập trên `assethub-test-d1`, tách biệt hoàn toàn với dữ liệu thực tế của ứng dụng.
-   - Chưa triển khai dữ liệu thực tế lên Cloudflare D1 khi chưa có lệnh chính thức.
-
----
-
-## 5. Hướng Dẫn Cấu Hình Và Triển Khai Từng Bước
-
-### Bước 1: Khởi Động Backend & Database Bằng Docker Compose
-
-1. **Chuẩn bị file môi trường**:
-   Sao chép file cấu hình mẫu từ thư mục `deploy/`:
+### Giai đoạn 1: Chuẩn bị Cấu Hình & Môi Trường Local (Hoàn toàn Read/Local - ĐÃ SẴN SÀNG)
+1. **Kiểm tra công cụ dòng lệnh đã có sẵn**:
+   ```bash
+   # Dùng binary Wrangler sẵn có trong hệ thống (KHÔNG chạy npm install hoặc npx tự tải):
+   WRANGLER="node /home/truong/.npm/_npx/32026684e21afda6/node_modules/wrangler/bin/wrangler.js"
+   $WRANGLER whoami
+   /usr/local/bin/cloudflared --version
+   ```
+2. **Chuẩn bị file cấu hình `deploy/.env.demo` từ template**:
    ```bash
    cp deploy/.env.demo.example deploy/.env.demo
+   # Sinh DJANGO_SECRET_KEY ngẫu nhiên an toàn:
+   python3 -c "import secrets; print('DJANGO_SECRET_KEY=' + secrets.token_urlsafe(50))"
    ```
-   Chỉnh sửa các giá trị bí mật trong `deploy/.env.demo` (đặc biệt là `DJANGO_SECRET_KEY`, `DB_PASSWORD`, `DJANGO_ALLOWED_HOSTS`).
 
-2. **Khởi động các dịch vụ bằng Docker Compose**:
-   Đối với môi trường sản xuất / demo qua tunnel:
+### Giai đoạn 2: Sao Lưu & Chuẩn Bị Cloud Resources (Mutation / Cloud)
+3. **Sao lưu CSDL D1 hiện tại trước khi thực hiện bất kỳ thao tác nào**:
    ```bash
-   docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml --env-file deploy/.env.demo up -d --build
+   $WRANGLER d1 export assethub-test-d1 --remote --output=./backups/d1_backup_$(date +%Y%m%d_%H%M%S).sql
    ```
-   *(Hoặc môi trường phát triển cục bộ: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`)*
+4. **Đối chiếu Schema D1**:
+   - Schema D1 `assethub-test-d1` đã có sẵn 19 bảng và triggers bảo vệ. Tuyệt đối **KHÔNG DROP**, không reset và không chạy `migrate_pg_to_d1` đè dữ liệu.
+5. **Kích hoạt R2 (Nếu người dùng muốn kiểm tra tính năng đính kèm file)**:
+   - Người dùng truy cập Cloudflare Dashboard kích hoạt R2 (nhập thông tin thanh toán nếu tài khoản yêu cầu).
+   - Tạo bucket `assethub-attachments` và API Token có quyền Object Read & Write.
+   - Điền `R2_ACCESS_KEY_ID` và `R2_SECRET_ACCESS_KEY` vào `deploy/.env.demo`.
+   *(Nếu chưa kích hoạt R2, hệ thống vẫn hoạt động bình thường; test R2 sẽ skip sạch sẽ).*
+6. **Deploy Workers lên Cloudflare**:
+   ```bash
+   # 6a. Cập nhật Bridge Worker (nếu cần deploy phiên bản mới):
+   cd cloudflare-worker/bridge
+   $WRANGLER secret put BRIDGE_SECRET_TOKEN   # Nhập token >= 32 ký tự
+   $WRANGLER deploy
 
-   Đối với môi trường chạy thử nghiệm Edge Demo độc lập (không xung đột port 8000 của dev stack):
+   # 6b. Deploy AI Worker (gợi ý danh mục @cf/meta/llama-3.1-8b-instruct-fp8):
+   cd ..
+   $WRANGLER secret put AI_SERVICE_TOKEN       # Nhập token >= 32 ký tự
+   $WRANGLER deploy
+   ```
+
+### Giai đoạn 3: Khởi Động Backend Origin & Mở Ingress Tunnel
+7. **Khởi động Demo Backend Container (Cổng 8001)**:
    ```bash
    docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d
-   ```
-   *Lưu ý an toàn:*
-   - File `deploy/docker-compose.demo.yml` gắn mã nguồn backend đã review (`../backend:/app:ro`) vào image `assethub-backend:latest` có sẵn, đảm bảo chạy đúng code D1 adapter và runtime switch mới nhất mà không cần cài thêm package hay build lại image (`pull_policy: never`).
-   - Khi `USE_D1_DATABASE=True`, backend kết nối trực tiếp Cloudflare D1 qua Worker Bridge; không yêu cầu container PostgreSQL `db` phải chạy hay healthy.
-   - Demo backend phục vụ tại cổng `http://127.0.0.1:8001`, hoàn toàn cách ly khỏi stack dev cổng 8000.
-
-3. **Khởi tạo D1 Schema & Nạp Dữ Liệu Demo Cách Ly**:
-   *Cảnh báo nghiêm ngặt:* Tuyệt đối KHÔNG chạy `manage.py migrate` hay `manage.py seed_data` lên D1 hoặc database đang hoạt động.
-   ```bash
-   # Schema D1 (19 bảng, 2 triggers, check constraints) đã được định nghĩa trong schema.sql:
-   # npx wrangler d1 execute assethub-test-d1 --file=./spikes/cf-d1-spike/schema.sql --remote
-
-   # Nạp dữ liệu giả biệt lập cho demo (bằng script đối soát đã duyệt hoặc tạo tài khoản demo giả lập riêng):
-   # python spikes/cf-d1-spike/migrate_pg_to_d1.py --d1-url=$D1_BRIDGE_URL --d1-token=$D1_BRIDGE_SECRET_TOKEN
-   ```
-
-4. **Kiểm tra trạng thái sẵn sàng**:
-   ```bash
    curl -f http://127.0.0.1:8001/api/health/
-   # Kết quả mong đợi: {"status": "ok", "db": "ok"}
    ```
-
----
-
-### Bước 2: Thiết Lập Cloudflare Tunnel (`cloudflared`)
-
-AssetHub hỗ trợ 2 phương thức Ingress qua Cloudflare Tunnel:
-- **Phương án 1 (Khuyến nghị cho Demo): Quick Tunnel qua binary host `/usr/local/bin/cloudflared` (đã có sẵn trên máy)**
-  Không cần mua tên miền, không cần cấu hình DNS hay chứng thực phức tạp:
-  ```bash
-  /usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8001
-  ```
-  Lệnh sẽ in ra URL HTTPS tạm thời dạng `https://<random-id>.trycloudflare.com`.
-  Dùng URL này để gán vào `VITE_API_BASE_URL` khi build frontend và khai báo vào `CORS_ALLOWED_ORIGINS` của backend.
-
-- **Phương án 2: Named Tunnel với tên miền riêng (Tùy chọn cho Production)**
-  Nếu có tên miền quản trị trên Cloudflare, sử dụng file cấu hình `deploy/cloudflared/config.yml`:
-  ```bash
-  cloudflared tunnel --config deploy/cloudflared/config.yml run
-  ```
-
----
-   credentials-file: /etc/cloudflared/credentials.json
-
-   ingress:
-     - hostname: api.assethub.example.com
-       service: http://backend:8000
-       originRequest:
-         noTLSVerify: false
-         httpHostHeader: api.assethub.example.com
-     - service: http_status:404
-   ```
-   Khởi động service `cloudflared` trong Docker Compose, kiểm tra log:
+   *Lưu ý:* Backend sử dụng `pull_policy: never` và gắn `backend:/app:ro`, hoàn toàn độc lập với stack cổng 8000.
+8. **Mở Quick Tunnel qua binary host**:
    ```bash
-   docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml logs -f cloudflared
+   /usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8001
    ```
+   - Ghi lại URL công khai in ra trên terminal, ví dụ: `https://asset-demo-xyz.trycloudflare.com`.
+   - Cập nhật URL này vào `DJANGO_ALLOWED_HOSTS` trong `deploy/.env.demo` và khởi động lại container demo:
+     ```bash
+     docker compose -p assethub-demo -f deploy/docker-compose.demo.yml restart backend-demo
+     ```
 
----
-
-### Bước 3: Thiết Lập Cloudflare R2 Bucket & Credentials
-
-1. **Tạo R2 Bucket**:
-   Truy cập **Cloudflare Dashboard > R2 Object Storage > Create bucket**:
-   - Tên Bucket: `assethub-storage`
-   - Vị trí (Location): `Automatic` hoặc `APAC (Châu Á Thái Bình Dương)`.
-   *(Hoặc thực hiện qua dòng lệnh: `npx wrangler r2 bucket create assethub-storage`)*
-
-2. **Tạo API Token cho R2**:
-   - Tại trang **R2 Overview**, chọn **Manage R2 API Tokens > Create API Token**.
-   - Quyền hạn (Permissions): **Object Read & Write**.
-   - Phạm vi: Chỉ định cụ thể cho bucket `assethub-storage`.
-   - Sao chép các thông tin:
-     - `Access Key ID`
-     - `Secret Access Key`
-     - `Endpoint URL`: có định dạng `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
-
-3. **Cấu hình vào Backend**:
-   Điền các thông số vào file `.env` của backend:
-   ```env
-   R2_ACCESS_KEY_ID=<YOUR_R2_ACCESS_KEY_ID>
-   R2_SECRET_ACCESS_KEY=<YOUR_R2_SECRET_ACCESS_KEY>
-   R2_BUCKET_NAME=assethub-storage
-   R2_ENDPOINT_URL=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-   ```
-
----
-
-### Bước 4: Thiết Lập Cloudflare Worker, Workers AI & D1 (Wrangler)
-
-1. **Cài đặt thư viện phụ thuộc**:
+### Giai đoạn 4: Build & Deploy Frontend SPA lên Cloudflare Pages
+9. **Build Frontend SPA với URL Backend Tunnel**:
    ```bash
-   cd cloudflare-worker
-   npm install
-   ```
-
-2. **Tạo cơ sở dữ liệu D1 trên Cloudflare**:
-   ```bash
-   npx wrangler d1 create assethub-d1
-   ```
-   Ghi lại `database_id` được hiển thị và cập nhật vào file `cloudflare-worker/wrangler.toml`:
-   ```toml
-   [[d1_databases]]
-   binding = "DB"
-   database_name = "assethub-d1"
-   database_id = "your-actual-d1-database-uuid"
-   ```
-
-3. **Khởi tạo bảng cơ sở dữ liệu D1 trên Cloud**:
-   ```bash
-   npx wrangler d1 execute assethub-d1 --file=./schema.sql --remote
-   ```
-
-4. **Thiết lập khóa bí mật chia sẻ (AI Service Token)**:
-   ```bash
-   npx wrangler secret put AI_SERVICE_TOKEN
-   # Nhập token bảo mật (chuỗi ngẫu nhiên tối thiểu 32 ký tự, trùng khớp với AI_SERVICE_TOKEN của backend)
-   ```
-
-5. **Deploy Worker lên Cloudflare**:
-   ```bash
-   npx wrangler deploy
-   ```
-   Sau khi deploy thành công, Worker sẽ có URL công khai, ví dụ: `https://assethub-ai-worker.<subdomain>.workers.dev`.
-   Cập nhật URL này vào biến `AI_WORKER_URL` trong file `.env` của backend.
-
----
-
-### Bước 5: Build Và Deploy Frontend Lên Cloudflare Pages
-
-1. **Kiểm tra cấu hình Security Headers và SPA Redirects**:
-   - Header bảo mật tại `frontend/public/_headers` (bảo vệ chống Clickjacking, MIME-sniffing, áp dụng Content Security Policy nghiêm ngặt).
-   - SPA route rewrites tại `frontend/public/_redirects` (`/* /index.html 200`) đảm bảo khi người dùng tải lại trang con trên React Router không bị lỗi 404 Not Found.
-
-2. **Build mã nguồn Frontend**:
-   ```bash
-   # Thiết lập địa chỉ API Backend môi trường production
-   export VITE_API_BASE_URL="https://api.assethub.example.com"
+   export VITE_API_BASE_URL="https://asset-demo-xyz.trycloudflare.com"
    npm --prefix frontend run build
    ```
-   Xác minh các file cấu hình quan trọng đã nằm trong thư mục xuất bản:
-   ```bash
-   test -f frontend/dist/_headers && echo "Headers OK"
-   test -f frontend/dist/_redirects && echo "Redirects OK"
-   ```
+   Xác minh thư mục `frontend/dist` đã chứa `_headers` và `_redirects`.
+10. **Deploy lên Cloudflare Pages**:
+    ```bash
+    $WRANGLER pages deploy frontend/dist --project-name=assethub
+    ```
+    - Ghi lại URL Pages được cấp (ví dụ: `https://assethub.pages.dev`).
+    - Cập nhật `CORS_ALLOWED_ORIGINS=https://assethub.pages.dev` trong `deploy/.env.demo` và reload backend demo.
 
-3. **Deploy lên Cloudflare Pages**:
-   - **Cách 1: Sử dụng Wrangler CLI**:
+### Giai đoạn 5: Kiểm Thử Toàn Tuyến (End-to-End Cloud Smoke)
+11. **Thực thi Cloud Smoke Test**:
+    ```bash
+    RUN_CLOUD_SMOKE=1 \
+    CLOUD_API_BASE_URL="https://asset-demo-xyz.trycloudflare.com" \
+    D1_BRIDGE_URL="https://assethub-test-worker.hnhoa494-assethub.workers.dev" \
+    D1_BRIDGE_TOKEN="<token>" \
+    USE_D1_DATABASE=True \
+    backend/.venv/bin/pytest backend/tests/e2e/test_d1_cloud_smoke.py -m cloud_smoke -v -s
+    ```
+    - Xác nhận toàn bộ 5 bước HTTP cốt lõi (Health, Auth JWT, Asset CRUD, Last Admin Trigger, Teardown Ownership) PASSED 100%.
+    - R2 và Workers AI có log kiểm chứng riêng biệt.
+
+---
+
+## 3. Đề Xuất Tập Dữ Liệu Demo Tối Thiểu (Minimal Demo Dataset)
+
+Để bảo đảm tính an toàn dữ liệu và tránh làm ô nhiễm CSDL D1 hiện tại:
+- **Nguyên tắc:** KHÔNG tự động chạy seed script diện rộng. Sử dụng tập dữ liệu tối thiểu phục vụ kiểm thử nghiệp vụ.
+- **Tập dữ liệu đề xuất**:
+  1. **1 Department**: `Phòng Công nghệ thông tin` (Mã: `IT`, Mô tả: `Bộ phận IT hỗ trợ kỹ thuật`).
+  2. **1 Category**: `Laptop & Máy trạm` (Tên: `Laptop & Máy trạm`, Mô tả: `Thiết bị máy tính xách tay`).
+  3. **2 Users**:
+     - `demo_admin` (Role: `ADMIN`, Email: `admin.demo@assethub.local`): Quản trị viên duyệt cấp phát và quản lý tài sản.
+     - `demo_user` (Role: `USER`, Email: `user.demo@assethub.local`): Nhân viên tạo phiếu yêu cầu cấp phát.
+  4. **2 Assets**:
+     - `AST-2026-0001`: MacBook Pro 16 M3 Max, Trạng thái: `AVAILABLE` (Sẵn sàng cấp phát).
+     - `AST-2026-0002`: Dell Precision 5570, Trạng thái: `IN_USE` (Đang sử dụng).
+  5. **1 Request**:
+     - `REQ-2026-0001`: Phiếu yêu cầu cấp phát laptop cho `demo_user`, trạng thái `PENDING` (Chờ `demo_admin` phê duyệt).
+
+### Hướng Dẫn Băm Mật Khẩu Chuẩn Django (PBKDF2 1.000.000 Vòng):
+Tuyệt đối không chèn mật khẩu thô hay hạ thuật toán hasher để chạy test:
+```python
+# Chạy an toàn qua Django manage.py shell nội bộ:
+from apps.authentication.models import User
+from django.contrib.auth.hashers import make_password
+
+# Băm an toàn chuẩn PBKDF2 SHA-256 1.000.000 rounds:
+hashed_pw = make_password("DemoPassword#2026!")
+# Sử dụng hashed_pw này để khởi tạo tài khoản quản trị viên demo nếu D1 thiếu Admin nền.
+```
+
+---
+
+## 4. Quy Trình Hoàn Tác Sự Cố (Rollback Sequence)
+
+Nếu xảy ra sự cố trong quá trình triển khai hoặc kiểm thử Cloud:
+1. **Dừng Ingress & Cô Lập Ngay Lập Tức**:
+   - Nhấn `Ctrl + C` hoặc kill tiến trình `cloudflared` Quick Tunnel -> Mọi truy cập từ Internet vào backend lập tức bị ngắt.
+   - Dừng container demo backend:
      ```bash
-     npx wrangler pages deploy frontend/dist --project-name=assethub
+     docker compose -p assethub-demo -f deploy/docker-compose.demo.yml down
      ```
-   - **Cách 2: Kết nối GitHub Repository qua Dashboard**:
-     - Vào **Cloudflare Dashboard > Workers & Pages > Create application > Pages > Connect to Git**.
-     - Cấu hình Build settings:
-       - Framework preset: `Vite`
-       - Build command: `npm run build`
-       - Build output directory: `dist`
-       - Root directory: `frontend`
-     - Environment variables: `VITE_API_BASE_URL=https://api.assethub.example.com`.
-
-4. **Đồng bộ CORS trên Backend**:
-   Đảm bảo tên miền của Pages (ví dụ: `https://assethub.pages.dev` hoặc tên miền riêng `https://assethub.example.com`) được khai báo trong `CORS_ALLOWED_ORIGINS` của backend. Hệ thống đã tự động chấp nhận định dạng `*.pages.dev` qua cấu hình regex `CORS_ALLOWED_ORIGIN_REGEXES`.
-
----
-
-### Bước 6: Quy Trình Sao Lưu Và Phục Hồi Dữ Liệu PostgreSQL
-
-Để đảm bảo tính liên tục của dữ liệu và phòng ngừa sự cố, định kỳ thực hiện các thao tác sau:
-
-1. **Quy trình sao lưu (Backup)**:
-   Thực hiện trích xuất dữ liệu nhị phân nén (custom format) từ container cơ sở dữ liệu:
-   ```bash
-   mkdir -p backups
-   # Xuất bản sao lưu với timestamp
-   docker compose exec -T db pg_dump -U assethub_user -F c assethub > backups/assethub_$(date +%Y%m%d_%H%M%S).dump
-   ```
-   *(Để xuất định dạng SQL thuần có thể đọc được: `docker compose exec -T db pg_dump -U assethub_user assethub > backups/assethub_plain_$(date +%Y%m%d).sql`)*
-
-2. **Quy trình phục hồi (Restore)**:
-   Khi cần khôi phục lại dữ liệu từ một bản backup:
-   ```bash
-   # 1. Tạm thời dừng kết nối từ backend để tránh ghi dữ liệu dở dang
-   docker compose stop backend
-
-   # 2. Xóa và tạo lại cơ sở dữ liệu trắng
-   docker compose exec -T db dropdb -U assethub_user --if-exists assethub
-   docker compose exec -T db createdb -U assethub_user assethub
-
-   # 3. Phục hồi từ tệp .dump
-   docker compose exec -T db pg_restore -U assethub_user -d assethub < backups/assethub_YYYYMMDD_HHMMSS.dump
-
-   # 4. Khởi động lại backend
-   docker compose start backend
-   ```
-
-3. **Tự động hóa sao lưu bằng Cron (Linux)**:
-   Thêm tác vụ vào crontab (`crontab -e`) để tự động sao lưu lúc 02:00 sáng mỗi ngày và xóa các bản sao lưu cũ hơn 14 ngày:
-   ```cron
-   0 2 * * * cd /path/to/AssetHub && docker compose exec -T db pg_dump -U assethub_user -F c assethub > backups/assethub_$(date +\%Y\%m\%d_\%H\%M\%S).dump && find backups/ -type f -name "*.dump" -mtime +14 -delete
-   ```
-
----
-*Tài liệu hoàn tất bởi Đội ngũ Kỹ thuật AssetHub - Sẵn sàng cho quá trình đánh giá và nghiệm thu hệ thống.*
+2. **Khôi Phục Trạng Thái Frontend Pages**:
+   - Nếu Pages bị lỗi, dùng Wrangler rollback về deployment trước đó:
+     ```bash
+     $WRANGLER pages deployment list --project-name=assethub
+     $WRANGLER pages rollback <deployment-id> --project-name=assethub
+     ```
+3. **Bảo Toàn CSDL Gốc**:
+   - Container PostgreSQL production (`assethub-db-1` cổng 5433) và Backend chính (`assethub-backend-1` cổng 8000) không hề bị chỉnh sửa hay restart trong toàn bộ quá trình demo, sẵn sàng phục vụ tiếp tục với RPO = 0s.
+   - Nếu D1 cần khôi phục về trạng thái trước demo:
+     ```bash
+     $WRANGLER d1 execute assethub-test-d1 --remote --file=./backups/d1_backup_YYYYMMDD_HHMMSS.sql
+     ```

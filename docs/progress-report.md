@@ -919,6 +919,53 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
    - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/e2e/test_d1_cloud_smoke.py -v`
    - Kết quả: **10 passed, 7 skipped in 0.28s (Exit code 0)**.
 
+---
+
+## 24. Nghiệm Thu Khảo Sát Tài Nguyên Cloudflare Thực Tế & Gói Triển Khai (Review a4f8360)
+
+- **Thời điểm:** 2026-11-05 14:15 (GMT+7)
+- **Trạng thái:** **Step 10 Khảo sát Cloudflare & Chuẩn bị Gói Triển khai Hoàn tất 100% — Sẵn sàng cho Codex kiểm duyệt trước bước triển khai Cloud.**
+- **Ranh giới an toàn tuyệt đối:**
+  - Chưa tạo/cập nhật/xóa tài nguyên Cloudflare, chưa deploy Worker/Pages, chưa áp schema/seed D1 cloud, chưa gọi Workers AI, chưa mở Tunnel public.
+  - Không cài thêm/nâng cấp package/công cụ, không pull/build Docker image.
+  - Không sửa file `.env` đang dùng, không restart hay chạm vào stack đang phục vụ (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+  - Không in token/secret/password/hash/JWT hay dump dữ liệu người dùng.
+  - 1 tab AGY, 0 worktree, 0 push/merge trên nhánh `feat/cloudflare-d1`.
+
+### 24.1. Kết Quả Khảo Sát Thực Tế Cloudflare (Agent A - Read-Only Inventory)
+- **Account & Worker Subdomain:**
+  - Account ID: `5e76c2bf4e09587a010d31ea416ec8d3` (Tên: `Hnhoa494@gmail.com's Account`).
+  - workers.dev Subdomain: `hnhoa494-assethub.workers.dev`.
+- **Cơ sở dữ liệu D1 (`assethub-test-d1`):**
+  - UUID: `3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`.
+  - Row COUNT tổng hợp: `authentication_user`: 3, `departments_department`: 5, `departments_category`: 1, `assets_asset`: 2, `_idempotency_log`: 1514.
+  - **Đánh giá an toàn:** CSDL D1 hiện tại chứa dữ liệu người dùng thật; **BẮT BUỘC PHẢI GIỮ**, tuyệt đối không DROP TABLE hay áp schema PG đè lên; phải sao lưu export trước khi thao tác cloud.
+- **Workers:**
+  - `assethub-test-worker` (Bridge): Đang hoạt động tại `https://assethub-test-worker.hnhoa494-assethub.workers.dev` (Active version `382d0d9b-6e0b-4554-b899-84b73d8d31b1`), binding `env.DB` trỏ chuẩn xác D1 trên.
+  - `assethub-ai-worker`: **Chưa tồn tại** (CF error 10007), cần deploy khi thực hiện bước Cloud.
+- **Pages Projects:** Hiện có 0 project (`wrangler pages project list` rỗng); sẽ tạo khi deploy frontend SPA.
+- **R2 Storage:** Bị chặn bởi lỗi `[code: 10042]` do Cloudflare Dashboard yêu cầu kích hoạt billing/thẻ. Đã dừng kiểm tra theo đúng quy tắc, không tự kích hoạt.
+- **Workers AI:** Token có đủ quyền `ai (write)`, `ai-search (write)`, `ai-search (run)`; catalog model `@cf/meta/llama-3.1-8b-instruct-fp8` hợp lệ; không gửi request suy luận (0 model call).
+
+### 24.2. Cấu Hình & Artifacts Triển Khai Local (Agent B)
+1. **Đồng bộ D1 Binding trong Wrangler Configs:**
+   - `cloudflare-worker/wrangler.toml`: Đồng bộ `database_name = "assethub-test-d1"`, `database_id = "3850e3a1-7c57-42f4-afd6-1fa1655bbcf1"` (loại bỏ placeholder `local-d1-id`).
+   - `cloudflare-worker/bridge/wrangler.toml`: Đã khớp `database_name = "assethub-test-d1"`, `database_id = "3850e3a1-7c57-42f4-afd6-1fa1655bbcf1"`.
+   - `cloudflare-worker/bridge/src/index.js`: Đã có source JS chuẩn cho Worker Bridge.
+   - Kiểm tra cú pháp offline: `wrangler types` parse hợp lệ 100%; unit test AI worker pass 21/21, test bridge regression pass 8/8.
+2. **Cập nhật `deploy/.env.demo.example`:**
+   - Điền Account ID thực `5e76c2bf4e09587a010d31ea416ec8d3` vào R2 endpoint URL.
+   - Điền URLs thật của Worker Bridge (`https://assethub-test-worker.hnhoa494-assethub.workers.dev`) và AI Worker (`https://assethub-ai-worker.hnhoa494-assethub.workers.dev`).
+   - Phân định rõ 5 giai đoạn điền biến bảo mật; token/secret giữ nguyên placeholder để người dùng nhập cục bộ khi deploy.
+3. **Frontend CSP Headers (`frontend/public/_headers`):**
+   - Bổ sung `https://api.assethub.example.com` và `https://*.workers.dev` vào `connect-src`.
+
+### 24.3. Runbook Triển Khai & Quy Trình Hoàn Tác (Coordinator)
+- Toàn bộ Runbook chi tiết từng bước được chuẩn hóa tại `docs/deployment-guide.md`.
+- Tập dữ liệu demo tối thiểu đề xuất: 1 Department (`IT`), 1 Category (`LAPTOP`), 2 Users (`demo_admin`, `demo_user`), 2 Assets, 1 Request. Mật khẩu demo được hướng dẫn băm chuẩn PBKDF2 SHA-256 1.000.000 rounds qua Django shell, không hạ hasher.
+- Kế hoạch Rollback: Dừng Quick Tunnel và tắt container demo port 8001; khôi phục D1 từ bản export; hệ thống PostgreSQL production cổng 5433/8000 hoàn toàn nguyên vẹn với RPO = 0s.
+
+
 
 
 

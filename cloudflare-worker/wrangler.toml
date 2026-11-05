@@ -10,5 +10,5 @@ AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "assethub-d1"
-database_id = "local-d1-id"
+database_name = "assethub-test-d1"
+database_id = "3850e3a1-7c57-42f4-afd6-1fa1655bbcf1"
