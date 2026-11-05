@@ -150,6 +150,7 @@ FALLBACK_KEYWORD_RULES = [
 
 
 class AiProxyService:
+    DEFAULT_USER_AGENT = "AssetHub-Backend/1.0"
     _failure_count = 0
     _tripped_until = 0
 
@@ -317,8 +318,14 @@ class AiProxyService:
 
     @classmethod
     def _post_request(cls, url: str, payload: dict, headers: dict, timeout: float = 6.0) -> dict:
+        req_headers = {"User-Agent": cls.DEFAULT_USER_AGENT}
+        if headers:
+            for k, v in headers.items():
+                if k.lower() == "user-agent":
+                    req_headers.pop("User-Agent", None)
+                req_headers[k] = v
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 raw_body = response.read().decode("utf-8")
@@ -366,6 +373,7 @@ class AiProxyService:
         headers = {
             "Authorization": f"Bearer {settings.AI_SERVICE_TOKEN}",
             "Content-Type": "application/json",
+            "User-Agent": cls.DEFAULT_USER_AGENT,
         }
         payload = {
             "request_id": request_id,

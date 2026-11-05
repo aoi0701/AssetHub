@@ -1175,3 +1175,81 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
      - `suggested_category_name`: `Laptop`
      - `model`: `@cf/meta/llama-3.1-8b-instruct-fp8`
 4. **Bảo toàn ranh giới:** Dừng ngay sau 1 request duy nhất, 0 gọi thêm request suy luận nào khác.
+
+---
+
+## 29. Nghiệm Thu Sửa Lớp Django HTTP Client (User-Agent), Vượt Rào Cản Cloudflare Edge 1010 & Live Backend Integration
+
+- **Thời điểm:** 2026-11-05 16:40 (GMT+7)
+- **Trạng thái:** **Sửa lỗi HTTP Client hoàn tất, Live Backend → Worker AI thành công 100% — Sẵn sàng cho Codex kiểm duyệt.**
+- **Ranh giới an toàn tuyệt đối:**
+  - Giữ nguyên live URLs: Pages Frontend `https://assethub-97m.pages.dev`, Quick Tunnel `https://away-server-pot-catalogue.trycloudflare.com`.
+  - Không kích hoạt billing R2 / thẻ thanh toán (trạng thái R2 pending Cloudflare Error 10042, cần người dùng thao tác kích hoạt trên Dashboard/Billing khi muốn nâng cấp; không đánh đồng fallback/skip là hoàn tất).
+  - Không push, không merge nhánh `feat/cloudflare-d1`.
+  - Bảo lưu nguyên trạng 2 tài liệu Tuần 5 untracked (`docs/superpowers/specs/2026-11-05-week-5-asset-assistant-design.md`, `docs/superpowers/plans/2026-11-05-week-5-asset-assistant.md`).
+  - Tiêu tốn đúng 1 lượt inference live duy nhất trong hạn mức Free, 0 rò rỉ secret token.
+
+### 29.1. Phân Tách Điểm Nghẽn & Paired Control Probe (Đối Chứng 0-Quota)
+1. **Xác nhận trạng thái Worker AI trước đó:**
+   - Suy luận trực tiếp tới Cloudflare Worker AI đã được nghiệm thu và kiểm chứng thành công tại commit `86ad326` (HTTP 200, `log_saved: true`).
+   - Điểm nghẽn không nằm ở Worker AI hay model LLaMA 3.1 8B, mà phát sinh tại tầng Django HTTP integration khi backend gọi Worker qua mạng.
+2. **Paired Control Probe (Đối chứng không tiêu tốn inference):**
+   - Thực nghiệm với payload rỗng `{}` gửi tới Cloudflare Worker AI endpoint:
+     - **Thực nghiệm A (Default urllib User-Agent):** Python `urllib` mặc định (`Python-urllib/3.12`) bị Cloudflare Edge WAF chặn đứng ngay tại rào cản mạng với HTTP 403 (Mã lỗi Cloudflare Error 1010: "Access denied by Cloudflare Ray ID"). Request chưa từng chạm tới mã nguồn Worker.
+     - **Thực nghiệm B (Custom User-Agent `AssetHub-Backend/1.0`):** Request vượt qua hoàn toàn rào cản Cloudflare Edge WAF, được tầng validator của Worker thụ lý và trả về HTTP 400 Bad Request `{"error": "Invalid request body"}` trước khi chạm tới `env.AI.run`.
+   - **Kết luận:** Bằng chứng đối chứng thực tế chứng minh thay đổi User-Agent giải quyết dứt điểm lỗi 403 Error 1010 mà không tiêu hao hạn mức suy luận (0 model inference).
+
+### 29.2. Sửa Đổi Tinh Gọn Tại Backend (`backend/apps/ai/services.py`)
+- Khai báo hằng số `DEFAULT_USER_AGENT = "AssetHub-Backend/1.0"` trên `AiProxyService`.
+- Tự động gắn header `User-Agent: AssetHub-Backend/1.0` trong `_post_request` và `suggest_category`, cho phép override nếu caller truyền header tùy chỉnh.
+- Sử dụng thư viện chuẩn `urllib.request`, 0 thêm dependency bên ngoài, 0 can thiệp logic phân quyền hay circuit breaker.
+
+### 29.3. Bổ Sung Regression Test Suite Cục Bộ (`backend/tests/test_ai_proxy.py`)
+- Bổ sung các unit tests kiểm chứng hành vi:
+  - `test_post_request_includes_default_user_agent`: Xác minh header mặc định `AssetHub-Backend/1.0`.
+  - `test_post_request_allows_custom_user_agent_override`: Xác minh cho phép ghi đè custom User-Agent.
+  - `test_suggest_category_headers_and_body_intact`: Xác minh `User-Agent`, `Authorization: Bearer ...`, `Content-Type: application/json` và request body gửi đi đầy đủ, chính xác.
+  - `test_suggest_category_403_raises_service_unavailable_not_fallback`: Xác minh mã lỗi 403 thật từ upstream vẫn raise `ServiceUnavailable` (HTTP 503) và không bị nuốt thành fallback.
+- **Kết quả chạy test cục bộ (harness test PostgreSQL độc lập trên port 5432):**
+  - Toàn bộ **36/36 tests PASSED in 4.62s (100% PASS)**.
+
+### 29.4. Kiểm Chứng Live Toàn Tuyến: Backend API → Worker → Model LLaMA 3.1 8B
+- Khởi động lại container `assethub-demo-backend-1` (port 8001), healthcheck pass `{"status":"ok","db":"ok"}`.
+- Gọi API đề xuất danh mục thật qua backend:
+  - Endpoint: `POST http://127.0.0.1:8001/api/ai/suggest-category/` (qua tài khoản Admin hợp lệ).
+  - Payload:
+    ```json
+    {
+      "name": "MacBook Pro 16 M3 Max",
+      "description": "Laptop Apple cho lập trình viên đồ họa"
+    }
+    ```
+  - Phản hồi API: **HTTP/2 200 OK**
+  - Response Data:
+    ```json
+    {
+      "request_id": "76ec49b3-6c84-4fe1-ba56-91e840003057",
+      "suggested_category_id": 1,
+      "suggested_category_name": "Laptop",
+      "explanation": "MacBook Pro 16 M3 Max là một chiếc laptop cao cấp của Apple, được thiết kế cho lập trình viên đồ họa.",
+      "log_saved": true,
+      "is_fallback": false
+    }
+    ```
+- **Tiêu chí nghiệm thu hoàn tất:**
+  - `is_fallback: false`: Model AI LLaMA 3.1 8B phân loại thành công, không dùng heuristic.
+  - `log_saved: true`: Ghi log vào Cloudflare D1 thành công.
+  - Phân loại chính xác danh mục ID 1 ("Laptop").
+  - Tiêu tốn đúng 1 lượt inference duy nhất.
+
+### 29.5. Lưu Ý Kỹ Thuật Về Tính Tiền Định (Determinism Nuance)
+- Thiết lập `temperature: 0.1` cùng các ràng buộc cấu trúc prompt nghiêm ngặt làm giảm thiểu tối đa tính ngẫu nhiên (nondeterminism) của mô hình ngôn ngữ lớn (LLM).
+- Tuy nhiên, `temperature: 0.1` không phải là một bảo đảm toán học tuyệt đối cho tính tiền định 100% trong mọi điều kiện (vẫn có xác suất biến thiên ở tầng sampling token). Hệ thống đã được gia cố bằng parser đa tầng (hỗ trợ prefix `^ID\s*[:#-]?\s*(\d+)$`, key aliases, accent-insensitive matching) để bảo đảm tính ổn định thực tế của hệ thống production.
+
+### 29.6. Trạng Thái Dịch Vụ & URLs Hiện Tại
+- **Cloudflare Pages:** `https://assethub-97m.pages.dev`
+- **Cloudflare Quick Tunnel:** `https://away-server-pot-catalogue.trycloudflare.com`
+- **Worker AI:** `https://assethub-ai-worker.hnhoa494-assethub.workers.dev`
+- **D1 Database:** `assethub-test-d1` (`3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`)
+- **Cloudflare R2:** Pending Cloudflare Error 10042 (chưa kích hoạt thanh toán trên Dashboard).
+

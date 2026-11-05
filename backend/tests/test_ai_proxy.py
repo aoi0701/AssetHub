@@ -1,3 +1,4 @@
+import json
 import socket
 import time
 import urllib.error
@@ -638,3 +639,96 @@ def test_db_error_during_category_lookup_raises_database_error_not_fallback(admi
                     data={"name": "Laptop Dell", "description": "Core i7"},
                     format="json",
                 )
+
+
+def test_post_request_includes_default_user_agent():
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = b'{"status": "ok"}'
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+        res = AiProxyService._post_request("http://example.com/test", {"hello": "world"}, {})
+        assert res == {"status": "ok"}
+        assert mock_urlopen.called
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("User-agent") == AiProxyService.DEFAULT_USER_AGENT
+        assert req.get_header("User-agent") == "AssetHub-Backend/1.0"
+
+
+def test_post_request_allows_custom_user_agent_override():
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = b'{"status": "ok"}'
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+        AiProxyService._post_request(
+            "http://example.com/test",
+            {"hello": "world"},
+            {"User-Agent": "Custom-Agent/2.0"},
+        )
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("User-agent") == "Custom-Agent/2.0"
+
+
+@pytest.mark.django_db
+def test_suggest_category_headers_and_body_intact(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+    target_category = sample_categories[0]
+
+    captured_requests = []
+
+    def mock_urlopen(req, timeout=6.0):
+        captured_requests.append(req)
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = (
+            f'{{"request_id": "req-1", "suggested_category_id": {target_category.id}, '
+            f'"suggested_category_name": "{target_category.name}", "explanation": "test", "log_saved": true}}'
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        return mock_resp
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon", "description": "Laptop doanh nhân"},
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data["suggested_category_id"] == target_category.id
+        assert response.data["is_fallback"] is False
+
+        assert len(captured_requests) == 1
+        req = captured_requests[0]
+        assert req.get_header("User-agent") == "AssetHub-Backend/1.0"
+        assert req.get_header("User-agent") == AiProxyService.DEFAULT_USER_AGENT
+        assert req.get_header("Authorization").startswith("Bearer ")
+        assert req.get_header("Content-type") == "application/json"
+
+        sent_body = json.loads(req.data.decode("utf-8"))
+        assert sent_body["name"] == "ThinkPad X1 Carbon"
+        assert sent_body["description"] == "Laptop doanh nhân"
+        assert isinstance(sent_body["categories"], list)
+        assert any(c["id"] == target_category.id for c in sent_body["categories"])
+
+
+@pytest.mark.django_db
+def test_suggest_category_403_raises_service_unavailable_not_fallback(admin_user, sample_categories):
+    client = auth_client_for(admin_user)
+
+    http_error = urllib.error.HTTPError(
+        url="http://127.0.0.1:8787/api/suggest-category",
+        code=403,
+        msg="Forbidden",
+        hdrs=None,
+        fp=MagicMock(read=lambda: b'{"error":"Worker forbidden"}'),
+    )
+
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        response = client.post(
+            "/api/ai/suggest-category/",
+            data={"name": "ThinkPad X1 Carbon", "description": "Laptop doanh nhân"},
+            format="json",
+        )
+        assert response.status_code == 503
+        assert "authentication failed" in str(response.data)
+        assert not (response.status_code == 200 and response.data.get("is_fallback") is True)
