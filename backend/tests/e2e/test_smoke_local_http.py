@@ -32,6 +32,11 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 TEST_BRIDGE_PORT = 8787
 TEST_BRIDGE_TOKEN = "test-bridge-token-with-minimum-32-chars-long"
 
+CLOUD_ENV_KEYS = [
+    "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "R2_ENDPOINT_URL",
+    "AI_WORKER_URL", "AI_SERVICE_TOKEN",
+]
+
 pytestmark = pytest.mark.rehearsal
 
 
@@ -74,7 +79,7 @@ def unblock_db(django_db_blocker):
         yield
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def live_rehearsal_server(django_db_blocker) -> Generator[dict, None, None]:
     """
     Spins up:
@@ -82,122 +87,61 @@ def live_rehearsal_server(django_db_blocker) -> Generator[dict, None, None]:
     2. Real WSGI HTTP server running Django on a free loopback port with USE_D1_DATABASE=True.
     Tears down all resources cleanly on completion.
     """
-    with django_db_blocker.unblock():
-        run_id = secrets.token_hex(6)
-        harness = D1TargetHarness(
-            port=TEST_BRIDGE_PORT,
-            token=TEST_BRIDGE_TOKEN,
-            run_id=f"smk_{run_id}",
-        )
-        harness.setup(clean_first=True)
+    CLOUD_ENV_KEYS = [
+        "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "R2_ENDPOINT_URL",
+        "AI_WORKER_URL", "AI_SERVICE_TOKEN",
+    ]
+    orig_env = {k: os.environ.get(k) for k in CLOUD_ENV_KEYS}
+    orig_settings = {k: getattr(settings, k, None) for k in CLOUD_ENV_KEYS}
+    orig_secret_key = getattr(settings, "SECRET_KEY", None)
+    orig_default = dict(settings.DATABASES.get("default", {}))
+    orig_allowed_hosts = list(getattr(settings, "ALLOWED_HOSTS", []))
 
-        # Seed pre-existing baseline admin into D1 so last-admin trigger has active reference
-        harness.query(
-            """
-            INSERT INTO authentication_user (
-                id, username, password, email, role, is_active, is_staff, is_superuser, auth_version, date_joined
-            ) VALUES (
-                99999, 'cloud_baseline_admin', 'pbkdf2_sha256$test$dummy', 'baseline@assethub.local', 'ADMIN', 1, 1, 1, 1, '2026-01-01 00:00:00'
-            );
-            """
-        )
+    harness = None
+    server = None
+    server_thread = None
 
-        d1_conf = {
-            "ENGINE": "assethub_api.backends.d1",
-            "NAME": "assethub-test-d1",
-            "BRIDGE_URL": f"http://127.0.0.1:{TEST_BRIDGE_PORT}",
-            "BRIDGE_TOKEN": TEST_BRIDGE_TOKEN,
-            "TIMEOUT": 45.0,
-            "TIME_ZONE": None,
-            "CONN_MAX_AGE": 0,
-            "CONN_HEALTH_CHECKS": False,
-            "OPTIONS": {},
-            "AUTOCOMMIT": True,
-            "ATOMIC_REQUESTS": False,
-        }
+    try:
+        for k in CLOUD_ENV_KEYS:
+            os.environ[k] = ""
+            setattr(settings, k, "")
+        settings.SECRET_KEY = getattr(settings, "SECRET_KEY", None) or "local-rehearsal-secret-key-32chars"
 
-        orig_default = dict(settings.DATABASES.get("default", {}))
-        orig_allowed_hosts = list(getattr(settings, "ALLOWED_HOSTS", []))
+        with django_db_blocker.unblock():
+            run_id = secrets.token_hex(6)
+            harness = D1TargetHarness(
+                port=TEST_BRIDGE_PORT,
+                token=TEST_BRIDGE_TOKEN,
+                run_id=f"smk_{run_id}",
+            )
+            harness.setup(clean_first=True)
 
-        # Cloud settings neutralization (guarantee zero cloud calls in rehearsal)
-        orig_r2_key = getattr(settings, "R2_ACCESS_KEY_ID", None)
-        orig_r2_secret = getattr(settings, "R2_SECRET_ACCESS_KEY", None)
-        orig_r2_bucket = getattr(settings, "R2_BUCKET_NAME", None)
-        orig_ai_url = getattr(settings, "AI_WORKER_URL", None)
-        orig_ai_token = getattr(settings, "AI_SERVICE_TOKEN", None)
+            # Seed pre-existing baseline admin into D1 so last-admin trigger has active reference
+            harness.query(
+                """
+                INSERT INTO authentication_user (
+                    id, username, password, email, role, is_active, is_staff, is_superuser, auth_version, date_joined
+                ) VALUES (
+                    99999, 'cloud_baseline_admin', 'pbkdf2_sha256$test$dummy', 'baseline@assethub.local', 'ADMIN', 1, 1, 1, 1, '2026-01-01 00:00:00'
+                );
+                """
+            )
 
-        settings.R2_ACCESS_KEY_ID = None
-        settings.R2_SECRET_ACCESS_KEY = None
-        settings.R2_BUCKET_NAME = None
-        settings.AI_WORKER_URL = None
-        settings.AI_SERVICE_TOKEN = None
+            d1_conf = {
+                "ENGINE": "assethub_api.backends.d1",
+                "NAME": "assethub-test-d1",
+                "BRIDGE_URL": f"http://127.0.0.1:{TEST_BRIDGE_PORT}",
+                "BRIDGE_TOKEN": TEST_BRIDGE_TOKEN,
+                "TIMEOUT": 45.0,
+                "TIME_ZONE": None,
+                "CONN_MAX_AGE": 0,
+                "CONN_HEALTH_CHECKS": False,
+                "OPTIONS": {},
+                "AUTOCOMMIT": True,
+                "ATOMIC_REQUESTS": False,
+            }
 
-        # Close existing connections before redirecting to D1
-        for alias in ("default", "d1_cloud_smoke"):
-            if alias in connections:
-                try:
-                    connections[alias].close()
-                except Exception:
-                    pass
-                try:
-                    del connections[alias]
-                except Exception:
-                    pass
-
-        settings.DATABASES["default"] = d1_conf
-        connections.databases["default"] = d1_conf
-        settings.ALLOWED_HOSTS = ["*"]
-
-        # Ephemeral free loopback port
-        free_port = find_free_port()
-        application = get_wsgi_application()
-        server = make_server(
-            "127.0.0.1",
-            free_port,
-            application,
-            server_class=ThreadedWSGIServer,
-        )
-        actual_port = server.server_port
-
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
-
-        # Probe health endpoint to guarantee server readiness
-        ready = wait_for_http_ready(f"http://127.0.0.1:{actual_port}/api/health/", timeout=10.0)
-        if not ready:
-            server.shutdown()
-            server.server_close()
-            harness.teardown()
-            raise TimeoutError(f"WSGI rehearsal server failed to start on port {actual_port}")
-
-        context = {
-            "harness": harness,
-            "server": server,
-            "server_thread": server_thread,
-            "port": actual_port,
-            "base_url": f"http://127.0.0.1:{actual_port}",
-            "d1_bridge_url": f"http://127.0.0.1:{TEST_BRIDGE_PORT}",
-            "d1_bridge_token": TEST_BRIDGE_TOKEN,
-        }
-
-        try:
-            yield context
-        finally:
-            # 1. Stop WSGI server
-            try:
-                server.shutdown()
-                server.server_close()
-                server_thread.join(timeout=5.0)
-            except Exception:
-                pass
-
-            # 2. Teardown D1 harness
-            try:
-                harness.teardown()
-            except Exception:
-                pass
-
-            # 3. Restore original database settings
+            # Close existing connections before redirecting to D1
             for alias in ("default", "d1_cloud_smoke"):
                 if alias in connections:
                     try:
@@ -208,17 +152,95 @@ def live_rehearsal_server(django_db_blocker) -> Generator[dict, None, None]:
                         del connections[alias]
                     except Exception:
                         pass
-            if orig_default:
-                settings.DATABASES["default"] = orig_default
-                connections.databases["default"] = orig_default
-            settings.ALLOWED_HOSTS = orig_allowed_hosts
 
-            # 4. Restore original cloud settings
-            settings.R2_ACCESS_KEY_ID = orig_r2_key
-            settings.R2_SECRET_ACCESS_KEY = orig_r2_secret
-            settings.R2_BUCKET_NAME = orig_r2_bucket
-            settings.AI_WORKER_URL = orig_ai_url
-            settings.AI_SERVICE_TOKEN = orig_ai_token
+            settings.DATABASES["default"] = d1_conf
+            connections.databases["default"] = d1_conf
+            settings.ALLOWED_HOSTS = ["*"]
+
+            # Ephemeral free loopback port
+            free_port = find_free_port()
+            application = get_wsgi_application()
+            server = make_server(
+                "127.0.0.1",
+                free_port,
+                application,
+                server_class=ThreadedWSGIServer,
+            )
+            actual_port = server.server_port
+
+            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+
+            # Probe health endpoint to guarantee server readiness
+            ready = wait_for_http_ready(f"http://127.0.0.1:{actual_port}/api/health/", timeout=10.0)
+            if not ready:
+                raise TimeoutError(f"WSGI rehearsal server failed to start on port {actual_port}")
+
+            context = {
+                "harness": harness,
+                "server": server,
+                "server_thread": server_thread,
+                "port": actual_port,
+                "base_url": f"http://127.0.0.1:{actual_port}",
+                "d1_bridge_url": f"http://127.0.0.1:{TEST_BRIDGE_PORT}",
+                "d1_bridge_token": TEST_BRIDGE_TOKEN,
+            }
+
+            yield context
+    finally:
+        # 1. Stop WSGI server
+        if server:
+            try:
+                server.shutdown()
+                server.server_close()
+            except Exception:
+                pass
+        if server_thread:
+            try:
+                server_thread.join(timeout=5.0)
+            except Exception:
+                pass
+
+        # 2. Teardown D1 harness
+        if harness:
+            try:
+                harness.teardown()
+            except Exception:
+                pass
+
+        # 3. Restore original database settings
+        for alias in ("default", "d1_cloud_smoke"):
+            if alias in connections:
+                try:
+                    connections[alias].close()
+                except Exception:
+                    pass
+                try:
+                    del connections[alias]
+                except Exception:
+                    pass
+        if orig_default:
+            settings.DATABASES["default"] = orig_default
+            connections.databases["default"] = orig_default
+        settings.ALLOWED_HOSTS = orig_allowed_hosts
+
+        # 4. Restore original cloud settings & env
+        for k, v in orig_settings.items():
+            if v is None:
+                if hasattr(settings, k):
+                    delattr(settings, k)
+            else:
+                setattr(settings, k, v)
+        if orig_secret_key is not None:
+            settings.SECRET_KEY = orig_secret_key
+        elif hasattr(settings, "SECRET_KEY"):
+            delattr(settings, "SECRET_KEY")
+
+        for k, v in orig_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 @pytest.mark.rehearsal
@@ -231,24 +253,22 @@ def test_rehearsal_negative_preflight_unbootstrapped_d1(django_db_blocker):
     from tests.e2e.test_d1_cloud_smoke import ALIAS, smoke_context
 
     with django_db_blocker.unblock():
-        harness = None
-        created_harness = False
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             in_use = s.connect_ex(("127.0.0.1", TEST_BRIDGE_PORT)) == 0
 
-        if not in_use:
-            run_id = secrets.token_hex(6)
-            harness = D1TargetHarness(
-                port=TEST_BRIDGE_PORT,
-                token=TEST_BRIDGE_TOKEN,
-                run_id=f"smk_preflight_{run_id}",
+        if in_use:
+            pytest.skip(
+                f"Port {TEST_BRIDGE_PORT} is in use by another listener. "
+                "Refusing to connect or mutate foreign listener."
             )
-            harness.setup(clean_first=True)
-            created_harness = True
-        else:
-            from assethub_api.backends.d1.client import D1Client
-            client = D1Client(f"http://127.0.0.1:{TEST_BRIDGE_PORT}", TEST_BRIDGE_TOKEN)
-            client.query("DELETE FROM authentication_user;")
+
+        run_id = secrets.token_hex(6)
+        harness = D1TargetHarness(
+            port=TEST_BRIDGE_PORT,
+            token=TEST_BRIDGE_TOKEN,
+            run_id=f"smk_preflight_{run_id}",
+        )
+        harness.setup(clean_first=True)
 
         try:
             # Wire settings for D1 bridge
@@ -300,18 +320,7 @@ def test_rehearsal_negative_preflight_unbootstrapped_d1(django_db_blocker):
                 settings.DATABASES.pop(ALIAS, None)
                 connections.databases.pop(ALIAS, None)
 
-            if created_harness and harness:
-                harness.teardown()
-            elif in_use:
-                client.query(
-                    """
-                    INSERT INTO authentication_user (
-                        id, username, password, email, role, is_active, is_staff, is_superuser, auth_version, date_joined
-                    ) VALUES (
-                        99999, 'cloud_baseline_admin', 'pbkdf2_sha256$test$dummy', 'baseline@assethub.local', 'ADMIN', 1, 1, 1, 1, '2026-01-01 00:00:00'
-                    );
-                    """
-                )
+            harness.teardown()
 
 
 @pytest.mark.rehearsal
@@ -397,20 +406,19 @@ def test_local_http_smoke_subprocess_rehearsal(live_rehearsal_server):
     env.update(
         {
             "RUN_CLOUD_SMOKE": "1",
+            "USE_D1_DATABASE": "True",
             "CLOUD_API_BASE_URL": f"http://127.0.0.1:{server_port}",
             "D1_BRIDGE_URL": bridge_url,
             "D1_BRIDGE_SECRET_TOKEN": bridge_token,
             "D1_BRIDGE_TOKEN": bridge_token,
-            "DB_HOST": "127.0.0.1",
-            "DB_PORT": "5433",
             "PYTHONPATH": str(BACKEND_DIR),
         }
     )
+    for pg_key in ["DB_HOST", "DB_PORT", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_RO_USER", "POSTGRES_RO_PASSWORD"]:
+        env.pop(pg_key, None)
+
     # Explicitly wipe R2 and AI environment variables (Zero-Cloud guarantee)
-    for cloud_key in [
-        "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "R2_ENDPOINT_URL",
-        "AI_WORKER_URL", "AI_SERVICE_TOKEN",
-    ]:
+    for cloud_key in CLOUD_ENV_KEYS:
         env[cloud_key] = ""
 
     cmd = [
@@ -418,6 +426,8 @@ def test_local_http_smoke_subprocess_rehearsal(live_rehearsal_server):
         "-m",
         "pytest",
         "tests/e2e/test_d1_cloud_smoke.py",
+        "-m",
+        "cloud_smoke",
         "-v",
         "-s",
     ]
@@ -446,3 +456,4 @@ def test_local_http_smoke_subprocess_rehearsal(live_rehearsal_server):
     assert "test_03_d1_asset_request_workflow PASSED" in result.stdout
     assert "test_06_d1_last_admin_protection_trigger PASSED" in result.stdout
     assert "test_07_cleanup_verification PASSED" in result.stdout
+    assert "5 passed, 2 skipped" in result.stdout

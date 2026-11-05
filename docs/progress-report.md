@@ -873,6 +873,53 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
   2. Revert DNS/Route Cloudflare Pages về trạng thái bảo trì hoặc bản build trước.
   3. Dữ liệu PostgreSQL production trên port 5433 và 8000 hoàn toàn nguyên vẹn, sẵn sàng tiếp tục phục vụ mà không cần khôi phục dữ liệu.
 
+---
+
+## 23. Nghiệm Thu Sửa 3 Đường Cô Lập Test Rehearsal (Review 7cbd2ad)
+
+- **Thời điểm:** 2026-11-05 13:55 (GMT+7)
+- **Trạng thái:** **Step 9 Hoàn tất sửa 3 đường cô lập rehearsal PASS 100% — Đã qua review độc lập Ponytail Agent C (Verdict: SHIP) & sẵn sàng để Codex kiểm duyệt.**
+- **Ranh giới an toàn nghiêm ngặt:**
+  - Zero cloud mutation, zero live Workers AI call, zero R2 billing, zero public Tunnel.
+  - Zero install / upgrade (`npm`, `pip`, `uv`), zero Docker image pull, zero model download.
+  - Không reset / thay đổi database thật hay container stack đang chạy (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+  - Toàn bộ kiểm thử dùng dữ liệu giả độc lập trên test database / local harness.
+  - 1 tab AGY, 0 worktree, 0 push/merge trên nhánh `feat/cloudflare-d1`.
+
+### 23.1. Chi Tiết Khắc Phục Kỹ Thuật 3 Điểm
+1. **Bảo Vệ Listener Lạ & Phân Tách Port 8787 (`test_smoke_local_http.py`):**
+   - Xóa bỏ hoàn toàn nhánh `else` gọi `client.query("DELETE FROM authentication_user;")` và nhánh `finally ... elif in_use: client.query("INSERT INTO ...")` trong `test_rehearsal_negative_preflight_unbootstrapped_d1`.
+   - Nếu `in_use == True` (port 8787 có listener lạ): Dừng ngay bằng `pytest.skip("Port 8787 is in use by another listener. Refusing to connect or mutate foreign listener.")`, bảo đảm **0 câu SQL/mutation** gửi tới listener ngoài (đã kiểm chứng mock `D1Client.query call_count == 0`).
+   - Đổi `live_rehearsal_server` sang `scope="function"` (thay vì `module`): Giải phóng port 8787 ngay sau từng test case, loại bỏ triệt để phụ thuộc vòng đời khi đảo thứ tự chạy.
+2. **Cô Lập Server VÀ Child Từ Trước Startup:**
+   - Khai báo danh sách 6 biến cloud: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_ENDPOINT_URL`, `AI_WORKER_URL`, `AI_SERVICE_TOKEN`.
+   - Snapshot `orig_env` và `orig_settings` trước khối `try:`. Gán đồng thời `os.environ[k] = ""` VÀ `setattr(settings, k, "")` trước khi khởi tạo WSGI server hoặc D1 bridge.
+   - Gán `settings.SECRET_KEY = getattr(settings, "SECRET_KEY", None) or "local-rehearsal-secret-key-32chars"`.
+   - Trong `finally:`: Khôi phục 100% `os.environ`, `settings`, `DATABASES`, `connections`, `ALLOWED_HOSTS`, đóng server và thread, teardown harness.
+   - Bằng chứng thực nghiệm: Kể cả khi có fake credentials trong môi trường, `is_r2_configured()` bên trong server context trả về `False` dứt khoát; sau teardown khôi phục hoàn hảo.
+3. **Loại Bỏ Hoàn Toàn PostgreSQL Khỏi Subprocess Cloud Rehearsal:**
+   - Trong `test_local_http_smoke_subprocess_rehearsal`:
+     - Truyền `"USE_D1_DATABASE": "True"` ngay trong subprocess env, khiến `settings.DATABASES` chỉ chứa duy nhất alias `'default'` với engine `assethub_api.backends.d1`.
+     - Xóa bỏ `"DB_HOST": "127.0.0.1"` và `"DB_PORT": "5433"`. Pop sạch mọi biến PostgreSQL: `for pg_key in ["DB_HOST", "DB_PORT", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_RO_USER", "POSTGRES_RO_PASSWORD"]: env.pop(pg_key, None)`.
+     - Chạy subprocess với flag `"-m", "cloud_smoke"`: Deselect 10 bài unit/safety (bao gồm 2 bài có `@pytest.mark.django_db`), chỉ chạy 7 bài test HTTP cloud smoke.
+     - Subprocess chạy độc lập 100% qua loopback D1 Target harness (`127.0.0.1:8787`), không kết nối và không cần bất kỳ container/port PostgreSQL nào.
+     - Bổ sung assertion: `assert "5 passed, 2 skipped" in result.stdout`.
+
+### 23.2. Kết Quả Kiểm Thử Thực Nghiệm Sau Cùng
+1. **Rehearsal Default Gating Check (Không có cờ opt-in):**
+   - Lệnh: `backend/.venv/bin/pytest backend/tests/e2e/test_smoke_local_http.py -v`
+   - Kết quả: **3 skipped in 0.01s (Exit code 0, 100% Gated)**.
+2. **Rehearsal Opt-In Execution (`--rehearsal` hoặc `ASSETHUB_RUN_REHEARSAL=1`):**
+   - Lệnh: `backend/.venv/bin/pytest backend/tests/e2e/test_smoke_local_http.py --rehearsal -v -s`
+   - Kết quả: **3 passed in 14.39s (Subprocess smoke: 5 passed, 2 skipped, 10 deselected in 1.49s; R2/AI cloud skip có lý do rõ ràng)**.
+3. **Đảo Thứ Tự Test (Kiểm chứng Decoupling):**
+   - Lệnh: `backend/.venv/bin/pytest backend/tests/e2e/test_smoke_local_http.py::test_local_http_smoke_subprocess_rehearsal backend/tests/e2e/test_smoke_local_http.py::test_rehearsal_negative_preflight_unbootstrapped_d1 --rehearsal -v -s`
+   - Kết quả: **2 passed in 9.69s (Exit code 0)**.
+4. **Targeted Smoke Unit & Safety Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/e2e/test_d1_cloud_smoke.py -v`
+   - Kết quả: **10 passed, 7 skipped in 0.28s (Exit code 0)**.
+
+
 
 
 

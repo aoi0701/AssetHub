@@ -671,6 +671,22 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
     - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review`.
     - Cập nhật tài liệu tiến độ và commit local trên `feat/cloudflare-d1`.
 
+- [x] **Step 9: Sửa 3 Đường Cô Lập Test Rehearsal (Review 7cbd2ad)**
+  - **Agent A (Isolate Rehearsal Server, Port Guard & Child Zero-PG):**
+    - Trong `backend/tests/e2e/test_smoke_local_http.py`:
+      - Xóa triệt để nhánh `else DELETE/INSERT` khi port 8787 đã bận; từ chối mutation và không đụng listener lạ.
+      - Chuyển `live_rehearsal_server` sang `scope="function"` để giải phóng port ngay sau test.
+      - Cô lập R2/AI env và settings thành chuỗi rỗng `""` trước server startup; try/finally bao trọn toàn bộ fixture.
+      - Bỏ `DB_PORT: 5433` và mọi biến PG khỏi child env; đặt `USE_D1_DATABASE=True`; chạy subprocess với `-m cloud_smoke`.
+  - **Agent B (Negative Proofs & Lifecycle Verification):**
+    - Kiểm chứng kịch bản port bận: xác nhận 0 SQL mutation gửi tới listener lạ.
+    - Kiểm chứng `is_r2_configured() == False` và AI disabled khi có fake credentials trong môi trường trước fixture.
+    - Kiểm chứng child subprocess không phụ thuộc PostgreSQL container.
+    - Kiểm chứng thứ tự chạy xuôi và ngược độc lập vòng đời.
+  - **Coordinator & Agent C:**
+    - Thẩm định độc lập qua `superpowers:requesting-code-review` + `ponytail:ponytail-review`.
+    - Cập nhật Section 23 trong `docs/progress-report.md` và commit local trên `feat/cloudflare-d1`.
+
 ---
 
 ## Tiêu Chí Nghiệm Thu Toàn Diện (End-of-Plan Verification Gate)
