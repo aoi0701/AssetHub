@@ -22,5 +22,17 @@ def conversation(regular_user):
 
 
 @pytest.fixture
+def manager_conversation(assistant_graph):
+    from apps.assistant.models import Conversation
+
+    mgr = assistant_graph["manager_it"]
+    return Conversation.objects.create(
+        owner=mgr,
+        role_snapshot=mgr.role,
+        department_id_snapshot=mgr.department_id,
+    )
+
+
+@pytest.fixture
 def request_id():
     return uuid.uuid4()
