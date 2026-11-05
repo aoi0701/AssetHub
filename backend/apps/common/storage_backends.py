@@ -119,6 +119,7 @@ class R2AttachmentStorage(S3Boto3Storage, AttachmentStorage):
     Enforces private ACL and generates presigned S3 URLs expiring in 900s default.
     """
     default_acl = 'private'
+    signature_version = 's3v4'
 
     def __init__(self, *args, **kwargs):
         kwargs.setdefault(
@@ -138,6 +139,7 @@ class R2AttachmentStorage(S3Boto3Storage, AttachmentStorage):
             getattr(settings, 'R2_ENDPOINT_URL', None) or os.environ.get('R2_ENDPOINT_URL')
         )
         kwargs.setdefault('default_acl', 'private')
+        kwargs.setdefault('signature_version', 's3v4')
         kwargs.setdefault('querystring_auth', True)
         super().__init__(*args, **kwargs)
 

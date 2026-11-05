@@ -1252,5 +1252,55 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 - **Cloudflare Quick Tunnel:** `https://away-server-pot-catalogue.trycloudflare.com`
 - **Worker AI:** `https://assethub-ai-worker.hnhoa494-assethub.workers.dev`
 - **D1 Database:** `assethub-test-d1` (`3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`)
-- **Cloudflare R2:** Pending Cloudflare Error 10042 (chưa kích hoạt thanh toán trên Dashboard).
+- **Cloudflare R2:** Bucket `assethub-attachments` đã kích hoạt và kiểm chứng live thành công 100% (chi tiết tại Mục 30).
+
+---
+
+## 30. Nghiệm Thu Hoàn Tất Cloudflare R2 Object Storage & Khép Lại Toàn Bộ Hạng Mục Tuần 4
+
+- **Thời điểm:** 2026-11-05 18:05 (GMT+7)
+- **Trạng thái:** **Cloudflare R2 PASS 100% — Toàn bộ hạng mục Cloudflare Tuần 4 (D1 + AI Worker + Pages + Tunnel + R2) đã hoàn thành.**
+- **Ranh giới an toàn:**
+  - Không rò rỉ secret token/credentials trong git history (biến môi trường lưu tại `deploy/.env.demo` được gitignore chặt chẽ).
+  - Không push, không merge nhánh `feat/cloudflare-d1`.
+  - Giữ nguyên 2 file Tuần 5 untracked.
+
+### 30.1. Kích Hoạt Dịch Vụ & Khởi Tạo Tài Nguyên R2
+1. **Kích hoạt tài khoản:** Người dùng đã kích hoạt R2 trên Cloudflare Dashboard thành công (mã lỗi Cloudflare Error `10042` đã giải quyết triệt để).
+2. **Khởi tạo Bucket:**
+   - Tên Bucket: `assethub-attachments`
+   - Vùng lưu trữ (Location): `Asia Pacific` (APAC)
+   - Public Access: `Disabled` (Private bucket bảo mật cao)
+   - Trạng thái kiểm chứng qua Wrangler CLI: `creation_date: 2026-11-05T10:55:05.760Z`.
+3. **Cấp quyền API Token:**
+   - Account API Token: `assethub-token`
+   - Quyền: `Object Read & Write` trên `assethub-attachments`.
+   - Endpoint: `https://5e76c2bf4e09587a010d31ea416ec8d3.r2.cloudflarestorage.com`.
+
+### 30.2. Cấu Hình & Tương Thích Chuẩn SigV4 (`backend/apps/common/storage_backends.py`)
+- Cloudflare R2 bắt buộc sử dụng chuẩn chữ ký AWS Signature Version 4 (`SigV4`).
+- Bổ sung cấu hình tường minh `signature_version = 's3v4'` trên `R2AttachmentStorage` để bảo đảm URL có chữ ký sinh ra theo định dạng `AWS4-HMAC-SHA256` với thời hạn 900 giây (15 phút).
+
+### 30.3. Bằng Chứng Kiểm Thử Live Cloud Thực Tế (Live Verification)
+Đã thực thi kịch bản kiểm chứng end-to-end có kiểm soát từ container backend:
+1. **Upload object thật lên R2:**
+   - Object Key: `test_proof/smoke_r2_1793876812.txt`
+   - Nội dung: `AssetHub Cloudflare R2 Proof of Operation - 2026-11-05 live verification` (72 bytes).
+   - Xác thực: `head_object` trả về chính xác `ContentLength: 72`.
+2. **Sinh Presigned URL (SigV4, 900s TTL):**
+   - URL: `https://5e76c2bf4e09587a010d31ea416ec8d3.r2.cloudflarestorage.com/assethub-attachments/test_proof/smoke_r2_1793876812.txt?response-content-disposition=inline&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=900...`
+3. **Tải về từ Cloudflare R2 qua Presigned URL:**
+   - Mã phản hồi HTTP: **HTTP 200 OK**.
+   - Đối soát tính toàn vẹn: **Byte parity match: True (100% khớp dữ liệu gốc)**.
+4. **Dọn dẹp an toàn (Cleanup):**
+   - Xóa object thử nghiệm khỏi bucket R2: `delete_object`.
+   - `list_objects_v2` xác nhận: **0 objects remaining in bucket** (sạch 100%, 0 để lại file rác).
+
+### 30.4. Tổng Kết Toàn Bộ Hạ Tầng Cloudflare Tuần 4
+- **Pages Frontend:** `https://assethub-97m.pages.dev` (SPA login, dashboard hoạt động mượt mà).
+- **Public API Tunnel:** `https://away-server-pot-catalogue.trycloudflare.com` (Cloudflare Quick Tunnel trỏ về demo container 8001).
+- **Primary Operational DB:** Cloudflare D1 `assethub-test-d1` (`3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`, 19 bảng SQLite, trigger bảo vệ Admin).
+- **AI Microservice:** Cloudflare Workers AI `assethub-ai-worker` (`@cf/meta/llama-3.1-8b-instruct-fp8`, phân loại danh mục tự động và lưu log D1).
+- **Cloud Object Storage:** Cloudflare R2 `assethub-attachments` (Upload, Presigned URL SigV4 15 phút, download, cleanup verified).
+- **Xác thực:** Cả hai tài khoản cũ `admin` và `truong` đã đồng bộ vào D1 và đăng nhập thành công.
 
