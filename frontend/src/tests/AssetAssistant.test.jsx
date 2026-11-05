@@ -10,6 +10,7 @@ import { AuthProvider, useAuth } from '../context/AuthContext';
 import AssetAssistantPage from '../pages/AssetAssistantPage';
 import AssistantSupportPage from '../pages/AssistantSupportPage';
 import * as assistantApi from '../api/assistantApi';
+import { ticketDetail, ticketListItem, ticketNested } from './assistantDto';
 
 const CONVERSATION_ID = '11111111-1111-4111-8111-111111111111';
 const API = '/api/assistant';
@@ -65,10 +66,8 @@ const makeTurn = (overrides = {}) => ({
   ...overrides,
 });
 
-const openTicket = {
-  id: 'ticket-1', target_kind: 'DEPARTMENT', target_department_name: 'Phòng IT', status: 'OPEN', version: 1,
-  reply: '', replied_by_name: null, replied_at: null,
-};
+const openDetail = ticketDetail({ turn_id: 'turn-rt', question_snapshot: 'Bao giờ có máy?' });
+const openTicket = ticketNested(openDetail);
 
 let conversations;
 let storedTurns;
@@ -414,7 +413,7 @@ describe('AssetAssistantPage', () => {
     let escalateStatus = 503;
     server.use(http.post(`${API}/turns/:id/escalate/`, () => (escalateStatus === 503
       ? HttpResponse.json({ code: 'ASSISTANT_UNAVAILABLE' }, { status: 503 })
-      : HttpResponse.json(openTicket, { status: 201 }))));
+      : HttpResponse.json(openDetail, { status: 201 }))));
     answerWithTurn({ outcome: 'ERROR', answer: '', sources: [] });
     const { user } = renderAssistant();
 
@@ -464,6 +463,125 @@ describe('AssetAssistantPage', () => {
     // 17:30 UTC on Nov 5 is 00:30 on Nov 6 in Asia/Ho_Chi_Minh.
     expect(within(reply).getByText(/00:30/)).toBeVisible();
     expect(within(reply).getByText(/06\/11/)).toBeVisible();
+  });
+
+  it('provider_failure_saves_error_turn_and_next_question_gets_a_new_request_id', async () => {
+    answerPosts((body, count) => (count === 1
+      ? HttpResponse.json({
+        code: 'ASSISTANT_UNAVAILABLE',
+        turn: makeTurn({
+          client_request_id: body.client_request_id, question: body.question, outcome: 'ERROR',
+          answer: 'Dịch vụ trợ lý tạm thời không khả dụng. Vui lòng thử lại sau.', sources: [],
+        }),
+      }, { status: 503 })
+      : HttpResponse.json(makeTurn({ client_request_id: body.client_request_id, question: body.question }), { status: 201 })));
+    const { user } = renderAssistant();
+
+    await ask(user, 'Câu lỗi');
+    expect(await screen.findByText(/tạm thời không khả dụng/)).toBeVisible();
+    expect(screen.queryByText(/Đã chuyển đến/)).not.toBeInTheDocument();
+
+    await ask(user, 'Câu lỗi');
+    expect(await screen.findByText('Phòng IT hiện còn 23 laptop sẵn sàng.')).toBeVisible();
+    expect(posts[1].client_request_id).not.toBe(posts[0].client_request_id);
+    expect(posts[1].conversationId).toBe(posts[0].conversationId);
+  });
+
+  it('replay_202_after_lost_response_keeps_polling_until_the_answer', async () => {
+    conversations = [{ id: CONVERSATION_ID, created_at: '2026-11-05T02:59:00Z' }];
+    let lookups = 0;
+    server.use(
+      http.get(`${API}/conversations/:id/turns/`, () => {
+        lookups += 1;
+        return lookups === 1 ? HttpResponse.json(page([])) : HttpResponse.error();
+      }),
+      http.get(`${API}/turns/:id/`, () => HttpResponse.json(makeTurn({ id: 'turn-replay', answer: 'Trả lời sau khi phát lại.', sources: [] }))),
+    );
+    answerPosts((body, count) => (count === 1
+      ? HttpResponse.error()
+      : HttpResponse.json(
+        makeTurn({ id: 'turn-replay', client_request_id: body.client_request_id, question: body.question, outcome: 'PROCESSING', answer: '', sources: [] }),
+        { status: 202 },
+      )));
+    const { user } = renderAssistant();
+    await waitFor(() => expect(lookups).toBe(1));
+
+    await ask(user, 'Câu đang xử lý');
+    await user.click(await screen.findByRole('button', { name: 'Gửi lại' }));
+
+    expect(await screen.findByText('Trả lời sau khi phát lại.')).toBeVisible();
+    expect(posts[1].client_request_id).toBe(posts[0].client_request_id);
+  });
+
+  it('pending_expired_to_error_unlocks_send_and_offers_support', async () => {
+    conversations = [{ id: CONVERSATION_ID, created_at: '2026-11-05T02:59:00Z' }];
+    storedTurns = [makeTurn({ id: 'turn-old', outcome: 'PROCESSING', answer: '', sources: [] })];
+    server.use(http.get(`${API}/turns/:id/`, () => HttpResponse.json(makeTurn({
+      id: 'turn-old', outcome: 'ERROR', answer: 'Yêu cầu đã quá thời gian xử lý.', sources: [],
+    }))));
+    const { user } = renderAssistant();
+
+    expect(await screen.findByText('Yêu cầu đã quá thời gian xử lý.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Gửi yêu cầu hỗ trợ' })).toBeVisible();
+    expect(screen.queryByText('Đang tra cứu…')).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Câu hỏi của bạn'), 'Hỏi lại');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Gửi' })).toBeEnabled());
+  });
+
+  it('disabled_assistant_keeps_question_and_request_id_without_a_lookup', async () => {
+    conversations = [{ id: CONVERSATION_ID, created_at: '2026-11-05T02:59:00Z' }];
+    let lookups = 0;
+    server.use(http.get(`${API}/conversations/:id/turns/`, () => {
+      lookups += 1;
+      return HttpResponse.json(page([]));
+    }));
+    answerPosts((body, count) => (count === 1
+      ? HttpResponse.json({ code: 'ASSISTANT_DISABLED', detail: 'raw-disabled' }, { status: 503 })
+      : HttpResponse.json(makeTurn({ client_request_id: body.client_request_id, question: body.question }), { status: 201 })));
+    const { user } = renderAssistant();
+    await waitFor(() => expect(lookups).toBe(1));
+
+    await ask(user, 'Câu khi đang tắt');
+
+    expect(await screen.findByText(/Trợ lý đang tạm tắt/)).toBeVisible();
+    expect(screen.queryByText(/raw-disabled/)).not.toBeInTheDocument();
+    expect(lookups).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: 'Gửi lại' }));
+    expect(await screen.findByText('Phòng IT hiện còn 23 laptop sẵn sàng.')).toBeVisible();
+    expect(posts[1].client_request_id).toBe(posts[0].client_request_id);
+  });
+
+  it.each([
+    ['polling', { outcome: 'PROCESSING', answer: '' }, null],
+    ['check_reply', { outcome: 'ESCALATED', answer: 'Nội dung cũ.', ticket: openTicket }, 'Kiểm tra phản hồi'],
+    ['escalate', { outcome: 'ERROR', answer: 'Nội dung cũ.' }, 'Gửi yêu cầu hỗ trợ'],
+  ])('scope_change_during_%s_discards_old_thread', async (_flow, turnFields, button) => {
+    conversations = [{ id: CONVERSATION_ID, created_at: '2026-11-05T02:59:00Z' }];
+    storedTurns = [makeTurn({ id: 'turn-s', question: 'Câu hỏi cũ riêng tư', sources: [], ...turnFields })];
+    const conflict = () => HttpResponse.json(
+      { code: 'CONVERSATION_SCOPE_CHANGED', detail: 'raw-scope' }, { status: 409 },
+    );
+    server.use(http.get(`${API}/turns/:id/`, conflict), http.post(`${API}/turns/:id/escalate/`, conflict));
+    const { user } = renderAssistant();
+
+    if (button) await user.click(await screen.findByRole('button', { name: button }));
+
+    expect(await screen.findByRole('button', { name: 'Tạo hội thoại mới' })).toBeEnabled();
+    expect(screen.queryByText('Câu hỏi cũ riêng tư')).not.toBeInTheDocument();
+    expect(screen.queryByText(/raw-scope/)).not.toBeInTheDocument();
+  });
+
+  it('ticket_routed_to_admin_has_no_department_name', async () => {
+    answerWithTurn({
+      outcome: 'ESCALATED', answer: 'Đã chuyển câu hỏi.', sources: [],
+      ticket: { ...openTicket, target_kind: 'ADMIN', target_department_name: null },
+    });
+    const { user } = renderAssistant();
+
+    await ask(user, 'Câu');
+
+    expect(await screen.findByText(/Đã chuyển đến quản trị viên/)).toBeVisible();
   });
 
   it('role_examples_fill_the_composer_without_sending', async () => {
@@ -895,16 +1013,19 @@ describe('procedure evidence version', () => {
 describe('support reply round trip', () => {
   it('requester_refreshes_and_reads_staff_reply', async () => {
     // One stateful ticket shared by the requester's turn and the staff inbox.
-    let ticket = { ...openTicket, turn_id: 'turn-rt', question_snapshot: 'Bao giờ có máy?', created_at: '2026-11-05T03:00:00Z' };
+    let ticket = openDetail;
     const replies = [];
-    const turnNow = () => makeTurn({ id: 'turn-rt', question: 'Bao giờ có máy?', outcome: 'ESCALATED', answer: 'Đã chuyển câu hỏi.', sources: [], ticket });
+    const turnNow = () => makeTurn({
+      id: 'turn-rt', question: 'Bao giờ có máy?', outcome: 'ESCALATED', answer: 'Đã chuyển câu hỏi.', sources: [],
+      ticket: ticketNested(ticket),
+    });
     conversations = [{ id: CONVERSATION_ID, created_at: '2026-11-05T02:59:00Z' }];
     server.use(
       http.get(`${API}/conversations/:id/turns/`, () => HttpResponse.json(page([turnNow()]))),
       http.get(`${API}/turns/:id/`, () => HttpResponse.json(turnNow())),
       http.get(`${API}/support-tickets/`, ({ request }) => {
         const status = new URL(request.url).searchParams.get('status');
-        return HttpResponse.json(page(!status || ticket.status === status ? [ticket] : []));
+        return HttpResponse.json(page(!status || ticket.status === status ? [ticketListItem(ticket)] : []));
       }),
       http.get(`${API}/support-tickets/:id/`, () => HttpResponse.json(ticket)),
       http.post(`${API}/support-tickets/:id/reply/`, async ({ request }) => {
@@ -990,7 +1111,7 @@ describe('assistantApi', () => {
       }),
       http.post(`${API}/turns/:id/escalate/`, async ({ request, params }) => {
         seen.push(['escalate', params.id, await request.json()]);
-        return HttpResponse.json(openTicket, { status: 201 });
+        return HttpResponse.json(openDetail, { status: 201 });
       }),
       http.get(`${API}/procedures/:topic/`, ({ params }) => HttpResponse.json({ topic: params.topic })),
     );

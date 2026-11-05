@@ -64,6 +64,8 @@ const SupportTicketPanel = ({ ticket, onReplied }) => {
       const status = error.response?.status;
       if (status === 409) {
         await handleConflict();
+      } else if (error.response?.data?.code === 'ASSISTANT_DISABLED') {
+        setNotice('Trợ lý đang tạm tắt nên phản hồi chưa được gửi. Bấm “Gửi phản hồi” khi trợ lý hoạt động trở lại.');
       } else if (REJECTED_MESSAGES[status]) {
         attemptRef.current = null;
         setNotice(REJECTED_MESSAGES[status]);

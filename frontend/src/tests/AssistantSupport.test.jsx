@@ -9,24 +9,11 @@ import { setupServer } from 'msw/node';
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import AssistantSupportPage from '../pages/AssistantSupportPage';
 import * as assistantApi from '../api/assistantApi';
+import { ticketDetail, ticketListItem } from './assistantDto';
 
 const API = '/api/assistant';
 
-const makeTicket = (overrides = {}) => ({
-  id: 'ticket-1',
-  target_kind: 'DEPARTMENT',
-  target_department_name: 'Phòng IT',
-  status: 'OPEN',
-  version: 1,
-  reply: '',
-  replied_by_name: null,
-  replied_at: null,
-  turn_id: 'turn-1',
-  question_snapshot: 'Khi nào tôi được cấp màn hình mới?',
-  created_at: '2026-11-05T03:00:00Z',
-  updated_at: '2026-11-05T03:00:00Z',
-  ...overrides,
-});
+const makeTicket = ticketDetail;
 
 const answered = (overrides = {}) => makeTicket({
   status: 'ANSWERED',
@@ -48,7 +35,7 @@ const listing = (all, request, size = 15) => {
     page_size: size,
     next: current < totalPages ? `?page=${current + 1}` : null,
     previous: current > 1 ? `?page=${current - 1}` : null,
-    results: all.slice((current - 1) * size, current * size),
+    results: all.slice((current - 1) * size, current * size).map(ticketListItem),
   };
 };
 
@@ -200,7 +187,7 @@ describe('AssistantSupportPage', () => {
   it('reply_conflict_preserves_server_reply', async () => {
     answerReplies(() => {
       tickets = [answered({ reply: 'Câu trả lời của người khác.', replied_by_name: 'Quản lý khác', version: 2 })];
-      return HttpResponse.json({ code: 'TICKET_CONFLICT', detail: 'raw-conflict' }, { status: 409 });
+      return HttpResponse.json({ code: 'TICKET_ALREADY_ANSWERED', detail: 'raw-conflict' }, { status: 409 });
     });
     const { user } = renderSupportInbox();
     await user.type(await openFirst(user), 'Câu trả lời của tôi.');
@@ -220,7 +207,7 @@ describe('AssistantSupportPage', () => {
     answerReplies((body, count) => {
       if (count === 1) {
         tickets = [makeTicket({ version: 5 })];
-        return HttpResponse.json({ code: 'TICKET_CONFLICT' }, { status: 409 });
+        return HttpResponse.json({ code: 'STALE_VERSION_CONFLICT' }, { status: 409 });
       }
       return HttpResponse.json(answered({ reply: body.reply, version: 6 }));
     });
@@ -238,7 +225,7 @@ describe('AssistantSupportPage', () => {
   });
 
   it('conflict_with_failed_refresh_never_claims_success', async () => {
-    answerReplies(() => HttpResponse.json({ code: 'TICKET_CONFLICT' }, { status: 409 }));
+    answerReplies(() => HttpResponse.json({ code: 'STALE_VERSION_CONFLICT' }, { status: 409 }));
     const { user } = renderSupportInbox();
     await user.type(await openFirst(user), 'Nội dung.');
     server.use(http.get(`${API}/support-tickets/:id/`, () => HttpResponse.json({}, { status: 500 })));
@@ -333,6 +320,24 @@ describe('AssistantSupportPage', () => {
       expect(screen.queryByText('Đã trả lời')).not.toBeInTheDocument();
     },
   );
+
+  it('disabled_assistant_keeps_reply_and_request_id_for_retry', async () => {
+    answerReplies((body, count) => (count === 1
+      ? HttpResponse.json({ code: 'ASSISTANT_DISABLED', detail: 'raw-disabled' }, { status: 503 })
+      : HttpResponse.json(answered({ reply: body.reply }))));
+    const { user } = renderSupportInbox();
+    await user.type(await openFirst(user), 'Nội dung.');
+    await user.click(screen.getByRole('button', { name: 'Gửi phản hồi' }));
+
+    expect(await screen.findByText(/Trợ lý đang tạm tắt/)).toBeVisible();
+    expect(screen.queryByText(/raw-disabled/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Đã trả lời')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Phản hồi')).toHaveValue('Nội dung.');
+
+    await user.click(screen.getByRole('button', { name: 'Gửi phản hồi' }));
+    await screen.findByText('Đã trả lời');
+    expect(replyPosts[1].client_request_id).toBe(replyPosts[0].client_request_id);
+  });
 
   it('user_cannot_open_support_inbox', async () => {
     renderSupportInbox('USER');
@@ -745,7 +750,7 @@ describe('session and scope changes', () => {
     }));
     answerReplies(async () => {
       await gate.promise;
-      return HttpResponse.json({ code: 'TICKET_CONFLICT' }, { status: 409 });
+      return HttpResponse.json({ code: 'STALE_VERSION_CONFLICT' }, { status: 409 });
     });
     const { user } = renderSupportInbox();
     await user.type(await openFirst(user), 'Nội dung.');

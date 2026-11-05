@@ -223,6 +223,12 @@ const AssistantThread = ({ user, pollIntervalMs }) => {
       setNotice(REJECTED_MESSAGES[status]);
       return;
     }
+    if (data?.code === 'ASSISTANT_DISABLED') {
+      // Every assistant endpoint answers the same way, so a lookup could not tell us more.
+      setPending({ ...request, failed: true });
+      setNotice('Trợ lý đang tạm tắt. Câu hỏi được giữ lại, bấm “Gửi lại” khi trợ lý hoạt động trở lại.');
+      return;
+    }
     // No clear answer (network or 5xx): the turn may be saved, so look before offering a resend.
     // Not finding it proves nothing, which is why a resend always reuses the same request ID.
     try {
