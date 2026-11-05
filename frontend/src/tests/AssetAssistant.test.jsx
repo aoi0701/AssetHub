@@ -8,6 +8,7 @@ import { setupServer } from 'msw/node';
 
 import { AuthProvider, useAuth } from '../context/AuthContext';
 import AssetAssistantPage from '../pages/AssetAssistantPage';
+import AssistantSupportPage from '../pages/AssistantSupportPage';
 import * as assistantApi from '../api/assistantApi';
 
 const CONVERSATION_ID = '11111111-1111-4111-8111-111111111111';
@@ -888,6 +889,90 @@ describe('procedure evidence version', () => {
     expect(screen.queryByText(/raw-trace/)).not.toBeInTheDocument();
     expect(screen.queryByText('Hướng dẫn hiện tại')).not.toBeInTheDocument();
     expect(panel.getByRole('link', { name: 'Mở trang liên quan' })).toHaveAttribute('href', '/my-requests');
+  });
+});
+
+describe('support reply round trip', () => {
+  it('requester_refreshes_and_reads_staff_reply', async () => {
+    // One stateful ticket shared by the requester's turn and the staff inbox.
+    let ticket = { ...openTicket, turn_id: 'turn-rt', question_snapshot: 'Bao giờ có máy?', created_at: '2026-11-05T03:00:00Z' };
+    const replies = [];
+    const turnNow = () => makeTurn({ id: 'turn-rt', question: 'Bao giờ có máy?', outcome: 'ESCALATED', answer: 'Đã chuyển câu hỏi.', sources: [], ticket });
+    conversations = [{ id: CONVERSATION_ID, created_at: '2026-11-05T02:59:00Z' }];
+    server.use(
+      http.get(`${API}/conversations/:id/turns/`, () => HttpResponse.json(page([turnNow()]))),
+      http.get(`${API}/turns/:id/`, () => HttpResponse.json(turnNow())),
+      http.get(`${API}/support-tickets/`, ({ request }) => {
+        const status = new URL(request.url).searchParams.get('status');
+        return HttpResponse.json(page(!status || ticket.status === status ? [ticket] : []));
+      }),
+      http.get(`${API}/support-tickets/:id/`, () => HttpResponse.json(ticket)),
+      http.post(`${API}/support-tickets/:id/reply/`, async ({ request }) => {
+        const body = await request.json();
+        replies.push(body);
+        ticket = {
+          ...ticket, status: 'ANSWERED', version: body.expected_version + 1, reply: body.reply,
+          replied_by_name: 'Quản lý IT', replied_at: '2026-11-05T17:30:00Z',
+        };
+        return HttpResponse.json(ticket);
+      }),
+    );
+    const user = userEvent.setup();
+
+    const requesterView = () => (
+      <MemoryRouter>
+        <AuthProvider initialUser={{ id: 3, username: 'requester', role: 'USER', department_id: 1 }}>
+          <AssetAssistantPage pollIntervalMs={10} />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+    const first = render(requesterView());
+    expect(await screen.findByText(/Đã chuyển đến Phòng IT/)).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Phản hồi người phụ trách' })).not.toBeInTheDocument();
+    first.unmount();
+
+    const staff = render(
+      <MemoryRouter>
+        <AuthProvider initialUser={{ id: 7, username: 'manager', role: 'MANAGER', department_id: 1 }}>
+          <AssistantSupportPage />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Xem câu hỏi' }));
+    await user.type(await screen.findByLabelText('Phản hồi'), 'Thứ Hai có máy.');
+    await user.click(screen.getByRole('button', { name: 'Gửi phản hồi' }));
+    expect(await screen.findByText('Đã trả lời')).toBeVisible();
+    expect(replies).toHaveLength(1);
+    expect(replies[0].expected_version).toBe(1);
+    staff.unmount();
+
+    // A fresh load of the chat (browser refresh) shows the reply without the staff inbox.
+    render(requesterView());
+    const reply = await screen.findByRole('region', { name: 'Phản hồi người phụ trách' });
+    expect(within(reply).getByText('Thứ Hai có máy.')).toBeVisible();
+    expect(within(reply).getByText(/Quản lý IT/)).toBeVisible();
+    expect(within(reply).getByText(/00:30/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Kiểm tra phản hồi' })).not.toBeInTheDocument();
+  });
+
+  it('check_reply_button_picks_up_a_reply_saved_after_the_chat_loaded', async () => {
+    let ticket = openTicket;
+    const turnNow = () => makeTurn({ id: 'turn-rt', outcome: 'ESCALATED', answer: 'Đã chuyển câu hỏi.', sources: [], ticket });
+    conversations = [{ id: CONVERSATION_ID, created_at: '2026-11-05T02:59:00Z' }];
+    server.use(
+      http.get(`${API}/conversations/:id/turns/`, () => HttpResponse.json(page([turnNow()]))),
+      http.get(`${API}/turns/:id/`, () => HttpResponse.json(turnNow())),
+    );
+    const { user } = renderAssistant();
+    const check = await screen.findByRole('button', { name: 'Kiểm tra phản hồi' });
+
+    await user.click(check);
+    expect(await screen.findByText(/đang chờ phản hồi/)).toBeVisible();
+
+    ticket = { ...openTicket, status: 'ANSWERED', version: 2, reply: 'Đã xử lý xong.', replied_by_name: 'Quản lý IT', replied_at: '2026-11-05T17:30:00Z' };
+    await user.click(screen.getByRole('button', { name: 'Kiểm tra phản hồi' }));
+
+    expect(await screen.findByRole('region', { name: 'Phản hồi người phụ trách' })).toBeVisible();
   });
 });
 

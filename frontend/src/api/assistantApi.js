@@ -22,3 +22,14 @@ export const escalateTurn = (id) =>
 
 export const getProcedure = (topic) =>
   axiosClient.get(`${BASE}/procedures/${topic}/`).then((response) => response.data);
+
+export const listSupportTickets = ({ view = 'inbox', status, page = 1 } = {}) =>
+  axiosClient.get(`${BASE}/support-tickets/`, { params: { view, status, page } }).then((response) => response.data);
+
+export const getSupportTicket = (id) =>
+  axiosClient.get(`${BASE}/support-tickets/${id}/`).then((response) => response.data);
+
+export const replySupportTicket = (id, { client_request_id, expected_version, reply }) =>
+  axiosClient
+    .post(`${BASE}/support-tickets/${id}/reply/`, { client_request_id, expected_version, reply })
+    .then((response) => response.data);
