@@ -39,6 +39,8 @@ from apps.assets.models import Asset, AssetHistoryLog
 from apps.authentication.models import User
 from apps.departments.models import Category, Department
 from apps.requests.models import AssetRequest
+
+Request = AssetRequest
 from assethub_api.backends.d1.client import (
     ALLOWED_TEST_BRIDGE_ENDPOINTS,
     ALLOWED_TEST_BRIDGE_URLS,
@@ -140,20 +142,23 @@ def encode_multipart_formdata(fields: dict, files: dict) -> tuple[bytes, str]:
 
 
 @pytest.fixture(autouse=True)
-def unblock_db(django_db_blocker):
+def unblock_db_each_test(django_db_blocker):
     """Ensure database access is unblocked during tests."""
     with django_db_blocker.unblock():
         yield
 
 
+unblock_db = unblock_db_each_test
+
+
 @pytest.fixture(scope="module")
-def smoke_context() -> Generator[Dict[str, Any], None, None]:
+def smoke_context(django_db_blocker) -> Generator[Dict[str, Any], None, None]:
     """
     Module fixture setting up Cloud D1 connection and test entities.
     Strictly gated by RUN_CLOUD_SMOKE=1.
     Performs deterministic teardown with deletion verification.
     """
-    if os.environ.get("RUN_CLOUD_SMOKE") != "1":
+    if not os.environ.get("RUN_CLOUD_SMOKE") or os.environ.get("RUN_CLOUD_SMOKE") != "1":
         pytest.skip("Cloud smoke tests skipped unless RUN_CLOUD_SMOKE=1")
 
     bridge_url = os.environ.get("D1_BRIDGE_URL", "").rstrip("/")
@@ -177,227 +182,278 @@ def smoke_context() -> Generator[Dict[str, Any], None, None]:
             f"D1_BRIDGE_URL '{bridge_url}' not in pre-approved ALLOWED_TEST_BRIDGE_URLS: {ALLOWED_TEST_BRIDGE_URLS}"
         )
 
-    run_id = secrets.token_hex(6)
+    with django_db_blocker.unblock():
+        run_id = secrets.token_hex(6)
 
-    d1_conf = {
-        "ENGINE": "assethub_api.backends.d1",
-        "NAME": "assethub-test-d1",
-        "BRIDGE_URL": bridge_url,
-        "BRIDGE_TOKEN": bridge_token,
-        "TIMEOUT": 45.0,
-        "AUTOCOMMIT": True,
-        "ATOMIC_REQUESTS": False,
-        "OPTIONS": {},
-    }
+        d1_conf = {
+            "ENGINE": "assethub_api.backends.d1",
+            "NAME": "assethub-test-d1",
+            "BRIDGE_URL": bridge_url,
+            "BRIDGE_TOKEN": bridge_token,
+            "TIMEOUT": 45.0,
+            "AUTOCOMMIT": True,
+            "ATOMIC_REQUESTS": False,
+            "OPTIONS": {},
+        }
 
-    # Clean existing connections
-    for c_alias in (ALIAS, "default"):
-        if c_alias in connections:
-            try:
-                connections[c_alias].close()
-            except Exception:
-                pass
-            try:
-                del connections[c_alias]
-            except Exception:
-                pass
+        # Clean existing connections
+        for c_alias in (ALIAS, "default"):
+            if c_alias in connections:
+                try:
+                    connections[c_alias].close()
+                except Exception:
+                    pass
+                try:
+                    del connections[c_alias]
+                except Exception:
+                    pass
 
-    settings.DATABASES[ALIAS] = d1_conf
-    connections.databases[ALIAS] = d1_conf
-    orig_default = dict(settings.DATABASES.get("default", {}))
-    settings.DATABASES["default"] = d1_conf
-    connections.databases["default"] = d1_conf
+        settings.DATABASES[ALIAS] = d1_conf
+        connections.databases[ALIAS] = d1_conf
+        orig_default = dict(settings.DATABASES.get("default", {}))
+        settings.DATABASES["default"] = d1_conf
+        connections.databases["default"] = d1_conf
 
-    orig_routers = getattr(settings, "DATABASE_ROUTERS", [])
-    router_cls_path = f"{__name__}.D1CloudSmokeRouter"
-    settings.DATABASE_ROUTERS = [router_cls_path]
-    from django.db import router
-    router._routers = [D1CloudSmokeRouter()]
+        orig_routers = getattr(settings, "DATABASE_ROUTERS", [])
+        router_cls_path = f"{__name__}.D1CloudSmokeRouter"
+        settings.DATABASE_ROUTERS = [router_cls_path]
+        from django.db import router
+        router._routers = [D1CloudSmokeRouter()]
 
-    # Track run-specific created IDs for deterministic cleanup
-    created_entities: Dict[str, list] = {
-        "department_ids": [],
-        "category_ids": [],
-        "user_ids": [],
-        "asset_ids": [],
-        "request_ids": [],
-        "history_ids": [],
-    }
+        # Track run-specific created IDs for deterministic cleanup
+        tracked_ids: Dict[str, list] = {
+            "requests": [],
+            "assets": [],
+            "categories": [],
+            "departments": [],
+            "users": [],
+            "r2_keys": [],
+        }
 
-    d1_client = D1Client(base_url=bridge_url, token=bridge_token, timeout=30.0)
-
-    # Seed initial entities directly in D1
-    dept_code = f"SMK_{run_id}"
-    dept = Department.objects.using(ALIAS).create(
-        code=dept_code,
-        name=f"Smoke Dept {run_id}",
-        description="Smoke test department",
-    )
-    created_entities["department_ids"].append(dept.id)
-
-    cat = Category.objects.using(ALIAS).create(
-        name=f"SmokeCat_{run_id}",
-        description="Smoke test category",
-    )
-    created_entities["category_ids"].append(cat.id)
-
-    admin_username = f"smoke_admin_{run_id}"
-    admin_password = f"AdminPass#{run_id}!"
-    admin_user = User(
-        username=admin_username,
-        email=f"{admin_username}@assethub.test",
-        role=User.Role.ADMIN,
-        full_name=f"Smoke Admin {run_id}",
-        department=dept,
-        is_active=True,
-        is_staff=True,
-        is_superuser=True,
-        auth_version=1,
-    )
-    admin_user.set_password(admin_password)
-    admin_user.save(using=ALIAS)
-    created_entities["user_ids"].append(admin_user.id)
-
-    req_username = f"smoke_req_{run_id}"
-    req_password = f"UserPass#{run_id}!"
-    req_user = User(
-        username=req_username,
-        email=f"{req_username}@assethub.test",
-        role=User.Role.USER,
-        full_name=f"Smoke Requester {run_id}",
-        department=dept,
-        is_active=True,
-        auth_version=1,
-    )
-    req_user.set_password(req_password)
-    req_user.save(using=ALIAS)
-    created_entities["user_ids"].append(req_user.id)
-
-    ctx = {
-        "run_id": run_id,
-        "bridge_url": bridge_url,
-        "bridge_token": bridge_token,
-        "cloud_api_base_url": CLOUD_API_BASE_URL,
-        "alias": ALIAS,
-        "created": created_entities,
-        "d1_client": d1_client,
-        "department": dept,
-        "category": cat,
-        "admin_user": admin_user,
-        "admin_password": admin_password,
-        "req_user": req_user,
-        "req_password": req_password,
-    }
-
-    try:
-        yield ctx
-    finally:
-        cleanup_failures = []
+        # Wrap from before the first mutation in try ... finally so partial setup can cleanup cleanly
         try:
-            with connections[ALIAS].cursor() as cursor:
-                # 1. Audit logs
-                if created_entities["history_ids"]:
-                    h_ids = ",".join(str(i) for i in created_entities["history_ids"])
-                    cursor.execute(f"DELETE FROM assets_assethistorylog WHERE id IN ({h_ids});")
-                if created_entities["asset_ids"]:
-                    a_ids = ",".join(str(i) for i in created_entities["asset_ids"])
-                    cursor.execute(f"DELETE FROM assets_assethistorylog WHERE asset_id IN ({a_ids});")
+            d1_client = D1Client(base_url=bridge_url, token=bridge_token, timeout=30.0)
 
-                # 2. Requests
-                if created_entities["request_ids"]:
-                    r_ids = ",".join(str(i) for i in created_entities["request_ids"])
-                    cursor.execute(
-                        f"DELETE FROM requests_assetrequest WHERE id IN ({r_ids}) AND request_code LIKE %s;",
-                        [f"REQ-SMK-{run_id}%"],
-                    )
+            # Seed initial entities directly in D1
+            dept_code = f"SMK_{run_id}"
+            dept = Department.objects.using(ALIAS).create(
+                code=dept_code,
+                name=f"Smoke Dept {run_id}",
+                description="Smoke test department",
+            )
+            tracked_ids["departments"].append(dept.id)
 
-                # 3. Assets
-                if created_entities["asset_ids"]:
-                    a_ids = ",".join(str(i) for i in created_entities["asset_ids"])
-                    cursor.execute(
-                        f"DELETE FROM assets_asset WHERE id IN ({a_ids}) AND asset_code LIKE %s;",
-                        [f"AST-SMK-{run_id}%"],
-                    )
+            cat = Category.objects.using(ALIAS).create(
+                name=f"SmokeCat_{run_id}",
+                description="Smoke test category",
+            )
+            tracked_ids["categories"].append(cat.id)
 
-                # 4. Users (never mutate pre-existing users, only delete tracked IDs with run prefix)
-                if created_entities["user_ids"]:
-                    u_ids = ",".join(str(i) for i in created_entities["user_ids"])
-                    cursor.execute(
-                        f"DELETE FROM authentication_user WHERE id IN ({u_ids}) AND username LIKE %s;",
-                        [f"smoke_%_{run_id}"],
-                    )
+            admin_username = f"smoke_admin_{run_id}"
+            admin_password = f"AdminPass#{run_id}!"
+            admin_user = User(
+                username=admin_username,
+                email=f"{admin_username}@assethub.test",
+                role=User.Role.ADMIN,
+                full_name=f"Smoke Admin {run_id}",
+                department=dept,
+                is_active=True,
+                is_staff=True,
+                is_superuser=True,
+                auth_version=1,
+            )
+            admin_user.set_password(admin_password)
+            admin_user.save(using=ALIAS)
+            tracked_ids["users"].append(admin_user.id)
 
-                # 5. Categories
-                if created_entities["category_ids"]:
-                    c_ids = ",".join(str(i) for i in created_entities["category_ids"])
-                    cursor.execute(
-                        f"DELETE FROM departments_category WHERE id IN ({c_ids}) AND name LIKE %s;",
-                        [f"SmokeCat_{run_id}%"],
-                    )
+            req_username = f"smoke_req_{run_id}"
+            req_password = f"UserPass#{run_id}!"
+            req_user = User(
+                username=req_username,
+                email=f"{req_username}@assethub.test",
+                role=User.Role.USER,
+                full_name=f"Smoke Requester {run_id}",
+                department=dept,
+                is_active=True,
+                auth_version=1,
+            )
+            req_user.set_password(req_password)
+            req_user.save(using=ALIAS)
+            tracked_ids["users"].append(req_user.id)
 
-                # 6. Departments
-                if created_entities["department_ids"]:
-                    d_ids = ",".join(str(i) for i in created_entities["department_ids"])
-                    cursor.execute(
-                        f"DELETE FROM departments_department WHERE id IN ({d_ids}) AND code = %s;",
-                        [dept_code],
-                    )
+            ctx = {
+                "run_id": run_id,
+                "bridge_url": bridge_url,
+                "bridge_token": bridge_token,
+                "cloud_api_base_url": CLOUD_API_BASE_URL,
+                "alias": ALIAS,
+                "tracked_ids": tracked_ids,
+                "created": {
+                    "department_ids": tracked_ids["departments"],
+                    "category_ids": tracked_ids["categories"],
+                    "user_ids": tracked_ids["users"],
+                    "asset_ids": tracked_ids["assets"],
+                    "request_ids": tracked_ids["requests"],
+                    "history_ids": [],
+                },
+                "d1_client": d1_client,
+                "department": dept,
+                "category": cat,
+                "admin_user": admin_user,
+                "admin_password": admin_password,
+                "req_user": req_user,
+                "req_password": req_password,
+            }
 
-                # Verify cleanup after deletion: Assert tracked records are gone from DB
-                if created_entities["request_ids"]:
-                    cursor.execute(f"SELECT COUNT(*) FROM requests_assetrequest WHERE id IN ({r_ids});")
-                    if cursor.fetchone()[0] != 0:
-                        cleanup_failures.append("requests_assetrequest records remain in DB")
-
-                if created_entities["asset_ids"]:
-                    cursor.execute(f"SELECT COUNT(*) FROM assets_asset WHERE id IN ({a_ids});")
-                    if cursor.fetchone()[0] != 0:
-                        cleanup_failures.append("assets_asset records remain in DB")
-
-                if created_entities["user_ids"]:
-                    cursor.execute(f"SELECT COUNT(*) FROM authentication_user WHERE id IN ({u_ids});")
-                    if cursor.fetchone()[0] != 0:
-                        cleanup_failures.append("authentication_user records remain in DB")
-
-                if created_entities["category_ids"]:
-                    cursor.execute(f"SELECT COUNT(*) FROM departments_category WHERE id IN ({c_ids});")
-                    if cursor.fetchone()[0] != 0:
-                        cleanup_failures.append("departments_category records remain in DB")
-
-                if created_entities["department_ids"]:
-                    cursor.execute(f"SELECT COUNT(*) FROM departments_department WHERE id IN ({d_ids});")
-                    if cursor.fetchone()[0] != 0:
-                        cleanup_failures.append("departments_department records remain in DB")
-
-        except Exception as exc:
-            cleanup_failures.append(f"Cleanup execution error: {str(exc)}")
-
+            yield ctx
         finally:
-            for a in (ALIAS, "default"):
-                if a in connections:
+            cleanup_failures = []
+            try:
+                # Cleanup R2 keys if any
+                if tracked_ids.get("r2_keys"):
+                    from apps.common.storage_backends import AttachmentStorage, is_r2_configured
+                    if is_r2_configured():
+                        try:
+                            storage = AttachmentStorage()
+                            for r2_key in tracked_ids["r2_keys"]:
+                                try:
+                                    storage.delete(r2_key)
+                                except Exception as exc:
+                                    cleanup_failures.append(f"R2 key deletion error for {r2_key}: {str(exc)}")
+                        except Exception as exc:
+                            cleanup_failures.append(f"R2 client error: {str(exc)}")
+
+                # Audit logs cleanup to prevent ProtectedError on Asset deletion
+                if tracked_ids["assets"]:
                     try:
-                        connections[a].close()
+                        AssetHistoryLog.objects.filter(asset_id__in=tracked_ids["assets"]).delete()
                     except Exception:
                         pass
                     try:
-                        del connections[a]
+                        with connections[ALIAS].cursor() as cursor:
+                            a_ids = ",".join(str(i) for i in tracked_ids["assets"])
+                            cursor.execute(f"DELETE FROM assets_assethistorylog WHERE asset_id IN ({a_ids});")
                     except Exception:
                         pass
-            settings.DATABASES.pop(ALIAS, None)
-            connections.databases.pop(ALIAS, None)
-            if orig_default:
-                settings.DATABASES["default"] = orig_default
-                connections.databases["default"] = orig_default
-            settings.DATABASE_ROUTERS = orig_routers
-            from django.db import router
-            router._routers = None
-            router.__dict__.pop("routers", None)
 
-        if cleanup_failures:
-            raise RuntimeError(f"Cleanup verification failed: {'; '.join(cleanup_failures)}")
+                # Delete in strict FK order by tracked ID:
+                # 1) Request.objects.filter(id__in=tracked_ids["requests"]).delete()
+                if tracked_ids["requests"]:
+                    try:
+                        Request.objects.filter(id__in=tracked_ids["requests"]).delete()
+                    except Exception as exc:
+                        cleanup_failures.append(f"Request deletion error: {str(exc)}")
+                    try:
+                        with connections[ALIAS].cursor() as cursor:
+                            r_ids = ",".join(str(i) for i in tracked_ids["requests"])
+                            cursor.execute(f"DELETE FROM requests_assetrequest WHERE id IN ({r_ids});")
+                    except Exception:
+                        pass
 
+                # 2) Asset.objects.filter(id__in=tracked_ids["assets"]).delete()
+                if tracked_ids["assets"]:
+                    try:
+                        Asset.objects.filter(id__in=tracked_ids["assets"]).delete()
+                    except Exception as exc:
+                        cleanup_failures.append(f"Asset deletion error: {str(exc)}")
+                    try:
+                        with connections[ALIAS].cursor() as cursor:
+                            a_ids = ",".join(str(i) for i in tracked_ids["assets"])
+                            cursor.execute(f"DELETE FROM assets_asset WHERE id IN ({a_ids});")
+                    except Exception:
+                        pass
 
-# =============================================================================
+                # 3) Category.objects.filter(id__in=tracked_ids["categories"]).delete()
+                if tracked_ids["categories"]:
+                    try:
+                        Category.objects.filter(id__in=tracked_ids["categories"]).delete()
+                    except Exception as exc:
+                        cleanup_failures.append(f"Category deletion error: {str(exc)}")
+                    try:
+                        with connections[ALIAS].cursor() as cursor:
+                            c_ids = ",".join(str(i) for i in tracked_ids["categories"])
+                            cursor.execute(f"DELETE FROM departments_category WHERE id IN ({c_ids});")
+                    except Exception:
+                        pass
+
+                # 4) Department.objects.filter(id__in=tracked_ids["departments"]).delete()
+                if tracked_ids["departments"]:
+                    try:
+                        Department.objects.filter(id__in=tracked_ids["departments"]).delete()
+                    except Exception as exc:
+                        cleanup_failures.append(f"Department deletion error: {str(exc)}")
+                    try:
+                        with connections[ALIAS].cursor() as cursor:
+                            d_ids = ",".join(str(i) for i in tracked_ids["departments"])
+                            cursor.execute(f"DELETE FROM departments_department WHERE id IN ({d_ids});")
+                    except Exception:
+                        pass
+
+                # 5) User.objects.filter(id__in=tracked_ids["users"]).delete()
+                if tracked_ids["users"]:
+                    try:
+                        User.objects.filter(id__in=tracked_ids["users"]).delete()
+                    except Exception as exc:
+                        cleanup_failures.append(f"User deletion error: {str(exc)}")
+                    try:
+                        with connections[ALIAS].cursor() as cursor:
+                            u_ids = ",".join(str(i) for i in tracked_ids["users"])
+                            cursor.execute(f"DELETE FROM authentication_user WHERE id IN ({u_ids});")
+                    except Exception:
+                        pass
+
+                # Verify COUNT(*) == 0 for these tracked IDs
+                if tracked_ids["requests"]:
+                    rem_req = Request.objects.filter(id__in=tracked_ids["requests"]).count()
+                    if rem_req != 0:
+                        cleanup_failures.append(f"requests_assetrequest records remain in DB: count={rem_req}")
+
+                if tracked_ids["assets"]:
+                    rem_assets = Asset.objects.filter(id__in=tracked_ids["assets"]).count()
+                    if rem_assets != 0:
+                        cleanup_failures.append(f"assets_asset records remain in DB: count={rem_assets}")
+
+                if tracked_ids["categories"]:
+                    rem_cats = Category.objects.filter(id__in=tracked_ids["categories"]).count()
+                    if rem_cats != 0:
+                        cleanup_failures.append(f"departments_category records remain in DB: count={rem_cats}")
+
+                if tracked_ids["departments"]:
+                    rem_depts = Department.objects.filter(id__in=tracked_ids["departments"]).count()
+                    if rem_depts != 0:
+                        cleanup_failures.append(f"departments_department records remain in DB: count={rem_depts}")
+
+                if tracked_ids["users"]:
+                    rem_users = User.objects.filter(id__in=tracked_ids["users"]).count()
+                    if rem_users != 0:
+                        cleanup_failures.append(f"authentication_user records remain in DB: count={rem_users}")
+
+            except Exception as exc:
+                cleanup_failures.append(f"Cleanup execution error: {str(exc)}")
+
+            finally:
+                for a in (ALIAS, "default"):
+                    if a in connections:
+                        try:
+                            connections[a].close()
+                        except Exception:
+                            pass
+                        try:
+                            del connections[a]
+                        except Exception:
+                            pass
+                settings.DATABASES.pop(ALIAS, None)
+                connections.databases.pop(ALIAS, None)
+                if orig_default:
+                    settings.DATABASES["default"] = orig_default
+                    connections.databases["default"] = orig_default
+                settings.DATABASE_ROUTERS = orig_routers
+                from django.db import router
+                router._routers = None
+                router.__dict__.pop("routers", None)
+
+            if cleanup_failures:
+                raise RuntimeError(f"Cleanup verification failed: {'; '.join(cleanup_failures)}")
 # Cloud Smoke Tests (Gated by RUN_CLOUD_SMOKE=1)
 # =============================================================================
 
@@ -503,7 +559,9 @@ def test_03_d1_asset_request_workflow(smoke_context):
     assert status == 201, f"Asset creation failed ({status}): {asset_data}"
     asset_id = asset_data["id"]
     asset_code = asset_data["asset_code"]
-    created["asset_ids"].append(asset_id)
+    smoke_context["tracked_ids"]["assets"].append(asset_id)
+    if "created" in smoke_context:
+        smoke_context["created"]["asset_ids"].append(asset_id)
     smoke_context["asset"] = asset_data
 
     # 2. Real HTTP POST /api/requests/ to create request
@@ -520,7 +578,9 @@ def test_03_d1_asset_request_workflow(smoke_context):
     )
     assert status == 201, f"Request creation failed ({status}): {req_data}"
     request_id = req_data["id"]
-    created["request_ids"].append(request_id)
+    smoke_context["tracked_ids"]["requests"].append(request_id)
+    if "created" in smoke_context:
+        smoke_context["created"]["request_ids"].append(request_id)
 
     # 3. Real HTTP POST /api/requests/{id}/approve/ to approve request
     approve_payload = {"selected_asset_id": asset_id}
@@ -625,6 +685,9 @@ def test_04_r2_storage_smoke(smoke_context):
         )
 
     assert status == 200, f"Attachment upload failed ({status}): {data}"
+    storage_key = data.get("key") if isinstance(data, dict) else None
+    if storage_key:
+        smoke_context["tracked_ids"]["r2_keys"].append(storage_key)
 
     # 2. Request presigned download URL via HTTP GET
     download_req_url = f"{cloud_api}/api/assets/{asset_id}/attachments/image/download/"
@@ -659,50 +722,102 @@ def test_04_r2_storage_smoke(smoke_context):
     assert downloaded_bytes == file_bytes, "Downloaded attachment content does not match uploaded bytes!"
 
 
+def validate_ai_classification_response(
+    status_code: int,
+    data: Any,
+    valid_category_ids: Optional[list] = None,
+) -> dict:
+    """
+    Validate AI category suggestion response.
+    Enforces strict failure on auth/network errors, verifies valid categories and fallback flag.
+    """
+    if status_code in (401, 403):
+        pytest.fail(f"Workers AI smoke failed: Authentication/Permission error HTTP {status_code}: {data}")
+
+    if status_code == 404:
+        pytest.fail(f"Workers AI endpoint not found HTTP 404: {data}")
+
+    if status_code == 503:
+        err_msg = str(data)
+        if "AI worker authentication failed." in err_msg or "network" in err_msg.lower():
+            pytest.fail(f"Workers AI classification failed due to auth/network error (HTTP 503): {data}")
+        pytest.fail(f"Workers AI classification failed with HTTP 503 Service Unavailable: {data}")
+
+    if status_code == 429:
+        err_str = str(data).lower()
+        assert any(
+            term in err_str for term in ("quota", "capacity", "rate limit", "throttled", "exceeded")
+        ), f"HTTP 429 response does not indicate quota/capacity limit: {data}"
+        return {"status": 429, "rate_limited": True, "data": data}
+
+    if status_code == 200:
+        assert isinstance(data, dict), f"Expected dict response for HTTP 200, got: {data}"
+        suggested_id = data.get("suggested_category_id")
+        assert suggested_id is not None, f"Response missing 'suggested_category_id': {data}"
+        if valid_category_ids is not None:
+            assert (
+                suggested_id in valid_category_ids
+            ), f"Suggested category id {suggested_id} not in valid categories {valid_category_ids}"
+        assert "is_fallback" in data, f"Response missing 'is_fallback' flag: {data}"
+        assert isinstance(data["is_fallback"], bool), f"'is_fallback' must be a boolean: {data}"
+        return data
+
+    pytest.fail(f"Workers AI returned unexpected HTTP status {status_code}: {data}")
+
+
 @pytest.mark.cloud_smoke
 def test_05_workers_ai_smoke(smoke_context):
     """
     Step 5: Workers AI smoke:
-    Call POST /api/ai/suggest/ with valid asset name and category prompt.
-    Verify either 200 with suggested category or proper quota fallback.
-    Network errors (401, 403, 404, connection failure) must NOT be counted as passing fallback!
+    Call POST /api/ai/suggest-category/ with valid asset name and category prompt.
+    Verify either 200 with suggested category or proper quota fallback (429).
+    Network errors or 503 with AI worker authentication failed MUST FAIL.
+    If cloud Workers AI is not configured, skip cleanly.
     """
+    ai_url_env = os.environ.get("AI_WORKER_URL", "").strip()
+    ai_token_env = os.environ.get("AI_SERVICE_TOKEN", "").strip()
+    if (
+        not ai_url_env
+        or "8787" in ai_url_env
+        or not ai_token_env
+        or ai_token_env == "dev-ai-secret-token-2026"
+    ):
+        pytest.skip(
+            "Cloud Workers AI not configured (live AI_WORKER_URL and AI_SERVICE_TOKEN required)."
+        )
+
     cloud_api = smoke_context["cloud_api_base_url"]
     admin_token = smoke_context["admin_access_token"]
+    cat = smoke_context["category"]
 
-    ai_url = f"{cloud_api}/api/ai/suggest/"
+    ai_url = f"{cloud_api}/api/ai/suggest-category/"
     payload = {
         "name": "Apple MacBook Pro 16 M3 Max",
         "description": "High performance laptop for development and engineering",
     }
 
-    status, data = make_real_http_request(
-        ai_url,
-        method="POST",
-        json_data=payload,
-        auth_token=admin_token,
-    )
-    if status == 404:
-        ai_url = f"{cloud_api}/api/ai/suggest-category/"
+    try:
         status, data = make_real_http_request(
             ai_url,
             method="POST",
             json_data=payload,
             auth_token=admin_token,
         )
+    except Exception as exc:
+        pytest.fail(f"Workers AI smoke HTTP network error: {exc}")
 
-    # Strictly reject network/auth/not-found errors from being treated as passing
-    if status in (401, 403):
-        pytest.fail(f"Workers AI smoke failed: Authentication/Permission error HTTP {status}: {data}")
-    if status == 404:
-        pytest.fail(f"Workers AI endpoint not found HTTP 404: {data}")
+    valid_cats = [cat.id]
+    if "tracked_ids" in smoke_context and smoke_context["tracked_ids"]["categories"]:
+        valid_cats = smoke_context["tracked_ids"]["categories"]
 
-    # Permitted outcomes: 200 (with suggested category) or quota/capacity fallback (429/503)
-    assert status in (200, 429, 503), f"Workers AI returned unexpected HTTP status {status}: {data}"
-    if status == 200:
-        assert isinstance(data, dict), f"Expected dict response, got: {data}"
-        assert "suggested_category_id" in data
-        assert data["suggested_category_id"] is not None
+    try:
+        db_cat_ids = list(Category.objects.values_list("id", flat=True))
+        if db_cat_ids:
+            valid_cats = list(set(valid_cats + db_cat_ids))
+    except Exception:
+        pass
+
+    validate_ai_classification_response(status, data, valid_category_ids=valid_cats)
 
 
 @pytest.mark.cloud_smoke
@@ -791,10 +906,12 @@ def test_07_cleanup_verification(smoke_context):
     Step 7: Verify run-specific test entities exist before fixture teardown.
     Teardown will delete them and verify zero records remain.
     """
-    created = smoke_context["created"]
-    assert len(created["asset_ids"]) > 0
-    assert len(created["user_ids"]) > 0
-    assert len(created["department_ids"]) > 0
+    tracked_ids = smoke_context["tracked_ids"]
+    assert len(tracked_ids["assets"]) > 0
+    assert len(tracked_ids["users"]) > 0
+    assert len(tracked_ids["departments"]) > 0
+    assert len(tracked_ids["categories"]) > 0
+    assert len(tracked_ids["requests"]) > 0
 
 
 # =============================================================================
@@ -883,3 +1000,66 @@ def test_safety_preexisting_active_admins_never_deactivated_or_modified():
         conn.execute("UPDATE authentication_user SET is_active = 0 WHERE id = 1")
 
     conn.close()
+
+
+def test_safety_ai_classification_503_auth_failure_fails():
+    """
+    Safety regression test:
+    HTTP 503 with 'AI worker authentication failed.' or network error MUST FAIL classification.
+    """
+    auth_fail_data = {"detail": "AI worker authentication failed."}
+    with pytest.raises(pytest.fail.Exception, match="auth/network error"):
+        validate_ai_classification_response(503, auth_fail_data)
+
+    network_fail_data = {"detail": "Upstream network error connection refused"}
+    with pytest.raises(pytest.fail.Exception, match="auth/network error"):
+        validate_ai_classification_response(503, network_fail_data)
+
+
+def test_safety_ai_classification_200_valid_category_passes():
+    """
+    Safety regression test:
+    HTTP 200 with valid category ID passes and returns response data.
+    """
+    valid_ids = [10, 20, 30]
+    success_data = {
+        "request_id": "test-req-001",
+        "suggested_category_id": 20,
+        "suggested_category_name": "Laptops",
+        "explanation": "High confidence AI match",
+        "is_fallback": False,
+    }
+    result = validate_ai_classification_response(200, success_data, valid_category_ids=valid_ids)
+    assert result["suggested_category_id"] == 20
+    assert result["is_fallback"] is False
+
+    with pytest.raises(AssertionError, match="not in valid categories"):
+        validate_ai_classification_response(200, success_data, valid_category_ids=[99])
+
+
+def test_safety_ai_classification_200_with_fallback_recorded_as_fallback():
+    """
+    Safety regression test:
+    HTTP 200 with fallback is verified to have is_fallback=True and recorded as fallback.
+    """
+    valid_ids = [5]
+    fallback_data = {
+        "request_id": "fallback-req-002",
+        "suggested_category_id": 5,
+        "suggested_category_name": "Peripherals",
+        "explanation": "Keyword rule fallback",
+        "is_fallback": True,
+    }
+    result = validate_ai_classification_response(200, fallback_data, valid_category_ids=valid_ids)
+    assert result["suggested_category_id"] == 5
+    assert result["is_fallback"] is True
+
+
+def test_safety_ai_classification_429_quota_limit():
+    """
+    Safety regression test:
+    HTTP 429 quota/capacity limit response is recognized.
+    """
+    quota_data = {"detail": "Rate limit exceeded. Maximum 10 requests per minute."}
+    result = validate_ai_classification_response(429, quota_data)
+    assert result["rate_limited"] is True

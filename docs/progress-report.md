@@ -749,6 +749,58 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 - Cổng 5434 và 8787 sạch. Các container `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) nguyên vẹn.
 - Sẵn sàng commit local và chờ Codex kiểm duyệt gói chuẩn bị deploy.
 
+---
+
+## 21. Nghiệm Thu Hoàn Tất Đóng Gói Demo Freshness & Positive HTTP Smoke Rehearsal (Review cda507f)
+
+- **Thời điểm:** 2026-11-05 12:40 (GMT+7)
+- **Trạng thái:** **Task 6 Demo Freshness & Smoke Rehearsal PASS 100% — Đã qua review độc lập Ponytail Agent D (Verdict: SHIP) & sẵn sàng để Codex kiểm tra.**
+- **Ranh giới an toàn nghiêm ngặt:**
+  - Chưa deploy/ghi cloud, mở public Tunnel, đổi DNS/billing, gọi AI cloud, đổi runtime đang phục vụ hay restart container (`assethub-backend-1`, `assethub-db-1`, `pg-test`).
+  - Không cài thêm/nâng cấp package, không kéo image mới (`pull_policy: never`), không cài Llama local.
+  - 1 tab AGY, 0 worktree, 0 push/merge trên nhánh `feat/cloudflare-d1`.
+  - Không xóa hay thay đổi dữ liệu thật; toàn bộ kiểm thử dùng dữ liệu giả riêng biệt.
+
+### 21.1. Chi Tiết Khắc Phục 3 Hạng Mục
+1. **Demo Runtime Freshness & Source Mount (`deploy/docker-compose.demo.yml`):**
+   - Image `assethub-backend:latest` được tái sử dụng mà không cần rebuild Docker image.
+   - Gắn source code backend đã review read-only vào container: `volumes: - ../backend:/app:ro`.
+   - Thêm `pull_policy: never` ngăn chặn việc tự động pull remote image.
+   - Thêm `DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-assethub_api.settings}`.
+   - Bằng chứng thực nghiệm: Chạy container không mount source gặp lỗi `ModuleNotFoundError: No module named 'assethub_api.backends'` (exit 1); chạy container có mount source in ra `D1 engine: assethub_api.backends.d1` (exit 0).
+2. **Smoke Fixture DB Unblock, Cleanup Ownership & AI Classification (`backend/tests/e2e/test_d1_cloud_smoke.py`):**
+   - Sửa lỗi `DatabaseAccessNotAllowed`: Bọc `django_db_blocker.unblock()` trong fixture `smoke_context`, và thêm autouse fixture `unblock_db_each_test(django_db_blocker)`.
+   - Setup bọc trong `try ... finally` từ trước mutation đầu tiên, bảo đảm dọn dẹp sạch kể cả khi setup bị gián đoạn giữa chừng.
+   - Lưu trữ danh sách explicit tracking IDs cho `requests`, `assets`, `categories`, `departments`, `users`, `r2_keys` trực tiếp từ API responses (thay vì phụ thuộc prefix `AST-SMK-*` / `REQ-SMK-*`).
+   - Dọn dẹp teardown theo đúng thứ tự FK nghiêm ngặt (R2 -> Audit Log -> Request -> Asset -> Category -> Department -> User) và xác nhận `COUNT(*) == 0`.
+   - Tuyệt đối không chạm đến Admin có sẵn trong D1.
+   - Gọi đúng endpoint `/api/ai/suggest-category/`, loại bỏ assert bao trùm status `(200, 429, 503)`. Lỗi HTTP 503 auth/network được định nghĩa dứt điểm là FAIL qua `pytest.fail`. Phản hồi 200 kiểm tra category ID hợp lệ và cờ `is_fallback`. Bổ sung 4 unit regression tests cho bộ phân loại AI.
+3. **Positive Local HTTP Smoke Subprocess Rehearsal (`backend/tests/e2e/test_smoke_local_http.py`):**
+   - Tạo kịch bản diễn tập thực tế không phụ thuộc cloud: Khởi chạy local D1 harness trên port 8787 với `schema.sql` chuẩn.
+   - Khởi chạy WSGI HTTP server thật bằng `wsgiref.simple_server` trên port loopback ngẫu nhiên với `USE_D1_DATABASE=True`.
+   - Gọi `pytest` subprocess thực thi trực tiếp `backend/tests/e2e/test_d1_cloud_smoke.py` với `RUN_CLOUD_SMOKE=1`.
+   - Kết quả thực nghiệm: **11 passed, 2 skipped in 1.52s, exit code 0** (Bridge health, Auth JWT login, Asset CRUD, Request CRUD, Request Approve, D1 readback, Last admin protection, Cleanup verification, cùng toàn bộ safety unit tests đều PASS 100%).
+
+### 21.2. Kết Quả Kiểm Thử Toàn Tuyến & Nghiệm Thu Độc Lập
+1. **Demo Compose Config Validation:**
+   - Lệnh: `docker compose -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo.example config`
+   - Kết quả: **Exit code 0, volume bind mount resolve chuẩn xác `/home/truong/Downloads/AssetHub/backend` -> `/app:ro`**.
+2. **Backend Unit/Gating Suite:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_settings_runtime.py backend/tests/test_cors.py backend/apps/assets/tests/test_r2_storage.py backend/tests/test_storage.py backend/tests/e2e/test_d1_cloud_smoke.py -v`
+   - Kết quả: **67 passed, 7 skipped in 4.91s (100% PASS, exit code 0)**.
+3. **Smoke Local HTTP Subprocess Rehearsal:**
+   - Lệnh: `DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/e2e/test_smoke_local_http.py -v -s`
+   - Kết quả: **1 passed (11 subprocess passed, 2 skipped) in 6.19s (100% PASS, exit code 0)**.
+4. **Thẩm Định Độc Lập Ponytail Review (Agent D):**
+   - **Verdict: SHIP**.
+   - Must fix: 0. Should fix: 0.
+   - Zero bloat, mã nguồn tối giản, tuân thủ đúng yêu cầu.
+
+### 21.3. Trạng Thái Hệ Thống Sẵn Sàng
+- Cổng 5434, 8787, 8001 sạch. Các container `assethub-backend-1` (8000), `assethub-db-1` (5433), `pg-test` (5432) nguyên vẹn.
+- Sẵn sàng commit local và chờ Codex kiểm duyệt gói chuẩn bị deploy.
+
+
 
 
 

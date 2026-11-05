@@ -103,7 +103,10 @@ Hệ thống AssetHub được thiết kế tối ưu để có thể vận hàn
    ```bash
    docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d
    ```
-   *Lưu ý an toàn:* Khi `USE_D1_DATABASE=True`, backend kết nối trực tiếp Cloudflare D1 qua Worker Bridge; không yêu cầu container PostgreSQL `db` phải chạy hay healthy.
+   *Lưu ý an toàn:*
+   - File `deploy/docker-compose.demo.yml` gắn mã nguồn backend đã review (`../backend:/app:ro`) vào image `assethub-backend:latest` có sẵn, đảm bảo chạy đúng code D1 adapter và runtime switch mới nhất mà không cần cài thêm package hay build lại image (`pull_policy: never`).
+   - Khi `USE_D1_DATABASE=True`, backend kết nối trực tiếp Cloudflare D1 qua Worker Bridge; không yêu cầu container PostgreSQL `db` phải chạy hay healthy.
+   - Demo backend phục vụ tại cổng `http://127.0.0.1:8001`, hoàn toàn cách ly khỏi stack dev cổng 8000.
 
 3. **Khởi tạo D1 Schema & Nạp Dữ Liệu Demo Cách Ly**:
    *Cảnh báo nghiêm ngặt:* Tuyệt đối KHÔNG chạy `manage.py migrate` hay `manage.py seed_data` lên D1 hoặc database đang hoạt động.

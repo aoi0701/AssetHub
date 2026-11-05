@@ -6,8 +6,10 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     image: assethub-backend:latest
+    pull_policy: never
     restart: always
     environment:
+      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-assethub_api.settings}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-default-secret-key-for-dev-only}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-False}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-api.assethub.example.com,localhost,127.0.0.1,backend}
@@ -45,7 +47,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
-    volumes: []
+    volumes:
+      - ../backend:/app:ro
     command: ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "2", "assethub_api.wsgi:application"]
 
   # Optional Named Tunnel container

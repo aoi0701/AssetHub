@@ -643,7 +643,18 @@ Nhằm bảo đảm an toàn dữ liệu tuyệt đối và khả năng khôi ph
 
 - [x] **Step 6: Coordinator Tích Hợp Tài Liệu & Commit Local**
   - Cập nhật `README.md`, `docs/deployment-guide.md`, `docs/progress-report.md`.
-  - Commit local chuẩn Conventional Commits trên nhánh `feat/cloudflare-d1`.
+  - Commit local chuẩn Conventional Commits trên nhánh `feat/cloudflare-d1` (`cda507f`).
+
+- [x] **Step 7: Hoàn Tất Đóng Gói Demo Freshness & Positive HTTP Smoke (Review cda507f)**
+  - **Agent A (Demo Runtime Freshness & Source Mount):**
+    - Cập nhật `deploy/docker-compose.demo.yml`: gắn volume `./backend:/app:ro` và `pull_policy: never` để container `assethub-backend:latest` chạy trực tiếp mã nguồn đã review mà không cần rebuild Docker image; kiểm chứng trong container test cô lập.
+  - **Agent B (Smoke Fixture DB Unblock, Cleanup Ownership & AI Classification):**
+    - Sửa `backend/tests/e2e/test_d1_cloud_smoke.py`: bọc `django_db_blocker.unblock()` trong fixture `smoke_context`; bọc `try/finally` từ trước mutation đầu tiên; lưu trữ ID thực và mã sinh từ API (`AST-2026-xxx`, `REQ-2026-xxx`); xóa tuần tự theo quan hệ FK và xác nhận không còn dữ liệu thuộc run; dọn dẹp R2 theo key thực tế; phân loại AI nghiêm ngặt (lỗi 503 auth phải FAIL dứt điểm); bổ sung unit regression phân loại AI.
+  - **Agent C (Positive Local HTTP Smoke Subprocess Rehearsal):**
+    - Tạo `backend/tests/e2e/test_smoke_local_http.py`: khởi chạy backend WSGI thật với `USE_D1_DATABASE=True` trên loopback port ngẫu nhiên; kích hoạt `test_d1_cloud_smoke.py` qua `pytest` subprocess với `RUN_CLOUD_SMOKE=1`; xác nhận toàn bộ luồng HTTP thật, D1 readback và cleanup PASS 100%.
+  - **Coordinator & Agent D:**
+    - Review độc lập chéo diff qua `ponytail:ponytail-review`.
+    - Cập nhật tài liệu runbook và tiến độ; commit local trên `feat/cloudflare-d1`.
 
 ---
 
