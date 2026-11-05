@@ -1039,3 +1039,71 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
 
 
 
+
+
+---
+
+## 27. Nghiệm Thu Triển Khai Demo Cloudflare Đợt 1 (Phase 1 Live Cloud Deployment)
+
+- **Thời điểm:** 2026-11-05 16:05 (GMT+7)
+- **Trạng thái:** **Triển khai Đợt 1 thành công 100% trên tài nguyên Cloudflare thực tế — Sẵn sàng cho Codex kiểm duyệt.**
+- **Ranh giới an toàn tuyệt đối:**
+  - Không kích hoạt thẻ / billing / R2 trả phí (R2 giữ nguyên chế độ skip / unconfigured an toàn do Cloudflare Error 10042).
+  - Không cài thêm package hay tool; giữ nguyên PostgreSQL production (`assethub-backend-1` port 8000, `assethub-db-1` port 5433).
+  - Bảo toàn dữ liệu đang có trên CSDL `assethub-test-d1` (đã lưu Time Travel bookmark và offline export SQL trước khi thao tác).
+  - Dữ liệu smoke test được cô lập theo `run_id` và dọn dẹp sạch sẽ 100% (deterministic teardown pass).
+  - Không push/merge git, bảo lưu nguyên trạng các file Tuần 5 untracked.
+
+### 27.1. Danh Sách Tài Nguyên Cloudflare Thực Tế
+1. **Cơ sở dữ liệu D1 (`assethub-test-d1`):**
+   - Account ID: `5e76c2bf4e09587a010d31ea416ec8d3`
+   - Database ID: `3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`
+   - Pre-deploy Time Travel Bookmark: `0000003f-00000000-0000511a-c9d03ad612a3f3279dcc3983be2d5289`
+   - Offline SQL Backup: `backups/d1_backup_predeploy_20261105.sql` (529KB, chmod 0600, gitignored)
+   - Admin nền xác thực: `gate_admin` (id: 1, role: ADMIN, is_active: 1, is_superuser: 1) nguyên vẹn.
+2. **Worker D1 Bridge (`assethub-test-worker`):**
+   - URL: `https://assethub-test-worker.hnhoa494-assethub.workers.dev`
+   - Active Version ID: `382d0d9b-6e0b-4554-b899-84b73d8d31b1`
+   - Xác thực: Khớp secret token có sẵn, không rotate, kiểm tra HTTP 200 `/health` và query `SELECT 1` thành công.
+3. **AI Worker (`assethub-ai-worker`):**
+   - URL: `https://assethub-ai-worker.hnhoa494-assethub.workers.dev`
+   - Deployed Version ID: `60aaaf0f-e769-4edc-bbc7-cd52f6309ae9`
+   - Model: `@cf/meta/llama-3.1-8b-instruct-fp8`
+   - D1 Binding: `assethub-test-d1` (`3850e3a1-7c57-42f4-afd6-1fa1655bbcf1`)
+   - Secret: Đồng bộ `AI_SERVICE_TOKEN` từ file bảo mật `/tmp/ai_token.secret` qua `wrangler secret put`.
+   - Auth Barrier: POST không token -> 401; POST sai token -> 401; GET root -> 404 (Pass 100%).
+   - Kiểm chứng suy luận: Chạy đúng 1 request duy nhất trong hạn mức Free (Agent B); Backend fallback xử lý an toàn khi LLM trả INVALID_SUGGESTION; 0 ô nhiễm D1; không benchmark lặp.
+4. **Demo Backend Container (Port 8001):**
+   - Service: `backend` trong Compose project `assethub-demo` (`deploy/docker-compose.demo.yml`)
+   - Cấu hình: nạp từ `deploy/.env.demo` (chmod 0600, gitignored)
+   - Health check: `curl http://127.0.0.1:8001/api/health/` -> HTTP 200 `{"status":"ok","db":"ok"}` (truy vấn D1 trực tiếp qua Bridge thành công).
+5. **Cloudflare Quick Tunnel:**
+   - Process: `/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8001`
+   - Public Tunnel URL: `https://away-server-pot-catalogue.trycloudflare.com`
+   - Health check qua Tunnel: `curl https://away-server-pot-catalogue.trycloudflare.com/api/health/` -> HTTP/2 200 `{"status":"ok","db":"ok"}`.
+6. **Cloudflare Pages (`assethub`):**
+   - Project Name: `assethub` (Branch `main`)
+   - Production URL: `https://assethub-97m.pages.dev`
+   - Deployment URL: `https://a535d342.assethub-97m.pages.dev`
+   - Build artifact: Nhúng `VITE_API_BASE_URL="https://away-server-pot-catalogue.trycloudflare.com"`, sạch 0 secret, CSP connect-src cho phép `*.trycloudflare.com` và `*.pages.dev`.
+   - Kiểm tra route: `/` và SPA rewrite `/login` đều trả về HTTP/2 200 OK.
+7. **CORS liên kết Pages -> Tunnel Backend:**
+   - OPTIONS preflight từ Origin `https://assethub-97m.pages.dev` tới `https://away-server-pot-catalogue.trycloudflare.com/api/auth/login/` trả về HTTP/2 200 với `access-control-allow-origin: https://assethub-97m.pages.dev`.
+
+### 27.2. Kết Quả Cloud Smoke Test Suite (Live Cloud Execution)
+- Lệnh chạy qua launcher bảo mật:
+  `CLOUD_API_BASE_URL="https://away-server-pot-catalogue.trycloudflare.com" backend/.venv/bin/pytest backend/tests/e2e/test_d1_cloud_smoke.py -m cloud_smoke -v`
+- Kết quả: **5 passed, 2 skipped, 10 deselected in 40.27s (100% PASS)**:
+  - `test_01_bridge_health`: **PASSED** (Bridge Worker phản hồi 200 `d1-bridge`, `SELECT 1` D1 thành công).
+  - `test_02_jwt_auth_login`: **PASSED** (Đăng nhập HTTP thật qua Tunnel cấp Access & Refresh JWT).
+  - `test_03_d1_asset_request_workflow`: **PASSED** (Tạo tài sản HTTP, tạo phiếu yêu cầu HTTP, duyệt phiếu HTTP, đối soát đọc ngược trực tiếp từ D1 qua D1Client: status `IN_USE`, audit log ghi nhận đầy đủ).
+  - `test_04_r2_storage_smoke`: **SKIPPED** (R2 credentials unconfigured do chưa kích hoạt billing Cloudflare Error 10042).
+  - `test_05_workers_ai_smoke`: **SKIPPED** (Bảo toàn hạn mức Free tối đa 1 request suy luận, đã kiểm chứng độc lập bởi Agent B).
+  - `test_06_d1_last_admin_protection_trigger`: **PASSED** (Trigger SQLite bảo vệ Admin cuối cùng trên CSDL D1 cloud hoạt động chính xác).
+  - `test_07_cleanup_verification`: **PASSED** (Xác minh dọn dẹp sạch sẽ 100% các thực thể test thuộc `run_id`, 0 bản ghi mồ côi).
+
+### 27.3. Hạng Mục Chưa Đủ & Rủi Ro Tồn Đọng
+1. **Chưa hoàn tất toàn bộ Tuần 4:** Do Cloudflare R2 yêu cầu thẻ thanh toán/billing (Error 10042), đợt 1 chưa kích hoạt R2 hay chạy live upload attachment lên cloud.
+2. **Giới hạn Quick Tunnel:** Quick Tunnel `away-server-pot-catalogue.trycloudflare.com` là đường truyền tạm thời. Nếu tiến trình `cloudflared` bị dừng hoặc máy khởi động lại, URL tunnel sẽ thay đổi và Pages frontend cần được build lại với URL mới.
+3. **Vận hành Tunnel:** Tiến trình tunnel đang chạy nền dưới quyền người dùng. Để dừng: tắt tiến trình `cloudflared` hoặc dừng task nền.
+4. **Trạng thái Git:** Giữ nguyên commit cục bộ, không push/merge nhánh `feat/cloudflare-d1`, bảo lưu tài liệu Tuần 5 untracked.
