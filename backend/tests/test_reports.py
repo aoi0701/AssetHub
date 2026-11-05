@@ -1,6 +1,8 @@
 import datetime
 from zoneinfo import ZoneInfo
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from apps.assets.models import Asset, AssetHistoryLog
@@ -531,3 +533,126 @@ def test_monthly_trend_asia_bangkok_boundary_and_snapshots(admin_user, dept_it, 
     hr_may = next(m for m in resp_hr.data["monthly_trend"] if m["month"] == "2026-05")
     assert hr_may["new_assets"] == 0
     assert hr_may["disposed_assets"] == 0
+
+
+# ===========================================================================
+# Database round trips: each one is a network call when the database is D1
+# ===========================================================================
+
+@pytest.fixture
+def mixed_assets(dept_it, dept_hr, cat_laptop, cat_monitor, regular_user, admin_user):
+    """Every status, department and category combination the distributions must keep apart."""
+    idle_department = Department.objects.create(name="Idle", code="IDLE")
+    idle_category = Category.objects.create(name="Idle category")
+    rows = [
+        (dept_it, cat_laptop, "AVAILABLE", 4, None),
+        (dept_it, cat_laptop, "IN_USE", 2, regular_user),
+        (dept_it, cat_monitor, "DAMAGED_PENDING_REPAIR", 1, None),
+        (dept_it, cat_laptop, "DISPOSED", 3, None),
+        (dept_hr, cat_laptop, "AVAILABLE", 2, None),
+        (dept_hr, cat_monitor, "PENDING_DISPOSAL", 2, None),
+        (None, cat_laptop, "AVAILABLE", 3, None),
+        (None, cat_monitor, "DISPOSED", 1, None),
+    ]
+    number = 0
+    for department, category, status, count, holder in rows:
+        for _ in range(count):
+            number += 1
+            Asset.objects.create(
+                asset_code=f"MIX-{number}", name=f"Mix {number}", category=category,
+                department=department, status=status, assigned_to_user=holder,
+            )
+    return {"idle_department": idle_department, "idle_category": idle_category}
+
+
+def _charts(client, **params):
+    response = client.get("/api/reports/charts/", params)
+    assert response.status_code == 200
+    return response.data
+
+
+def _expected_distributions(assets):
+    active = [asset for asset in assets if asset.status != "DISPOSED"]
+
+    def count(**fields):
+        return sum(all(getattr(asset, key) == value for key, value in fields.items()) for asset in active)
+
+    return {
+        "status": {code: count(status=code) for code in
+                   ("AVAILABLE", "IN_USE", "DAMAGED_PENDING_REPAIR", "UNDER_MAINTENANCE", "PENDING_DISPOSAL")},
+        "category": {category.id: count(category_id=category.id) for category in Category.objects.all()},
+        "department": {
+            **{department.id: count(department_id=department.id) for department in Department.objects.all()},
+            None: count(department_id=None),
+        },
+    }
+
+
+def _assert_distributions(data, assets, *, with_departments=True):
+    expected = _expected_distributions(assets)
+    assert {row["status"]: row["count"] for row in data["status_distribution"]} == expected["status"]
+    assert {row["category_id"]: row["count"] for row in data["category_distribution"]} == expected["category"]
+    if with_departments:
+        assert {row["department_id"]: row["count"] for row in data["department_distribution"]} == expected["department"]
+    else:
+        assert data["department_distribution"] == []
+
+
+@pytest.mark.django_db
+def test_admin_distributions_match_assets_for_every_filter(admin_user, mixed_assets, dept_it, dept_hr, cat_monitor):
+    client = auth_client_for(admin_user)
+    everything = list(Asset.objects.all())
+
+    _assert_distributions(_charts(client), everything)
+    _assert_distributions(_charts(client, department_id=dept_it.id), [a for a in everything if a.department_id == dept_it.id])
+    _assert_distributions(_charts(client, department_id="unallocated"), [a for a in everything if a.department_id is None])
+    _assert_distributions(_charts(client, category_id=cat_monitor.id), [a for a in everything if a.category_id == cat_monitor.id])
+    _assert_distributions(
+        _charts(client, department_id=dept_hr.id, category_id=cat_monitor.id),
+        [a for a in everything if a.department_id == dept_hr.id and a.category_id == cat_monitor.id],
+    )
+    _assert_distributions(_charts(client, department_id=mixed_assets["idle_department"].id), [])
+    _assert_distributions(_charts(client, category_id=mixed_assets["idle_category"].id), [])
+
+
+@pytest.mark.django_db
+def test_manager_distributions_stay_inside_own_department(manager_user, mixed_assets, dept_it, dept_hr, cat_laptop):
+    client = auth_client_for(manager_user)
+    own = list(Asset.objects.filter(department=dept_it))
+
+    _assert_distributions(_charts(client), own, with_departments=False)
+    _assert_distributions(_charts(client, category_id=cat_laptop.id), [a for a in own if a.category_id == cat_laptop.id], with_departments=False)
+    assert client.get("/api/reports/charts/", {"department_id": dept_hr.id}).status_code == 403
+
+
+@pytest.mark.django_db
+def test_distributions_list_every_category_and_department_when_there_are_no_assets(admin_user, dept_it, cat_laptop):
+    data = _charts(auth_client_for(admin_user))
+
+    assert all(row["count"] == 0 for row in data["status_distribution"])
+    assert data["category_distribution"] == [{"category_id": cat_laptop.id, "category_name": "Laptop", "count": 0}]
+    assert [row["count"] for row in data["department_distribution"]] == [0, 0]
+    assert data["department_distribution"][-1]["department_id"] is None
+
+
+def _report_queries(client, url, **params):
+    with CaptureQueriesContext(connection) as context:
+        assert client.get(url, params).status_code == 200
+    return len(context.captured_queries)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("fixture_name, charts_budget", [("admin_user", 5), ("manager_user", 4)])
+def test_report_round_trips_stay_within_budget_as_data_grows(request, fixture_name, charts_budget, mixed_assets, dept_it, cat_laptop):
+    client = auth_client_for(request.getfixturevalue(fixture_name))
+    assert _report_queries(client, "/api/reports/charts/") == charts_budget
+    assert _report_queries(client, "/api/reports/kpis/") == 3
+
+    for number in range(5):
+        department = Department.objects.create(name=f"More {number}", code=f"MORE{number}")
+        category = Category.objects.create(name=f"More {number}")
+        Asset.objects.create(asset_code=f"MORE-{number}", name="x", category=category, department=department)
+        Asset.objects.create(asset_code=f"MORE-IT-{number}", name="x", category=cat_laptop, department=dept_it)
+
+    assert _report_queries(client, "/api/reports/charts/") == charts_budget
+    assert _report_queries(client, "/api/reports/kpis/") == 3
