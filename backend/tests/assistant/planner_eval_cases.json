@@ -1,0 +1,238 @@
+[
+  {
+    "id": "E1",
+    "actor_key": "manager_it",
+    "question": "Phòng tôi còn bao nhiêu laptop chưa cấp?",
+    "context": [],
+    "expected_decision": {
+      "kind": "tools",
+      "calls": [
+        {
+          "name": "assets.summary",
+          "arguments": {
+            "category": "Laptop",
+            "statuses": ["AVAILABLE"],
+            "group_by": null
+          }
+        }
+      ],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "ok"
+  },
+  {
+    "id": "E2",
+    "actor_key": "manager_it",
+    "question": "IT còn mấy laptop trống?",
+    "context": [],
+    "expected_decision": {
+      "kind": "tools",
+      "calls": [
+        {
+          "name": "assets.summary",
+          "arguments": {
+            "category": "Laptop",
+            "statuses": ["AVAILABLE"],
+            "department": "IT",
+            "group_by": null
+          }
+        }
+      ],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "ok"
+  },
+  {
+    "id": "E3",
+    "actor_key": "admin",
+    "question": "Đếm laptop đang sẵn sàng trong phòng IT giúp tôi.",
+    "context": [],
+    "expected_decision": {
+      "kind": "tools",
+      "calls": [
+        {
+          "name": "assets.summary",
+          "arguments": {
+            "category": "Laptop",
+            "department": "IT",
+            "statuses": ["AVAILABLE"],
+            "group_by": null
+          }
+        }
+      ],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "ok"
+  },
+  {
+    "id": "F1",
+    "actor_key": "manager_it",
+    "question": "Cho tôi xem máy {held_asset.asset_code}.",
+    "context": [],
+    "expected_decision": {
+      "kind": "tools",
+      "calls": [
+        {
+          "name": "assets.search",
+          "arguments": {
+            "asset_code": "{held_asset.asset_code}"
+          }
+        }
+      ],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "ok"
+  },
+  {
+    "id": "F2",
+    "actor_key": "manager_it",
+    "question": "Máy đó ai đang giữ?",
+    "context": [
+      {
+        "question": "Cho tôi xem máy {held_asset.asset_code}.",
+        "refs": [
+          {
+            "asset_code": "{held_asset.asset_code}"
+          }
+        ]
+      }
+    ],
+    "expected_decision": {
+      "kind": "tools",
+      "calls": [
+        {
+          "name": "assets.search",
+          "arguments": {
+            "asset_code": "{held_asset.asset_code}"
+          }
+        }
+      ],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "ok"
+  },
+  {
+    "id": "A1",
+    "actor_key": "user_it",
+    "question": "Máy này ai giữ?",
+    "context": [],
+    "expected_decision": {
+      "kind": "clarify",
+      "calls": [],
+      "clarification": "Bạn đang hỏi về thiết bị hoặc mã tài sản nào?",
+      "reason": null
+    },
+    "expected_tool_result_status": "clarify"
+  },
+  {
+    "id": "A2",
+    "actor_key": "manager_it",
+    "question": "Máy đó tình trạng thế nào?",
+    "context": [
+      {
+        "question": "Tìm các máy MacBook và Dell trong kho",
+        "refs": [
+          {
+            "asset_code": "IT-L24"
+          },
+          {
+            "asset_code": "IT-L25"
+          }
+        ]
+      }
+    ],
+    "expected_decision": {
+      "kind": "clarify",
+      "calls": [],
+      "clarification": "Bạn muốn kiểm tra tình trạng của máy IT-L24 hay IT-L25?",
+      "reason": null
+    },
+    "expected_tool_result_status": "clarify"
+  },
+  {
+    "id": "O1",
+    "actor_key": "user_it",
+    "question": "Thời tiết hôm nay thế nào?",
+    "context": [],
+    "expected_decision": {
+      "kind": "out_of_scope",
+      "calls": [],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "unsupported"
+  },
+  {
+    "id": "O2",
+    "actor_key": "manager_it",
+    "question": "Viết bài giới thiệu du lịch giúp tôi.",
+    "context": [],
+    "expected_decision": {
+      "kind": "out_of_scope",
+      "calls": [],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "unsupported"
+  },
+  {
+    "id": "P1",
+    "actor_key": "user_it",
+    "question": "Liệt kê tài sản {other_it_user.full_name} đang giữ.",
+    "context": [],
+    "expected_decision": {
+      "kind": "tools",
+      "calls": [
+        {
+          "name": "assets.search",
+          "arguments": {
+            "holder": "{other_it_user.full_name}"
+          }
+        }
+      ],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "restricted"
+  },
+  {
+    "id": "P2",
+    "actor_key": "manager_it",
+    "question": "Phòng HR có bao nhiêu laptop?",
+    "context": [],
+    "expected_decision": {
+      "kind": "tools",
+      "calls": [
+        {
+          "name": "assets.summary",
+          "arguments": {
+            "department": "HR",
+            "category": "Laptop",
+            "group_by": null
+          }
+        }
+      ],
+      "clarification": null,
+      "reason": null
+    },
+    "expected_tool_result_status": "restricted"
+  },
+  {
+    "id": "H1",
+    "actor_key": "user_it",
+    "question": "Quy định bồi thường laptop bị mất của công ty là gì?",
+    "context": [],
+    "expected_decision": {
+      "kind": "handoff",
+      "calls": [],
+      "clarification": null,
+      "reason": "missing_knowledge"
+    },
+    "expected_tool_result_status": "unsupported"
+  }
+]

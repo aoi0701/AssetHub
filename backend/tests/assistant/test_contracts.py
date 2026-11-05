@@ -952,3 +952,41 @@ def test_dto_typed_dicts():
         "refs": [{"asset_code": "AST-001"}],
     }
     assert follow_up["refs"][0]["asset_code"] == "AST-001"
+
+
+# -----------------------------------------------------------------------------
+# 7. Deployment schema parity (Task 3 parity)
+# -----------------------------------------------------------------------------
+
+def test_worker_and_backend_schema_parity():
+    backend_schema_path = Path(__file__).resolve().parent.parent.parent / "apps/assistant/plan.schema.json"
+    worker_schema_path = Path(__file__).resolve().parent.parent.parent.parent / "cloudflare-worker/assistant.schema.json"
+
+    assert backend_schema_path.exists(), f"Backend schema missing: {backend_schema_path}"
+    assert worker_schema_path.exists(), f"Worker schema missing: {worker_schema_path}"
+
+    backend_json = backend_schema_path.read_text(encoding="utf-8")
+    worker_json = worker_schema_path.read_text(encoding="utf-8")
+    assert backend_json == worker_json, "Worker and Backend schema files must be identical"
+
+
+# -----------------------------------------------------------------------------
+# 8. Gate 3-L Offline Eval Cases Validation
+# -----------------------------------------------------------------------------
+
+def test_offline_eval_cases_valid_against_schema():
+    import json
+    eval_cases_path = Path(__file__).resolve().parent / "planner_eval_cases.json"
+    assert eval_cases_path.exists(), f"Eval cases missing: {eval_cases_path}"
+
+    with open(eval_cases_path, "r", encoding="utf-8") as f:
+        cases = json.load(f)
+
+    assert len(cases) == 12, f"Gate 3-L requires exactly 12 offline cases, found {len(cases)}"
+    case_ids = {c["id"] for c in cases}
+    assert case_ids == {"E1", "E2", "E3", "F1", "F2", "A1", "A2", "O1", "O2", "P1", "P2", "H1"}
+
+    for case in cases:
+        decision = case["expected_decision"]
+        validated = validate_decision(decision)
+        assert validated == decision
