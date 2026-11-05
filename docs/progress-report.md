@@ -1314,7 +1314,7 @@ Thực thi kiểm chứng HTTP thực tế qua Cloudflare Quick Tunnel (`https:/
 
 ### 30.5. Phạm Vi & Giới Hạn Nghiệm Thu (Ponytail Boundaries)
 - **Đã kiểm chứng:** Luồng nghiệp vụ tải lên, ký URL SigV4, tải về đối soát byte, lưu vết D1, bảo mật private ACL, dọn dẹp fixture qua HTTP API và Cloudflare R2 thực tế.
-- **Giới hạn nghiệm thu:** Nghiệm thu kỹ thuật trọn vẹn ở tầng backend, HTTP API, cơ sở dữ liệu Cloudflare D1 và lưu trữ Cloudflare R2. Không đánh đồng kiểm thử HTTP là đã kiểm thử UI frontend; phần tương tác giao diện người dùng (UI frontend) đối với attachments được phân định rõ để tích hợp trong Tuần 5.
+- **Giới hạn nghiệm thu:** Đã kiểm chứng backend, HTTP API, Cloudflare D1 và Cloudflare R2. Chưa kiểm tra thao tác đính kèm trực tiếp trên giao diện cloud trong lượt này; không coi kiểm thử HTTP là kiểm thử UI. Chưa có quyết định đưa phần kiểm tra UI này vào phạm vi Tuần 5.
 - **Rủi ro còn lại:** Quick tunnel `trycloudflare.com` là tunnel thử nghiệm tạm thời (sẽ thay đổi URL nếu tiến trình bị khởi động lại). Presigned URL hết hạn sau 900 giây (15 phút), phía client cần xin cấp lại URL mới khi phiên làm việc kéo dài.
 - **Duyệt chốt:** Codex đã chính thức duyệt nghiệm thu toàn bộ các hạng mục Tuần 4.
 
