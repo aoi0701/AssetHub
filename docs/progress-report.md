@@ -1210,37 +1210,38 @@ Kết quả: **8 passed in 149.41ms (100% PASS)**.
   - `test_post_request_allows_custom_user_agent_override`: Xác minh cho phép ghi đè custom User-Agent.
   - `test_suggest_category_headers_and_body_intact`: Xác minh `User-Agent`, `Authorization: Bearer ...`, `Content-Type: application/json` và request body gửi đi đầy đủ, chính xác.
   - `test_suggest_category_403_raises_service_unavailable_not_fallback`: Xác minh mã lỗi 403 thật từ upstream vẫn raise `ServiceUnavailable` (HTTP 503) và không bị nuốt thành fallback.
-- **Kết quả chạy test cục bộ (harness test PostgreSQL độc lập trên port 5432):**
-  - Toàn bộ **36/36 tests PASSED in 4.62s (100% PASS)**.
+- **Kết quả chạy test cục bộ:**
+  - AGY chạy trên container `pg-test` có sẵn (port 5432): **36/36 tests PASSED in 4.70s (100% PASS)**.
+  - Codex chạy độc lập trên PG harness riêng (`/tmp/assethub-6c2d3e5-ai-review.txt`, đã teardown): **36/36 tests PASSED in 5.25s (100% PASS)**.
 
 ### 29.4. Kiểm Chứng Live Toàn Tuyến: Backend API → Worker → Model LLaMA 3.1 8B
 - Khởi động lại container `assethub-demo-backend-1` (port 8001), healthcheck pass `{"status":"ok","db":"ok"}`.
 - Gọi API đề xuất danh mục thật qua backend:
   - Endpoint: `POST http://127.0.0.1:8001/api/ai/suggest-category/` (qua tài khoản Admin hợp lệ).
-  - Payload:
+  - Payload thực tế:
     ```json
     {
-      "name": "MacBook Pro 16 M3 Max",
-      "description": "Laptop Apple cho lập trình viên đồ họa"
+      "name": "Thiết bị kiểm thử tải cao D1",
+      "description": "Hệ thống máy đo kiểm thử hiệu năng D1"
     }
     ```
-  - Phản hồi API: **HTTP/2 200 OK**
-  - Response Data:
+  - Phản hồi API thực tế: **HTTP/2 200 OK**
+  - Response Data thực tế:
     ```json
     {
-      "request_id": "76ec49b3-6c84-4fe1-ba56-91e840003057",
-      "suggested_category_id": 1,
-      "suggested_category_name": "Laptop",
-      "explanation": "MacBook Pro 16 M3 Max là một chiếc laptop cao cấp của Apple, được thiết kế cho lập trình viên đồ họa.",
+      "request_id": "1df70b2d-016f-4c6b-94de-4129305f460e",
+      "suggested_category_id": 65,
+      "suggested_category_name": "Thiết bị kiểm thử D1",
+      "explanation": "Là hệ thống máy đo kiểm thử hiệu năng D1",
       "log_saved": true,
       "is_fallback": false
     }
     ```
 - **Tiêu chí nghiệm thu hoàn tất:**
-  - `is_fallback: false`: Model AI LLaMA 3.1 8B phân loại thành công, không dùng heuristic.
-  - `log_saved: true`: Ghi log vào Cloudflare D1 thành công.
-  - Phân loại chính xác danh mục ID 1 ("Laptop").
-  - Tiêu tốn đúng 1 lượt inference duy nhất.
+  - `is_fallback: false`: Model AI LLaMA 3.1 8B (`@cf/meta/llama-3.1-8b-instruct-fp8`) phân loại thành công, không dùng heuristic.
+  - `log_saved: true`: Ghi log vào Cloudflare D1 `ai_suggestion_logs` thành công (Codex đã đối soát trực tiếp trên D1 metadata).
+  - Phân loại chính xác danh mục ID 65 ("Thiết bị kiểm thử D1").
+  - Tiêu tốn đúng 1 lượt inference duy nhất trong hạn mức Free.
 
 ### 29.5. Lưu Ý Kỹ Thuật Về Tính Tiền Định (Determinism Nuance)
 - Thiết lập `temperature: 0.1` cùng các ràng buộc cấu trúc prompt nghiêm ngặt làm giảm thiểu tối đa tính ngẫu nhiên (nondeterminism) của mô hình ngôn ngữ lớn (LLM).
