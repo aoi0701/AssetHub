@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -303,6 +304,9 @@ def live_gate_problem(env) -> str | None:
         return "BLOCKED: the category endpoint is not the planner"
     if not env.get("ASSISTANT_EVAL_MODEL"):
         return "BLOCKED: name the planner model in ASSISTANT_EVAL_MODEL so the record can state it"
+    artifact_dir = env.get("ASSISTANT_EVAL_ARTIFACT_DIR")
+    if not artifact_dir or not os.path.isdir(artifact_dir) or not os.access(artifact_dir, os.W_OK):
+        return "BLOCKED: ASSISTANT_EVAL_ARTIFACT_DIR must be an existing writable directory"
     return None
 
 

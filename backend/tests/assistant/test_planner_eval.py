@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -438,6 +439,7 @@ READY = {
     "ASSISTANT_EVAL_WORKER_URL": "https://planner.example",
     "AI_WORKER_URL": "https://planner.example",
     "ASSISTANT_EVAL_MODEL": "@cf/test/model",
+    "ASSISTANT_EVAL_ARTIFACT_DIR": tempfile.gettempdir(),
 }
 
 
@@ -457,10 +459,20 @@ def test_live_gate_accepts_only_a_complete_environment():
     ({"ASSISTANT_EVAL_WORKER_URL": "http://localhost:8787", "AI_WORKER_URL": "http://localhost:8787"}, "8787"),
     ({"ASSISTANT_EVAL_WORKER_URL": "https://x.example/api/suggest-category", "AI_WORKER_URL": "https://x.example/api/suggest-category"}, "category"),
     ({"ASSISTANT_EVAL_MODEL": ""}, "model"),
+    ({"ASSISTANT_EVAL_ARTIFACT_DIR": ""}, "ARTIFACT"),
+    ({"ASSISTANT_EVAL_ARTIFACT_DIR": "/nonexistent-gate3l-artifacts"}, "ARTIFACT"),
 ])
 def test_live_gate_refuses_incomplete_environment(change, expected):
     env = {key: value for key, value in {**READY, **change}.items() if value is not None}
     assert expected in live_gate_problem(env)
+
+
+def test_live_gate_refuses_unwritable_artifact_dir(tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir(mode=0o500)
+    if os.access(locked, os.W_OK):
+        pytest.skip("Running as a user that ignores directory permissions")
+    assert "ARTIFACT" in live_gate_problem({**READY, "ASSISTANT_EVAL_ARTIFACT_DIR": str(locked)})
 
 
 def test_live_gate_never_needs_the_service_token():
