@@ -715,8 +715,12 @@ def start_d1_bridge(
     bridge_worker_dir: Optional[Path] = None,
     timeout: float = 15.0,
     run_id: Optional[str] = None,
+    on_started: Optional[Callable[[subprocess.Popen], None]] = None,
 ) -> subprocess.Popen:
     """
+    on_started receives the child right after launch, before the first request carrying the token.
+    If it raises, the child is stopped like any other startup failure.
+
     Launch npx --no-install wrangler dev on host:port with:
     --ip <host> --port <port> --persist-to <persist_dir> --env-file <env_file>
     Tests connection via socket.connect_ex first: Fails immediately if port is in use.
@@ -759,11 +763,12 @@ def start_d1_bridge(
         text=True,
     )
 
-    if run_id:
-        write_run_marker(persist_dir_path, run_id=run_id, pid=proc.pid)
-
     query_url = f"http://{host}:{port}/api/v1/query"
     try:
+        if on_started is not None:
+            on_started(proc)
+        if run_id:
+            write_run_marker(persist_dir_path, run_id=run_id, pid=proc.pid)
         is_ready = wait_for_bridge_ready(proc=proc, url=query_url, token=token_val, timeout=timeout)
         if not is_ready:
             terminate_process(proc)
@@ -878,6 +883,8 @@ class D1TargetHarness:
                 env_file=self.env_file,
                 token=self.token,
                 run_id=self.run_id,
+                # Request guards check self.process, so it must be known before the readiness probe.
+                on_started=lambda proc: setattr(self, "process", proc),
             )
 
             # Update marker with active PID

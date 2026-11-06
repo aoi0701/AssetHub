@@ -438,9 +438,11 @@ def bridge(monkeypatch, tmp_path):
         children = spawned
         captured = last_call
 
-        def start(self, script, *args, timeout=8.0):
+        def use(self, script, *args):
+            """Every Wrangler launch from now on starts this script instead."""
             def spawn(cmd, **kwargs):
                 last_call.update(cmd=list(cmd), env=kwargs.get("env"))
+                kwargs["cwd"] = str(tmp_path)
                 child = real_popen(
                     [sys.executable, "-c", script, str(self.port), str(self.token_log), *args], **kwargs
                 )
@@ -448,6 +450,9 @@ def bridge(monkeypatch, tmp_path):
                 return child
 
             monkeypatch.setattr(harness_module.subprocess, "Popen", spawn)
+
+        def start(self, script, *args, timeout=8.0, **options):
+            self.use(script, *args)
             return harness_module.start_d1_bridge(
                 port=self.port,
                 persist_dir=tmp_path / "persist",
@@ -455,6 +460,7 @@ def bridge(monkeypatch, tmp_path):
                 token=BRIDGE_TOKEN,
                 bridge_worker_dir=tmp_path,
                 timeout=timeout,
+                **options,
             )
 
         def tokens_received(self):
@@ -789,3 +795,97 @@ def test_foreign_listener_on_ipv6_is_seen(bridge):
             harness_module.assert_bridge_owned(None, f"http://[::1]:{bridge.port}/")
     finally:
         server.server_close()
+
+
+# ===========================================================================
+# Startup order: the instance knows its child before the first token goes out
+# ===========================================================================
+
+def test_on_started_sees_the_child_before_any_readiness_request(bridge):
+    seen = []
+
+    child = bridge.start(SERVE, on_started=lambda proc: seen.append((proc, proc.poll(), bridge.tokens_received())))
+
+    assert seen == [(child, None, [])]
+    assert bridge.tokens_received() == [BRIDGE_TOKEN]
+
+
+def test_failing_on_started_stops_the_child_and_sends_nothing(bridge):
+    def refuse(proc):
+        raise ValueError("bookkeeping failed")
+
+    with pytest.raises(ValueError, match="bookkeeping failed"):
+        bridge.start(SERVE, on_started=refuse)
+
+    assert bridge.children[0].poll() is not None
+    assert bridge.tokens_received() == []
+
+
+def test_marker_failure_after_launch_stops_the_child(bridge, monkeypatch, tmp_path):
+    real_marker = harness_module.write_run_marker
+
+    def marker(persist_dir, run_id, pid=None):
+        if pid is not None:
+            raise OSError("disk full")
+        return real_marker(persist_dir, run_id=run_id, pid=pid)
+
+    monkeypatch.setattr(harness_module, "write_run_marker", marker)
+    (tmp_path / "persist").mkdir()
+    with pytest.raises(OSError, match="disk full"):
+        bridge.start(SERVE, run_id="marker-failure")
+
+    assert bridge.children[0].poll() is not None
+
+
+def _bootstrap_harness(bridge, monkeypatch, run_id):
+    """The real D1TargetHarness.setup, with only DDL ingestion and the Wrangler binary replaced."""
+    monkeypatch.setattr(harness_module, "ingest_d1_ddl", lambda **kwargs: None)
+    metadata = json.dumps({
+        "success": True,
+        "results": [{"name": name} for name in [*TARGET_TABLES, "ai_suggestion_logs"]],
+    })
+    bridge.use(SERVE_TABLES, metadata)
+    return D1TargetHarness(port=bridge.port, token=BRIDGE_TOKEN, run_id=run_id)
+
+
+def test_setup_records_its_child_before_the_first_authenticated_request(bridge, monkeypatch):
+    harness = _bootstrap_harness(bridge, monkeypatch, "bootstrap-order")
+    real_transport = harness_module.query_bridge_http
+    seen_by_transport = []
+
+    def transport(sql, **kwargs):
+        seen_by_transport.append(harness.process)
+        return real_transport(sql, **kwargs)
+
+    monkeypatch.setattr(harness_module, "query_bridge_http", transport)
+    try:
+        harness.setup()
+        child = bridge.children[0]
+        assert harness.process is child
+        assert seen_by_transport and all(proc is child for proc in seen_by_transport)
+    finally:
+        harness.teardown()
+
+    assert bridge.children[0].poll() is not None
+    assert not harness.persist_dir.exists()
+    assert not harness.env_file.exists()
+
+
+@pytest.mark.parametrize("script, error", [
+    ("import sys; sys.exit(3)", RuntimeError),
+    ("import time; time.sleep(30)", TimeoutError),
+], ids=["child-exits", "never-ready"])
+def test_failed_setup_leaves_no_child_or_owned_files(bridge, monkeypatch, script, error):
+    harness = _bootstrap_harness(bridge, monkeypatch, "bootstrap-failure")
+    bridge.use(script)
+    real_wait = harness_module.wait_for_bridge_ready
+    monkeypatch.setattr(harness_module, "wait_for_bridge_ready", lambda **kwargs: real_wait(**{**kwargs, "timeout": 1.0}))
+
+    with pytest.raises(error):
+        harness.setup()
+
+    assert bridge.children[0].poll() is not None
+    assert harness.process is None
+    assert not harness.persist_dir.exists()
+    assert not harness.env_file.exists()
+    assert bridge.tokens_received() == []
