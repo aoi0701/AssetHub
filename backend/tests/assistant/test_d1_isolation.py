@@ -6,6 +6,7 @@ port, so assert_bridge_owned and the installed guards run for real. This proves 
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import socket
@@ -29,7 +30,7 @@ from tests.assistant import d1_fixtures as fx
 REAL_POPEN = subprocess.Popen
 _REAL_CHECK_WRANGLER = fx.check_wrangler_available
 # Read before any test runs, so a leak from an earlier test cannot become the expected value.
-ORIGINAL_DATABASE = dict(settings.DATABASES["default"])
+ORIGINAL_DATABASE = copy.deepcopy(settings.DATABASES["default"])
 CHILD_ENV_KEYS = ("npm_config_offline", "WRANGLER_SEND_METRICS", "CLOUDFLARE_CF_FETCH_ENABLED")
 BRIDGE_TOKEN = "isolation-test-token-" + "x" * 32
 BLOCKED_HOSTS = ["8.8.8.8", "127.evil.tld", "127.0.0.1.evil.tld", "example.com", "::ffff:8.8.8.8"]
@@ -202,11 +203,22 @@ def global_state():
     }
 
 
+def _expected_database():
+    """Expected database baseline: preserves all original keys and reflects pytest-django's
+    legitimate test DB name if a test database was configured/created for the session."""
+    expected = copy.deepcopy(ORIGINAL_DATABASE)
+    test_name = (expected.get("TEST") or {}).get("NAME") or ("test_" + (expected.get("NAME") or ""))
+    if settings.DATABASES["default"].get("NAME") == test_name:
+        expected["NAME"] = test_name
+    return expected
+
+
 def assert_restored(before):
+    expected = _expected_database()
     assert global_state() == before
-    assert settings.DATABASES["default"] == ORIGINAL_DATABASE
-    assert connections.databases["default"]["ENGINE"] == ORIGINAL_DATABASE["ENGINE"]
-    assert connections["default"].settings_dict["ENGINE"] == ORIGINAL_DATABASE["ENGINE"]
+    assert settings.DATABASES["default"] == expected
+    assert connections.databases["default"]["ENGINE"] == expected["ENGINE"]
+    assert connections["default"].settings_dict["ENGINE"] == expected["ENGINE"]
 
 
 # --- 1. Socket guards installed by the real fixture -----------------------------------------
@@ -713,3 +725,54 @@ def test_failed_bootstrap_leaves_no_child_files_or_patches(real_harness, script,
     assert harness.process is None
     assert _owned_files_gone(harness)
     assert_restored(before)
+
+
+def test_assert_restored_guards_database_baseline(monkeypatch):
+    """Meaningful regression coverage for database baseline restoration.
+    Verifies:
+    1. Valid baseline (both un-prefixed import baseline and pytest-django test_NAME) is accepted.
+    2. Leaked ENGINE (e.g. D1 backend) fails assert_restored even if 'before' snapshot already captured it.
+    3. Garbage NAME fails assert_restored even if 'before' snapshot already captured it.
+    4. Other key mutations (e.g. USER) fail assert_restored.
+    5. In-test mutation (between 'before' and 'assert_restored') fails assert_restored.
+    """
+    saved_db = copy.deepcopy(settings.DATABASES["default"])
+    try:
+        # 1. Normal state passes
+        before = global_state()
+        assert_restored(before)
+
+        # 2. Legitimate test database name is accepted
+        test_name = (ORIGINAL_DATABASE.get("TEST") or {}).get("NAME") or ("test_" + (ORIGINAL_DATABASE.get("NAME") or ""))
+        monkeypatch.setitem(settings.DATABASES["default"], "NAME", test_name)
+        before_test_name = global_state()
+        assert_restored(before_test_name)
+
+        # 3. Leaked ENGINE fails even if 'before' snapshot captured the corrupted state
+        monkeypatch.setitem(settings.DATABASES["default"], "ENGINE", "assethub_api.backends.d1")
+        corrupted_engine_before = global_state()
+        with pytest.raises(AssertionError):
+            assert_restored(corrupted_engine_before)
+
+        # 4. Garbage NAME fails even if 'before' snapshot captured the corrupted state
+        monkeypatch.setitem(settings.DATABASES["default"], "ENGINE", ORIGINAL_DATABASE["ENGINE"])
+        monkeypatch.setitem(settings.DATABASES["default"], "NAME", "unauthorized_garbage_db")
+        garbage_name_before = global_state()
+        with pytest.raises(AssertionError):
+            assert_restored(garbage_name_before)
+
+        # 5. Leaked other key (e.g. USER) fails even if 'before' captured it
+        monkeypatch.setitem(settings.DATABASES["default"], "NAME", ORIGINAL_DATABASE["NAME"])
+        monkeypatch.setitem(settings.DATABASES["default"], "USER", "rogue_injected_user")
+        rogue_user_before = global_state()
+        with pytest.raises(AssertionError):
+            assert_restored(rogue_user_before)
+
+        # 6. In-test mutation between before and assert_restored is caught
+        monkeypatch.setitem(settings.DATABASES["default"], "USER", ORIGINAL_DATABASE.get("USER", ""))
+        clean_before = global_state()
+        monkeypatch.setitem(settings.DATABASES["default"], "NAME", "mutated_inside_fixture")
+        with pytest.raises(AssertionError):
+            assert_restored(clean_before)
+    finally:
+        settings.DATABASES["default"] = saved_db
