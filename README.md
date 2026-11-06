@@ -64,6 +64,8 @@ Before running AssetHub, ensure the following tools are installed:
 
 ## 🚀 Quick Start Guide
 
+The accepted Cloudflare and asset assistant work is integrated on `dev`. On the demo machine, use `/home/truong/Downloads/AssetHub` for the integrated deployment; the other worktrees remain available for parallel development. For the existing D1 demo on port 8001, follow [the demo runbook](docs/week-5-demo-guide.md). The PostgreSQL development setup below is separate.
+
 ### 1. Clone & Configure Environment
 ```bash
 git clone https://github.com/your-org/assethub.git

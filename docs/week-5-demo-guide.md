@@ -2,6 +2,8 @@
 
 Tài liệu hướng dẫn vận hành, tham số cấu hình, kiểm thử và nghiệm thu tính năng **Trợ lý Tài sản (Asset Assistant)** thuộc Tuần 5 của dự án AssetHub. Tính năng áp dụng kiến trúc **Grounded AI Assistant** (Hướng 1: Tool-calling có căn cứ, không sinh SQL tùy ý, bảo toàn phân quyền RBAC và dữ liệu thực tế).
 
+**Bản tích hợp:** Tuần 4 và Tuần 5 được đưa vào nhánh `dev` theo chỉ định người dùng; không gộp `feat/ui-halvo-preview` hoặc file mockup chưa commit. Thư mục triển khai bản `dev` là `/home/truong/Downloads/AssetHub`. Các worktree khác được giữ nguyên để tiếp tục làm việc song song. Các version, PID và URL tại phần nghiệm thu bên dưới là bằng chứng lịch sử; thông tin đợt deploy `dev` gần nhất được ghi trong manifest riêng `/home/truong/.config/assethub/dev-deployment-latest.json` (không chứa credentials).
+
 ---
 
 ## 1. Tham Số Vận Hành & Cấu Hình Môi Trường (Operational Parameters & Configuration)
@@ -54,10 +56,10 @@ Toàn bộ các giai đoạn triển khai nền tảng (Phase A) và kích hoạ
   * Mô hình: `ASSISTANT_MODEL=@cf/google/gemma-4-26b-a4b-it`, `AI_MODEL=@cf/meta/llama-3.1-8b-instruct-fp8`.
   * Rollback version: `9c636cf0-3147-4839-8dbb-1dac84185730` (deployment `5ce17ea7-a9e1-47f1-aef0-8c84c77d5ee2`).
 - **Demo Backend Container (Cổng 8001):**
-  * Container `assethub-demo-backend-1` chạy image `sha256:3adb911fa8bbdd8f80081413fb2bd9f3b362da9484641798247cf3284f37eed3`, mount read-only `/home/truong/Downloads/AssetHub-week5/backend -> /app`, Gunicorn `--timeout 120`.
+  * Container `assethub-demo-backend-1` chạy image `sha256:3adb911fa8bbdd8f80081413fb2bd9f3b362da9484641798247cf3284f37eed3`, Gunicorn `--timeout 120`. Lần nghiệm thu Phase C dùng mount read-only `/home/truong/Downloads/AssetHub-week5/backend -> /app`; bản tích hợp `dev` dùng `/home/truong/Downloads/AssetHub/backend -> /app`.
   * **Trạng thái vận hành:** `ASSISTANT_ENABLED=true` đã kích hoạt thành công, container healthy. (Bằng chứng lịch sử Phase A trả HTTP 503 trước khi bật cờ đã xác nhận cơ chế an toàn đóng ngắt hoạt động đúng đặc tả).
 - **Cloudflared Live Quick Tunnel:**
-  * Tiến trình tunnel active (PID 124458, khởi chạy 12:04:14 UTC), URL public: **`https://construction-evening-consultancy-fantastic.trycloudflare.com`**.
+  * Lần nghiệm thu Phase C ghi nhận PID 124458 (khởi chạy 12:04:14 UTC), URL public: **`https://construction-evening-consultancy-fantastic.trycloudflare.com`**. Đây là URL lịch sử; phải lấy URL Tunnel đang chạy cho mỗi lần publish lại frontend.
   * Cấu hình CORS cho phép chính xác origin `https://assethub-97m.pages.dev`, chặn các origin lạ; JWT auth header được chấp nhận đầy đủ.
 - **Nghiệm Thu Public API Thực Tế (Live Public API Acceptance Driver):**
   * Thực thi chính xác 1 lần script `driver.py` (SHA256 `7c02b9a395165e8670206ee6d4a86eda1ade32d0fc0c39c6151656b4e72430ae`) với cờ `WEEK5_LIVE_ACCEPT_OPT_IN=ROOT_AUTHORIZED_MAX4`.
@@ -272,10 +274,11 @@ Giai đoạn triển khai Phase C đã hoàn thành trọn vẹn và được ki
 
 ### 5.3. Lệnh Triển Khai Và Tái Lập
 
-Các lệnh dưới đây dành cho một đợt triển khai được giao, chạy từ worktree Tuần 5. Bản demo hiện đã deploy; không cần chạy lại để sử dụng. Trước khi đồng bộ metadata, phải đối chiếu schema và dependency migration thực tế với bản đã duyệt, không đánh dấu 25 migration chỉ vì bảng đã tồn tại.
+Các lệnh dưới đây dành cho một đợt triển khai được giao, chạy từ nhánh `dev` trong thư mục dự án chính. D1 đã có schema và metadata Tuần 5; khi mở lại hoặc deploy lại cùng bản mã thì bỏ qua các bước ghi D1. Trước một thay đổi schema mới, phải đối chiếu schema và dependency migration thực tế với bản đã duyệt, không đánh dấu 25 migration chỉ vì bảng đã tồn tại.
 
 ```bash
-cd /home/truong/Downloads/AssetHub-week5
+cd /home/truong/Downloads/AssetHub
+git branch --show-current  # phải là dev cho bản tích hợp này
 mkdir -p backups
 cd cloudflare-worker
 
@@ -293,15 +296,18 @@ cd ..
 # deploy/.env.demo chứa cấu hình riêng, không commit hoặc in các giá trị bí mật.
 docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d --no-build --pull never backend
 
-# Xác nhận tunnel còn hoạt động trước build. Nếu URL đổi, thay URL ở dòng tiếp theo.
-VITE_API_BASE_URL="https://construction-evening-consultancy-fantastic.trycloudflare.com" \
+# Xác nhận Tunnel đang hoạt động; dùng URL hiện tại thay cho URL nghiệm thu cũ.
+read -r -p "URL API Tunnel hiện tại: " ASSETHUB_API_URL
+VITE_API_BASE_URL="$ASSETHUB_API_URL" \
 VITE_ASSISTANT_ENABLED=true npm --prefix frontend run build
 
 cd cloudflare-worker
-npm_config_offline=true npx --no-install wrangler pages deploy ../frontend/dist --project-name assethub --branch main
+npm_config_offline=true npx --no-install wrangler pages deploy ../frontend/dist --project-name assethub --branch main --commit-hash "$(git rev-parse HEAD)" --commit-message "Deploy integrated dev"
 ```
 
 `ASSISTANT_ENABLED` mặc định false trong template. Khi cập nhật, kiểm tra backend ở trạng thái disabled trước; chỉ bật true sau khi schema, Worker và kiểm tra đã đạt. Thay đổi env cần recreate container; `docker compose restart` không nạp lại env. Có thể xác thực CLI bằng `cf auth whoami`; dự án dùng Wrangler cho lệnh deploy và giữ nguyên cấu trúc cấu hình, không chạy `cf init`/`cf migrate`.
+
+Trong project Pages hiện tại, `--branch main` chọn kênh production của Cloudflare; mã nguồn và `--commit-hash` vẫn lấy từ `dev`. Lệnh này không merge hoặc push nhánh Git `main`. Pages dùng Direct Upload, không tự deploy khi push GitHub.
 
 Quick Tunnel phụ thuộc máy backend và tiến trình cloudflared đang chạy. Nếu khởi động lại tạo URL khác, cập nhật `DJANGO_ALLOWED_HOSTS`, giữ CORS đúng origin Pages, rồi build và publish frontend với API URL mới. Pages vẫn tải được khi backend mất kết nối nhưng các thao tác API sẽ lỗi.
 
@@ -310,7 +316,7 @@ Quick Tunnel phụ thuộc máy backend và tiến trình cloudflared đang ch�
 1. Đặt `ASSISTANT_ENABLED=false` trong `deploy/.env.demo`, rồi recreate đúng service backend để nạp env mới:
 
    ```bash
-   cd /home/truong/Downloads/AssetHub-week5
+   cd /home/truong/Downloads/AssetHub
    docker compose -p assethub-demo -f deploy/docker-compose.demo.yml --env-file deploy/.env.demo up -d --no-build --pull never backend
    ```
 
@@ -319,14 +325,14 @@ Quick Tunnel phụ thuộc máy backend và tiến trình cloudflared đang ch�
 2. Nếu cần hoàn tác mã Worker, dùng đúng version cũ; thao tác này cũng hoàn tác endpoint category về mã của version đó:
 
    ```bash
-   cd /home/truong/Downloads/AssetHub-week5/cloudflare-worker
+   cd /home/truong/Downloads/AssetHub/cloudflare-worker
    npm_config_offline=true npx --no-install wrangler rollback 9c636cf0-3147-4839-8dbb-1dac84185730 --name assethub-ai-worker --config wrangler.toml
    ```
 
 3. Ẩn giao diện trợ lý bằng bản OFF đã chuẩn bị, vẫn trỏ API tunnel mới:
 
    ```bash
-   cd /home/truong/Downloads/AssetHub-week5/cloudflare-worker
+   cd /home/truong/Downloads/AssetHub/cloudflare-worker
    npm_config_offline=true npx --no-install wrangler pages deploy /tmp/assethub-week5-public-off-20261106T120448Z --project-name assethub --branch main
    ```
 
