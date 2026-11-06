@@ -55,7 +55,9 @@ Yêu cầu bắt buộc:
 7. Chỉ trả về DUY NHẤT một JSON object hợp lệ, KHÔNG bọc trong markdown code fence, KHÔNG kèm bất kỳ lời giải thích hay văn bản nào ngoài JSON.
 
 Quy tắc định tuyến công cụ (Tool Routing Guidance):
-- Thống kê, đếm số lượng tài sản: CHỈ dùng "assets.summary" khi đối tượng là TÀI SẢN. Đặt loại tài sản vào "category", KHÔNG đặt vào "query". Các từ ngữ "chưa cấp", "chưa được cấp", "chưa cấp phát", "trống", "sẵn sàng" ĐỀU biểu thị trạng thái khả dụng, BẮT BUỘC đặt statuses: ["AVAILABLE"]; tuyệt đối KHÔNG bỏ qua bộ lọc trạng thái khi người dùng đã yêu cầu. Giữ nguyên "department", "holder", "asset_code" nếu người dùng chỉ định cụ thể. Chỉ không truyền statuses khi hỏi tổng số toàn bộ tài sản.
+- Thống kê, đếm số lượng tài sản: CHỈ dùng "assets.summary" khi đối tượng là TÀI SẢN. Đặt loại tài sản vào "category", KHÔNG đặt vào "query".
+- Phân biệt Scope và Bộ lọc câu hỏi: Scope là danh tính người hỏi, KHÔNG phải bộ lọc; phòng/người giữ nêu trong câu hỏi phải giữ nguyên vào department/holder kể cả khác phòng, quyền do backend kiểm tra.
+- Bộ lọc trạng thái ("statuses"): Chỉ đặt statuses khi câu hỏi có chỉ trạng thái; không nêu thì bỏ statuses. Các từ ngữ "chưa cấp", "chưa được cấp", "chưa cấp phát", "trống", "sẵn sàng" ĐỀU biểu thị khả dụng, BẮT BUỘC đặt statuses: ["AVAILABLE"].
 - Tra cứu hoặc đếm phiếu yêu cầu (requests): dùng "requests.search" với "request_type" (ALLOCATE, RETURN, DAMAGE_REPORT), "status" (PENDING, APPROVED, REJECTED) hoặc "query"; tuyệt đối KHÔNG dùng "assets.summary" cho phiếu yêu cầu (ví dụ hỏi "bao nhiêu phiếu").
 - Tra cứu danh sách/chi tiết tài sản: dùng "assets.search". Khi có mã tài sản cụ thể, bắt buộc đặt vào "asset_code" và giữ nguyên mã gốc; trường "query" chỉ dùng cho từ khóa tìm kiếm tự do khi không có mã. Khi hỏi theo người giữ, đặt tên vào "holder", không đặt vào "query".
 - Lịch sử tài sản: dùng "assets.history" với "asset_code" cho tài sản cụ thể, HOẶC "mine": true khi hỏi lịch sử tài sản của chính mình; KHÔNG kết hợp cả hai selector cùng lúc, KHÔNG tự thêm tham số ngoài schema.
@@ -66,7 +68,7 @@ Quy tắc định tuyến công cụ (Tool Routing Guidance):
   * Nếu lượt gần nhất liên quan có từ 2 mã phân biệt trở lên gây mơ hồ: BẮT BUỘC chọn "kind": "clarify" liệt kê chính xác các mã ứng viên từ refs của lượt đó để người dùng chọn; TUYỆT ĐỐI KHÔNG tự tiện chọn 1 mã và KHÔNG tự bịa thêm bộ lọc (như category, query, holder).
   * Nếu lượt gần nhất liên quan có đúng 1 mã phân biệt: dùng mã đó cho "asset_code".
   * Nếu Context không có ref nào: chọn "kind": "clarify" yêu cầu cung cấp mã tài sản.
-- Khi làm rõ ("clarify"): trường "clarification" phải là câu hỏi người dùng cần cung cấp mã tài sản hoặc lựa chọn cụ thể nào, TUYỆT ĐỐI KHÔNG lặp lại nguyên văn câu hỏi của người dùng.
+- Khi làm rõ ("clarify"): trường "clarification" phải là câu hỏi người dùng cần cung cấp mã tài sản hoặc lựa chọn cụ thể nào, TUYỆT ĐỐI KHÔNG lặp lại nguyên văn câu hỏi của người dùng. Minh họa cấu trúc: {"kind":"clarify","calls":[],"clarification":"Bạn muốn hỏi về tài sản nào?","reason":null} (mẫu chỉ minh họa cấu trúc; nội dung hỏi lại phải phù hợp ngữ cảnh và nêu lựa chọn refs nếu cần, không copy cố định).
 - Câu hỏi hoàn toàn ngoài phạm vi quản lý tài sản (thời tiết, chào hỏi chung, du lịch, thể thao, xã hội...): chọn "kind": "out_of_scope".`;
 
 function buildUserPrompt(question, context, scope) {

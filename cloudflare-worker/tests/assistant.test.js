@@ -407,10 +407,35 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(system).toContain('không làm hỏng câu hỏi nêu rõ mã cụ thể hoặc câu hỏi về cả hai/tất cả thiết bị');
       expect(system).toContain('TUYỆT ĐỐI KHÔNG tự tiện chọn 1 mã và KHÔNG tự bịa thêm bộ lọc');
 
+      // Scope identity & status omission rules
+      expect(system).toContain('Scope là danh tính người hỏi, KHÔNG phải bộ lọc');
+      expect(system).toContain('phòng/người giữ nêu trong câu hỏi phải giữ nguyên vào department/holder kể cả khác phòng');
+      expect(system).toContain('quyền do backend kiểm tra');
+      expect(system).toContain('Chỉ đặt statuses khi câu hỏi có chỉ trạng thái; không nêu thì bỏ statuses');
+      expect(system).toContain('Minh họa cấu trúc: {"kind":"clarify","calls":[],"clarification":"Bạn muốn hỏi về tài sản nào?","reason":null}');
+
       // Ensure no hardcoded evaluation specifics
       expect(system).not.toContain('W5-IT');
       expect(system).not.toContain('23');
       expect(system).not.toContain('Nhân viên IT');
+      expect(system).not.toContain('HR');
+      expect(system).not.toContain('W5');
+    });
+
+    it('instructs planner that scope is caller identity not filter and preserves user filters', async () => {
+      env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(validDecision) });
+
+      const res = await worker.fetch(assistantRequest(validPayload), env);
+      expect(res.status).toBe(200);
+
+      const [, options] = env.AI.run.mock.calls[0];
+      const system = options.messages[0].content;
+
+      expect(system).toContain('Scope là danh tính người hỏi, KHÔNG phải bộ lọc');
+      expect(system).toContain('quyền do backend kiểm tra');
+      expect(system).toContain('không nêu thì bỏ statuses');
+      expect(system).not.toContain('HR');
+      expect(system).not.toContain('W5');
     });
 
     it('prefers env.ASSISTANT_MODEL over env.AI_MODEL', async () => {
@@ -482,6 +507,51 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(res.status).toBe(200);
       const data = await res.json();
       expect(data.decision).toEqual(clarifyDecision);
+    });
+
+    it('accepts valid clarify decision for multi-ref follow-up and verifies prompt contains clarify shape illustration', async () => {
+      // Synthetic payload with 2 non-W5 refs in context turn
+      const syntheticPayload = {
+        question: 'Thiết bị đó ai mượn?',
+        context: [
+          {
+            question: 'Tìm màn hình Dell và máy in HP',
+            refs: [
+              { asset_code: 'EQ-DISP-01' },
+              { asset_code: 'EQ-PRN-02' },
+            ],
+          },
+        ],
+        scope: { role: 'USER', department_id: 2, department_name: 'OPS' },
+      };
+
+      const syntheticClarifyDecision = {
+        kind: 'clarify',
+        calls: [],
+        clarification: 'Bạn muốn hỏi về thiết bị EQ-DISP-01 hay EQ-PRN-02?',
+        reason: null,
+      };
+
+      env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(syntheticClarifyDecision) });
+
+      const res = await worker.fetch(assistantRequest(syntheticPayload), env);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.decision).toEqual(syntheticClarifyDecision);
+
+      // Verify the system prompt captured by fake AI contains the general clarify shape illustration
+      const [, options] = env.AI.run.mock.calls[0];
+      const system = options.messages[0].content;
+
+      expect(system).toContain('{"kind":"clarify","calls":[],"clarification":"Bạn muốn hỏi về tài sản nào?","reason":null}');
+      expect(system).toContain('mẫu chỉ minh họa cấu trúc');
+      expect(system).toContain('nêu lựa chọn refs nếu cần');
+
+      // Negative assertions: ensure no W5, HR or hardcoded case tokens in prompt
+      expect(system).not.toContain('W5');
+      expect(system).not.toContain('HR');
+      expect(system).not.toContain('EQ-DISP');
     });
 
     it('accepts valid handoff decision with missing_knowledge', async () => {
