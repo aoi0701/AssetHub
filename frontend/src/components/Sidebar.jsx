@@ -10,7 +10,9 @@ import {
   Building2,
   Layers,
   History,
+  Inbox,
   LogOut,
+  MessageSquare,
   User as UserIcon,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -69,6 +71,12 @@ const USER_NAV_ITEMS = [
   { to: '/my-requests', label: 'Yêu cầu', icon: FileText },
 ];
 
+const ASSISTANT_NAV_ITEM = { to: '/assistant', label: 'Hỏi đáp tài sản', icon: MessageSquare };
+const ASSISTANT_SUPPORT_NAV_ITEM = { to: '/assistant/support', label: 'Hỗ trợ hỏi đáp', icon: Inbox };
+
+// Read per render, not at import, so tests can stub the flag; only the string 'true' turns it on.
+const isAssistantEnabled = () => import.meta.env.VITE_ASSISTANT_ENABLED === 'true';
+
 const NAV_ITEMS_BY_ROLE = {
   ADMIN: ADMIN_NAV_ITEMS,
   MANAGER: MANAGER_NAV_ITEMS,
@@ -100,7 +108,10 @@ const Sidebar = () => {
     navigate('/login');
   };
 
-  const navItems = NAV_ITEMS_BY_ROLE[role] || [];
+  const baseItems = NAV_ITEMS_BY_ROLE[role] || [];
+  const navItems = isAssistantEnabled()
+    ? [...baseItems, ASSISTANT_NAV_ITEM, ...(role === 'USER' ? [] : [ASSISTANT_SUPPORT_NAV_ITEM])]
+    : baseItems;
 
   return (
     <aside

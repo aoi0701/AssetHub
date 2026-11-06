@@ -18,6 +18,8 @@ import AssetDetailPage from './pages/AssetDetailPage';
 import UserPortalPage from './pages/UserPortalPage';
 import PersonalHistoryPage from './pages/PersonalHistoryPage';
 import RequestInboxPage from './pages/RequestInboxPage';
+import AssetAssistantPage from './pages/AssetAssistantPage';
+import AssistantSupportPage from './pages/AssistantSupportPage';
 
 const HomeRedirect = () => {
   const { isAuthenticated, user } = useAuth();
@@ -119,6 +121,28 @@ function App() {
           </ProtectedRoute>
         }
       />
+
+      {/* Assistant routes: absent (404) unless VITE_ASSISTANT_ENABLED is the string 'true' */}
+      {import.meta.env.VITE_ASSISTANT_ENABLED === 'true' && (
+        <>
+          <Route
+            path="/assistant"
+            element={
+              <ProtectedRoute>
+                <AssetAssistantPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/assistant/support"
+            element={
+              <ProtectedRoute allowedRoles={['ADMIN', 'MANAGER']}>
+                <AssistantSupportPage />
+              </ProtectedRoute>
+            }
+          />
+        </>
+      )}
 
       {/* Admin only routes */}
       <Route

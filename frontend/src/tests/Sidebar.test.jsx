@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -281,5 +281,54 @@ describe('Sidebar Component Unit Tests', () => {
 
       expect(container.firstChild).toBeNull();
     });
+  });
+});
+
+describe('Sidebar assistant menu (VITE_ASSISTANT_ENABLED)', () => {
+  const users = {
+    ADMIN: { id: 1, username: 'a', full_name: 'A', role: 'ADMIN' },
+    MANAGER: { id: 2, username: 'm', full_name: 'M', role: 'MANAGER' },
+    USER: { id: 3, username: 'u', full_name: 'U', role: 'USER' },
+  };
+
+  const menuLinks = (role) => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <AuthProvider initialUser={users[role]}>
+          <Sidebar />
+        </AuthProvider>
+      </MemoryRouter>
+    );
+    const nav = screen.getByRole('navigation', { name: 'Menu chính' });
+    return within(nav).getAllByRole('link');
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([['ADMIN', 6], ['MANAGER', 4], ['USER', 3]])('adds no assistant link for %s when the flag is off', (role, count) => {
+    vi.stubEnv('VITE_ASSISTANT_ENABLED', 'false');
+    const links = menuLinks(role);
+    expect(links).toHaveLength(count);
+    expect(screen.queryByRole('link', { name: 'Hỏi đáp tài sản' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Hỗ trợ hỏi đáp' })).toBeNull();
+  });
+
+  it.each([['ADMIN', 8], ['MANAGER', 6], ['USER', 4]])('shows the assistant links for %s when the flag is on', (role, count) => {
+    vi.stubEnv('VITE_ASSISTANT_ENABLED', 'true');
+    expect(menuLinks(role)).toHaveLength(count);
+    expect(screen.getByRole('link', { name: 'Hỏi đáp tài sản' })).toHaveAttribute('href', '/assistant');
+    const support = screen.queryByRole('link', { name: 'Hỗ trợ hỏi đáp' });
+    if (role === 'USER') {
+      expect(support).toBeNull();
+    } else {
+      expect(support).toHaveAttribute('href', '/assistant/support');
+    }
+  });
+
+  it('keeps the menu unchanged for any value other than the string true', () => {
+    vi.stubEnv('VITE_ASSISTANT_ENABLED', '1');
+    expect(menuLinks('ADMIN')).toHaveLength(6);
   });
 });

@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import axios from 'axios';
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
@@ -10,6 +11,7 @@ import { AuthProvider, useAuth } from '../context/AuthContext';
 import AssetAssistantPage from '../pages/AssetAssistantPage';
 import AssistantSupportPage from '../pages/AssistantSupportPage';
 import * as assistantApi from '../api/assistantApi';
+import axiosClient from '../api/axiosClient';
 import { ticketDetail, ticketListItem, ticketNested } from './assistantDto';
 
 const CONVERSATION_ID = '11111111-1111-4111-8111-111111111111';
@@ -266,6 +268,34 @@ describe('AssetAssistantPage', () => {
     expect(screen.queryByRole('button', { name: 'Gửi lại' })).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('Câu hỏi của bạn'), 'Câu tiếp theo');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Gửi' })).toBeEnabled());
+  });
+
+  it('request_timeout_is_120s_for_assistant_calls_only_and_recovers_the_saved_turn', async () => {
+    // Behaviour, not a 120 s sleep: the adapter records each call's timeout and fails the POST the way axios does.
+    const real = axios.getAdapter(axiosClient.defaults.adapter);
+    const seen = [];
+    const previous = axiosClient.defaults.adapter;
+    axiosClient.defaults.adapter = (config) => {
+      seen.push({ method: config.method, timeout: config.timeout });
+      if (config.method !== 'post' || !config.url.endsWith('/turns/')) return real(config);
+      const { client_request_id, question } = JSON.parse(config.data);
+      storedTurns = [makeTurn({ client_request_id, question })];
+      posts.push({ client_request_id });
+      return Promise.reject(new axios.AxiosError(`timeout of ${config.timeout}ms exceeded`, 'ECONNABORTED', config));
+    };
+    try {
+      const { user } = renderAssistant();
+      await ask(user, 'Câu quá lâu');
+
+      expect(await screen.findByText('Phòng IT hiện còn 23 laptop sẵn sàng.')).toBeVisible();
+      expect(posts).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: 'Gửi lại' })).not.toBeInTheDocument();
+      expect(seen.length).toBeGreaterThan(2);
+      expect(seen.every((call) => call.timeout === 120000)).toBe(true);
+      expect(axiosClient.defaults.timeout).toBeFalsy();
+    } finally {
+      axiosClient.defaults.adapter = previous;
+    }
   });
 
   it('processing_blocks_second_send_and_restores_from_get', async () => {
