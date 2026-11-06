@@ -52,7 +52,19 @@ Yêu cầu bắt buộc:
 4. Khi "kind" là "clarify", "calls": [], "clarification": chuỗi hỏi lại (1-300 ký tự), "reason": null.
 5. Khi "kind" là "handoff", "calls": [], "clarification": null, "reason": "missing_knowledge" hoặc "unsupported_asset_question".
 6. Khi "kind" là "out_of_scope", "calls": [], "clarification": null, "reason": null.
-7. Chỉ trả về DUY NHẤT một JSON object hợp lệ, KHÔNG bọc trong markdown code fence, KHÔNG kèm bất kỳ lời giải thích hay văn bản nào ngoài JSON.`;
+7. Chỉ trả về DUY NHẤT một JSON object hợp lệ, KHÔNG bọc trong markdown code fence, KHÔNG kèm bất kỳ lời giải thích hay văn bản nào ngoài JSON.
+
+Quy tắc định tuyến công cụ (Tool Routing Guidance):
+- Thống kê, đếm số lượng: CHỈ dùng "assets.summary" khi đối tượng là TÀI SẢN. Đặt loại tài sản vào "category", KHÔNG đặt vào "query". Giữ nguyên "department", "holder", "asset_code" nếu người dùng chỉ định cụ thể. Chỉ thêm statuses: ["AVAILABLE"] khi hỏi tài sản chưa cấp, còn trống hoặc sẵn sàng; không thêm statuses nếu hỏi tổng số.
+- Tra cứu hoặc đếm phiếu yêu cầu (requests): dùng "requests.search" với "request_type" (ALLOCATE, RETURN, DAMAGE_REPORT), "status" (PENDING, APPROVED, REJECTED) hoặc "query"; tuyệt đối KHÔNG dùng "assets.summary" cho phiếu yêu cầu (ví dụ hỏi "bao nhiêu phiếu").
+- Tra cứu danh sách/chi tiết tài sản: dùng "assets.search". Khi có mã tài sản cụ thể, bắt buộc đặt vào "asset_code" và giữ nguyên mã gốc; trường "query" chỉ dùng cho từ khóa tìm kiếm tự do khi không có mã. Khi hỏi theo người giữ, đặt tên vào "holder", không đặt vào "query".
+- Lịch sử tài sản: dùng "assets.history" với "asset_code" cho tài sản cụ thể, HOẶC "mine": true khi hỏi lịch sử tài sản của chính mình; KHÔNG kết hợp cả hai selector cùng lúc, KHÔNG tự thêm tham số ngoài schema.
+- Quy trình/quy định chính thức: dùng "procedures.lookup" với đúng 1 trong 5 chủ đề hỗ trợ: "allocate", "return", "damage_report", "roles", "asset_statuses". Mọi câu hỏi chính sách/quy định khác nằm ngoài 5 chủ đề này: chọn "kind": "handoff" với "reason": "missing_knowledge".
+- Câu hỏi tiếp nối (Follow-up) có đại từ thay thế (ví dụ: "máy đó", "thiết bị này"): ưu tiên mã tài sản nêu rõ trong câu hỏi. Nếu cần đối chiếu Context, xét lượt gần nhất liên quan và các mã phân biệt (không coi 1 mã lặp qua nhiều lượt là nhiều tài sản):
+  * Nếu chỉ có đúng 1 mã phân biệt: dùng mã đó cho "asset_code".
+  * Nếu có từ 2 mã phân biệt trở lên gây mơ hồ: chọn "kind": "clarify" liệt kê chính xác các mã đó từ refs để hỏi lại người dùng.
+  * Nếu không có ref nào: chọn "kind": "clarify" để hỏi lại người dùng.
+- Câu hỏi hoàn toàn ngoài phạm vi quản lý tài sản (thời tiết, chào hỏi chung, du lịch, thể thao, xã hội...): chọn "kind": "out_of_scope".`;
 
 function buildUserPrompt(question, context, scope) {
   return `Scope: ${JSON.stringify(scope)}

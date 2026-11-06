@@ -348,6 +348,47 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(options.messages[1].content).toContain(validPayload.question);
     });
 
+    it('includes general Vietnamese semantic tool-routing guidance without hardcoded evaluation codes', async () => {
+      env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(validDecision) });
+
+      const res = await worker.fetch(assistantRequest(validPayload), env);
+      expect(res.status).toBe(200);
+
+      const [, options] = env.AI.run.mock.calls[0];
+      const system = options.messages[0].content;
+
+      // Verify general tool-routing rules & supported tool names
+      expect(system).toContain('Quy tắc định tuyến công cụ (Tool Routing Guidance):');
+      expect(system).toContain('assets.summary');
+      expect(system).toContain('category');
+      expect(system).toContain('statuses: ["AVAILABLE"]');
+      expect(system).toContain('requests.search');
+      expect(system).toContain('request_type');
+      expect(system).toContain('assets.search');
+      expect(system).toContain('asset_code');
+      expect(system).toContain('assets.history');
+      expect(system).toContain('"mine": true');
+      expect(system).toContain('procedures.lookup');
+      for (const topic of ['allocate', 'return', 'damage_report', 'roles', 'asset_statuses']) {
+        expect(system).toContain(topic);
+      }
+      expect(system).toContain('refs');
+      expect(system).toContain('clarify');
+      expect(system).toContain('out_of_scope');
+      expect(system).toContain('missing_knowledge');
+
+      // Specific selection rule nuances
+      expect(system).toContain('CHỈ dùng "assets.summary" khi đối tượng là TÀI SẢN');
+      expect(system).toContain('tuyệt đối KHÔNG dùng "assets.summary" cho phiếu yêu cầu');
+      expect(system).toContain('KHÔNG tự thêm tham số ngoài schema');
+      expect(system).toContain('không coi 1 mã lặp qua nhiều lượt là nhiều tài sản');
+
+      // Ensure no hardcoded evaluation specifics
+      expect(system).not.toContain('W5-IT');
+      expect(system).not.toContain('23');
+      expect(system).not.toContain('Nhân viên IT');
+    });
+
     it('prefers env.ASSISTANT_MODEL over env.AI_MODEL', async () => {
       env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(validDecision) });
       const customEnv = {
