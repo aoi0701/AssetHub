@@ -210,7 +210,7 @@ DB_HOST=127.0.0.1 DB_PORT=5433 backend/.venv/bin/pytest backend/tests/test_setti
 
 ## 📚 Project Documentation
 
-- [Week 5 Asset Assistant: trạng thái Gate 3-L, cấu hình bật/tắt và runbook](docs/week-5-demo-guide.md): trợ lý tắt mặc định; chưa nghiệm thu.
+- [Week 5 Asset Assistant: kết quả nghiệm thu, cấu hình và runbook](docs/week-5-demo-guide.md): demo đã triển khai; xem bằng chứng kiểm thử, giới hạn và cách hoàn tác.
 - [Deployment Guide (Cloudflare Pages, Worker, R2, Docker)](file:///home/truong/Downloads/AssetHub/docs/deployment-guide.md): Complete setup, Cloudflare Tunnel configuration, DNS, and production zero-cost guidelines.
 - [Security Testing & Practice Report](file:///home/truong/Downloads/AssetHub/docs/security-check.md): 10 OWASP attack vectors, Caido / ZAP / Burp testing methodologies, and defensive mechanisms.
 - [Comprehensive Verification Report](file:///home/truong/Downloads/AssetHub/docs/verification-report.md): Full acceptance audit log across all 13 tasks and verification commands.
