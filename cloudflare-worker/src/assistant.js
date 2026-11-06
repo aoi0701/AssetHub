@@ -110,8 +110,51 @@ for (const branch of PROVIDER_SCHEMA.oneOf) {
   const calls = branch.properties?.calls;
   if (calls && !('items' in calls)) calls.items = { ...PROVIDER_SCHEMA.properties.calls.items };
 }
+// xgrammar emits object properties in declared order and cannot return to an earlier one (any_order=False by default, see
+// https://github.com/mlc-ai/xgrammar/blob/main/cpp/json_schema_converter.cc). With statuses declared before department, an answer that
+// named the department first could no longer carry statuses (0 of 6 count questions did; 2 of 2 once statuses came after, summary-order diagnostic).
+// Only this order is proven, so only these arguments move; unlisted ones keep their place after them.
+const SUMMARY_ARGS_ORDER = ['query', 'asset_code', 'category', 'department', 'holder', 'statuses', 'group_by'];
+const summaryArgs = PROVIDER_SCHEMA.definitions.AssetsSummaryArgs;
+summaryArgs.properties = Object.fromEntries(
+  [
+    ...SUMMARY_ARGS_ORDER.filter((key) => key in summaryArgs.properties),
+    ...Object.keys(summaryArgs.properties).filter((key) => !SUMMARY_ARGS_ORDER.includes(key)),
+  ].map((key) => [key, summaryArgs.properties[key]])
+);
 
-function buildAiRequest(model, messages) {
+const GENERIC_CLARIFICATION = 'Bạn muốn hỏi về tài sản nào? Vui lòng cho biết mã tài sản hoặc thông tin cần tra cứu.';
+const FALLBACK_CLARIFICATION = 'Vui lòng cho biết mã tài sản bạn muốn hỏi.';
+
+// The one clarification the provider may generate, built only from the asset codes of the latest context turn that has refs.
+// Codes are data: JSON-quoted, never mixed with question text, names or labels. Too long for the 300-character bound: no codes.
+function groundedClarification(context) {
+  let refs = [];
+  for (let i = context.length - 1; i >= 0 && refs.length === 0; i -= 1) {
+    refs = Array.isArray(context[i].refs) ? context[i].refs : [];
+  }
+  const codes = [...new Set(refs.map((ref) => ref.asset_code))];
+  if (codes.length === 0) return GENERIC_CLARIFICATION;
+  const text =
+    codes.length === 1
+      ? `Bạn cần biết thông tin nào về tài sản ${JSON.stringify(codes[0])}?`
+      : `Bạn muốn hỏi về mã nào: ${codes.map((code) => JSON.stringify(code)).join(', ')}?`;
+  return text.length <= 300 ? text : FALLBACK_CLARIFICATION;
+}
+
+// Per request copy of the provider schema whose clarify branch can only produce that clarification. It narrows generation; the
+// canonical schema and checkPlannerDecision are unchanged and still judge the output.
+function groundedProviderSchema(context) {
+  const copy = JSON.parse(JSON.stringify(PROVIDER_SCHEMA));
+  for (const branch of copy.oneOf) {
+    if (branch.properties?.kind?.const === 'clarify') {
+      branch.properties.clarification = { type: 'string', enum: [groundedClarification(context)] };
+    }
+  }
+  return copy;
+}
+
+function buildAiRequest(model, messages, context) {
   if (model === GEMMA4_MODEL) {
     return {
       messages,
@@ -120,7 +163,7 @@ function buildAiRequest(model, messages) {
       n: 1,
       stream: false,
       chat_template_kwargs: { enable_thinking: false },
-      response_format: { type: 'json_schema', json_schema: { name: 'planner_decision', schema: PROVIDER_SCHEMA } },
+      response_format: { type: 'json_schema', json_schema: { name: 'planner_decision', schema: groundedProviderSchema(context) } },
     };
   }
   return { messages, temperature: 0.1, max_tokens: 768, response_format: { type: 'json_object' } };
@@ -578,10 +621,14 @@ export async function handleAssistantPlan(request, env) {
   try {
     aiOutput = await env.AI.run(
       model,
-      buildAiRequest(model, [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: buildUserPrompt(question, context, scope) },
-      ])
+      buildAiRequest(
+        model,
+        [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: buildUserPrompt(question, context, scope) },
+        ],
+        context
+      )
     );
   } catch (err) {
     const errStr = `${String(err)} ${err?.message || ''}`;
