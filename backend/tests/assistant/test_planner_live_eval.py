@@ -10,9 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from .planner_eval import live_gate_problem, load_cases, run_metadata, run_suite
+from .planner_eval import EXTENDED_LIVE_FLAG, live_gate_problem, load_cases, run_metadata, run_suite
 
-_problem = live_gate_problem(os.environ)
+# An extended run must not also spend the base suite's calls in the same session.
+_problem = live_gate_problem(os.environ) or (
+    "SKIPPED: extended run requested; the base suite spends nothing" if os.environ.get(EXTENDED_LIVE_FLAG) == "1" else None
+)
 pytestmark = pytest.mark.skipif(_problem is not None, reason=_problem or "")
 
 

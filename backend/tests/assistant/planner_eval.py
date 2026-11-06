@@ -32,6 +32,10 @@ from apps.departments.models import Department
 MAX_LIVE_CALLS = 12
 CASE_IDS = {"E1", "E2", "E3", "F1", "F2", "A1", "A2", "O1", "O2", "P1", "P2", "H1"}
 _CASES_PATH = Path(__file__).with_name("planner_eval_cases.json")
+# A separate robustness set; its results never decide Gate 3-L.
+EXTENDED_CASE_IDS = {f"X{number}" for number in range(1, 13)}
+_EXTENDED_CASES_PATH = Path(__file__).with_name("planner_eval_extended_cases.json")
+EXTENDED_LIVE_FLAG = "RUN_ASSISTANT_LLM_EVAL_EXTENDED"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKER_PROMPT_FILES = ("cloudflare-worker/src/assistant.js", "cloudflare-worker/assistant.schema.json")
 _PLACEHOLDER = re.compile(r"\{(\w+)\.(\w+)\}")
@@ -47,6 +51,10 @@ class CaseFixtureError(ValueError):
 
 def load_cases() -> list[dict]:
     return json.loads(_CASES_PATH.read_text(encoding="utf-8"))
+
+
+def load_extended_cases() -> list[dict]:
+    return json.loads(_EXTENDED_CASES_PATH.read_text(encoding="utf-8"))
 
 
 def _fill(value, graph):
@@ -285,8 +293,17 @@ def run_suite(cases: list[dict], graph: dict, planner, *, live: bool, meta: dict
     ids = [case["id"] for case in cases]
     if len(ids) != len(set(ids)) or set(ids) != CASE_IDS or len(ids) != MAX_LIVE_CALLS:
         raise CaseFixtureError("A run needs exactly the 12 plan cases")
-    prepared = [prepare_case(case, graph) for case in cases]
+    rows = _run_cases([prepare_case(case, graph) for case in cases], graph, planner, redact)
+    return {
+        "gate_status": _gate_status(rows, live),
+        "planner_calls": sum(row["planner_calls"] for row in rows),
+        "meta": meta or {},
+        "cases": rows,
+    }
 
+
+def _run_cases(prepared: list[dict], graph: dict, planner, redact) -> list[dict]:
+    """One call per prepared case, in order; a provider failure leaves the rest not_run."""
     rows, stopped = [], False
     for case in prepared:
         if stopped:
@@ -295,8 +312,32 @@ def run_suite(cases: list[dict], graph: dict, planner, *, live: bool, meta: dict
         row = evaluate_case(case, graph, planner, redact=redact)
         rows.append(row)
         stopped = row["verdict"] == "provider_error"
+    return rows
+
+
+_EXTENDED_STATUS = {
+    "LLM_EVAL_PENDING": "EXTENDED_PENDING",
+    "LIVE_BLOCKED": "EXTENDED_BLOCKED",
+    "LIVE_FAILED": "EXTENDED_FAILED",
+    "LIVE_MATCHED_PENDING_REVIEW": "EXTENDED_MATCHED_PENDING_REVIEW",
+}
+
+
+def run_extended_suite(cases: list[dict], graph: dict, planner, *, live: bool, meta: dict | None = None,
+                       redact=()) -> dict:
+    """The 12 extended cases, highest risk first, under the same one-call, halt and redaction rules."""
+    ids = [case["id"] for case in cases]
+    if len(ids) != len(set(ids)) or set(ids) != EXTENDED_CASE_IDS or len(ids) != MAX_LIVE_CALLS:
+        raise CaseFixtureError("An extended run needs exactly the 12 extended cases")
+    ranks = [case.get("risk_rank") for case in cases]
+    # type() not isinstance(): True would pass as 1.
+    if any(type(rank) is not int for rank in ranks) or sorted(ranks) != list(range(1, MAX_LIVE_CALLS + 1)):
+        raise CaseFixtureError("Extended cases need unique risk ranks 1..12")
+    prepared = [prepare_case(case, graph) for case in sorted(cases, key=lambda case: case["risk_rank"])]
+    rows = _run_cases(prepared, graph, planner, redact)
     return {
-        "gate_status": _gate_status(rows, live),
+        "suite": "extended",
+        "extended_status": _EXTENDED_STATUS[_gate_status(rows, live)],
         "planner_calls": sum(row["planner_calls"] for row in rows),
         "meta": meta or {},
         "cases": rows,
@@ -325,6 +366,13 @@ def live_gate_problem(env) -> str | None:
     if not artifact_dir or not os.path.isdir(artifact_dir) or not os.access(artifact_dir, os.W_OK):
         return "BLOCKED: ASSISTANT_EVAL_ARTIFACT_DIR must be an existing writable directory"
     return None
+
+
+def extended_live_problem(env) -> str | None:
+    """The base live conditions plus an explicit extended opt-in; None when an extended run may start."""
+    if env.get(EXTENDED_LIVE_FLAG) != "1":
+        return f"EXTENDED_PENDING: an extended run needs {EXTENDED_LIVE_FLAG}=1"
+    return live_gate_problem(env)
 
 
 def _sha256(*paths) -> str:
