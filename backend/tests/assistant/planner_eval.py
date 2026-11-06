@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 from datetime import datetime, timezone
+from time import perf_counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -220,6 +221,7 @@ def _empty_row(case: dict, verdict: str, planner_calls: int) -> dict:
         "clarification_for_review": None,
         "verdict": verdict,
         "planner_calls": planner_calls,
+        "planner_latency_ms": None,
     }
 
 
@@ -229,8 +231,14 @@ def evaluate_case(case: dict, graph: dict, planner, *, redact=()) -> dict:
     row = _empty_row(case, "mismatch", 1)
     row["expected"] = _normalize_decision(case["expected_decision"], actor)
 
+    scope = build_scope(actor)
     try:
-        raw = planner(question=case["question"], context=case["context"], scope=build_scope(actor))
+        # Timed: the planner call alone, whether it answers or raises; not scope, validation or tools.
+        started = perf_counter()
+        try:
+            raw = planner(question=case["question"], context=case["context"], scope=scope)
+        finally:
+            row["planner_latency_ms"] = round((perf_counter() - started) * 1000, 1)
         decision = validate_decision(raw)
     except PlannerProtocolError as error:
         row.update(verdict="protocol_error", error=_redact(str(error), redact))

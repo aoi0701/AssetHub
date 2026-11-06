@@ -578,3 +578,89 @@ def test_live_module_skips_cleanly_before_fixtures_network_and_secrets(change, r
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "1 skipped" in completed.stdout
     assert reason in completed.stdout
+
+
+# --- planner latency: only the planner call is timed ---------------------------------------
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class TimedPlanner(OracleCopy):
+    """Advances the fake clock by a fixed planner time before answering or raising."""
+
+    def __init__(self, decisions, clock, seconds):
+        super().__init__(decisions)
+        self.clock, self.seconds = clock, seconds
+
+    def __call__(self, **kwargs):
+        self.clock.now += self.seconds
+        return super().__call__(**kwargs)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake = FakeClock()
+    monkeypatch.setattr(planner_eval, "perf_counter", fake)
+    return fake
+
+
+def test_latency_times_the_planner_call_but_not_tools_or_validation(assistant_graph, prepared, clock, monkeypatch):
+    real_tool, real_validate = planner_eval.execute_tool, planner_eval.validate_decision
+
+    def slow_tool(**kwargs):
+        clock.now += 10.0
+        return real_tool(**kwargs)
+
+    def slow_validate(raw):
+        clock.now += 5.0
+        return real_validate(raw)
+
+    def slow_scope(actor):
+        clock.now += 7.0
+        return {"role": actor.role, "department_id": actor.department_id, "department_name": None}
+
+    monkeypatch.setattr(planner_eval, "execute_tool", slow_tool)
+    monkeypatch.setattr(planner_eval, "validate_decision", slow_validate)
+    monkeypatch.setattr(planner_eval, "build_scope", slow_scope)
+    case = prepared["E1"]
+
+    row = evaluate_case(case, assistant_graph, TimedPlanner({case["question"]: case["expected_decision"]}, clock, 1.5))
+
+    assert row["verdict"] == "match" and row["tool_results"]
+    assert row["planner_latency_ms"] == 1500.0
+
+
+@pytest.mark.parametrize("error, verdict", [
+    (AssistantProviderUnavailable("AI Worker request timed out: x"), "provider_error"),
+    (AssistantProviderUnavailable("AI Worker returned invalid planner decision: bad"), "protocol_error"),
+    (PlannerProtocolError("bad"), "protocol_error"),
+], ids=["provider-timeout", "invalid-decision", "protocol"])
+def test_latency_is_recorded_when_the_planner_fails(assistant_graph, prepared, clock, error, verdict):
+    case = prepared["A2"]
+    row = evaluate_case(case, assistant_graph, TimedPlanner({case["question"]: error}, clock, 30.0))
+    assert row["verdict"] == verdict
+    assert row["planner_latency_ms"] == 30000.0
+
+
+def test_schema_invalid_answer_keeps_the_planner_latency(assistant_graph, prepared, clock):
+    case = prepared["E1"]
+    row = evaluate_case(case, assistant_graph, TimedPlanner({case["question"]: "23 laptop"}, clock, 0.25))
+    assert row["verdict"] == "protocol_error"
+    assert row["planner_latency_ms"] == 250.0
+
+
+def test_not_run_cases_have_no_latency(assistant_graph, perfect, prepared, clock):
+    timed = TimedPlanner(perfect.decisions, clock, 2.0)
+    timed.decisions[prepared["E2"]["question"]] = AssistantProviderUnavailable("AI Worker request timed out: x")
+
+    record = run_suite(load_cases(), assistant_graph, timed, live=True)
+
+    latencies = {row["case_id"]: row["planner_latency_ms"] for row in record["cases"]}
+    assert latencies["E1"] == 2000.0 and latencies["E2"] == 2000.0
+    assert {latencies[case_id] for case_id in latencies if case_id not in {"E1", "E2"}} == {None}
+    assert record["gate_status"] == "LIVE_BLOCKED" and record["planner_calls"] == 2
