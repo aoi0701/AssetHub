@@ -468,6 +468,13 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(system).toContain('TUYỆT ĐỐI KHÔNG thêm tham số "limit" vào "assets.summary"');
       expect(system).toContain('Luôn dùng mảng "statuses": [...] (số nhiều), TUYỆT ĐỐI KHÔNG dùng "status" số ít');
 
+      // Additional reinforced offline routing rules
+      expect(system).toContain('Mọi câu hỏi hỏi số lượng tài sản ("bao nhiêu", "mấy", "có bao nhiêu", "còn bao nhiêu", "đếm...") BẮT BUỘC dùng "assets.summary", TUYỆT ĐỐI KHÔNG dùng "assets.search"');
+      expect(system).toContain('BẮT BUỘC luôn giữ cả "category" và "department"/"holder" nếu được nêu rõ trong câu hỏi');
+      expect(system).toContain('Kỷ luật tham số công cụ (Tool Arguments)');
+      expect(system).toContain('Nếu lượt gần nhất liên quan có từ 2 mã phân biệt trở lên gây mơ hồ: BẮT BUỘC chọn "kind": "clarify" với "calls": [] (rỗng) liệt kê chính xác các mã ứng viên');
+      expect(system).toContain('Nếu Context không có ref phù hợp nào (hoặc 0 ref): BẮT BUỘC chọn "kind": "clarify" với "calls": [] (rỗng) yêu cầu người dùng cung cấp mã tài sản cụ thể');
+
       // Ensure no hardcoded evaluation specifics
       expect(system).not.toContain('W5');
       expect(system).not.toContain('HR');
