@@ -337,6 +337,92 @@ def test_upstream_http_errors_raise_unavailable(
     assert str(status_code) in str(exc_info.value)
 
 
+# 5b. Worker error codes: only known codes reach the message, never the body
+
+LEAKY_BODY_FIELDS = {
+    "token": "test-service-token-abc",
+    "prompt": "SYSTEM PROMPT Bạn là AI Planner",
+    "raw": "model output with SELECT * FROM assets",
+}
+
+
+@pytest.mark.parametrize("status_code, reason, code", [
+    (502, "Bad Gateway", "INVALID_PLAN"),
+    (503, "Service Unavailable", "UNAVAILABLE"),
+    (429, "Too Many Requests", 3036),
+])
+def test_known_worker_error_code_is_named_without_leaking_the_body(
+    mock_ai_server: MockAIServerState, status_code: int, reason: str, code: Any
+) -> None:
+    mock_ai_server.response_status = status_code
+    mock_ai_server.response_body = json.dumps({"error": "Invalid AI plan", "code": code, **LEAKY_BODY_FIELDS}).encode()
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="Phòng tôi còn bao nhiêu laptop?")
+
+    message = str(exc_info.value)
+    assert message == f"AI Worker returned HTTP {status_code}: {reason} (worker code {code})"
+    assert isinstance(exc_info.value.__cause__, urllib.error.HTTPError)
+    assert len(mock_ai_server.requests) == 1
+
+
+FALLBACK_502 = "AI Worker returned HTTP 502: Bad Gateway"
+
+
+@pytest.mark.parametrize("body", [
+    b"<html><body>502 Bad Gateway</body></html>",
+    b"",
+    b'{"error": "Upstream error"}',
+    b'{"error": "x", "code": "test-service-token-abc"}',
+    b'{"code": "invalid_plan"}',
+    b'["INVALID_PLAN"]',
+    b'{"code": "INVALID_PLAN", "pad": "' + b"x" * 1100 + b'"}',
+], ids=["html", "empty", "no-code", "unknown-code", "wrong-case", "not-object", "oversize"])
+def test_unusable_error_body_keeps_the_status_only_message(mock_ai_server: MockAIServerState, body: bytes) -> None:
+    mock_ai_server.response_status = 502
+    mock_ai_server.response_body = body
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="test question")
+
+    assert str(exc_info.value) == FALLBACK_502
+
+
+class _ErrorBody:
+    def __init__(self, data: bytes = b"", fail: bool = False) -> None:
+        self.data, self.fail, self.sizes = data, fail, []
+
+    def read(self, size: int = -1) -> bytes:
+        self.sizes.append(size)
+        if self.fail:
+            raise OSError("connection reset while reading error body")
+        return self.data if size < 0 else self.data[:size]
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize("body", [
+    _ErrorBody(fail=True),
+    _ErrorBody(b'{"code": "INVALID_PLAN"' + b" " * 10_000_000 + b"}"),
+], ids=["reader-error", "huge"])
+def test_error_body_read_is_capped_and_never_hides_the_http_error(body: _ErrorBody) -> None:
+    error = urllib.error.HTTPError("http://127.0.0.1:8787/api/assistant/plan", 502, "Bad Gateway", {}, body)
+    opener = MagicMock()
+    opener.open.side_effect = error
+
+    with override_settings(AI_WORKER_URL="http://127.0.0.1:8787"):
+        with patch("apps.assistant.gateway.get_opener", return_value=opener):
+            with pytest.raises(AssistantProviderUnavailable) as exc_info:
+                plan_question(question="test question")
+
+    assert str(exc_info.value) == FALLBACK_502
+    assert exc_info.value.__cause__ is error
+    assert body.sizes == [1025]
+    assert opener.open.call_count == 1
+
 # 6. Network Connection and Timeout Errors
 
 def test_connection_refused_raises_unavailable() -> None:

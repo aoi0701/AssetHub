@@ -27,6 +27,9 @@ from apps.assistant.contracts import (
 MAX_RESPONSE_BYTES = 65536  # 64 KiB limit for planner responses
 USER_AGENT = "AssetHub-Backend/1.0"
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+MAX_ERROR_BODY_BYTES = 1024  # Worker error bodies are tiny JSON objects
+# The Worker's own error codes; anything else in an error body is never echoed.
+WORKER_ERROR_CODES = frozenset({"INVALID_PLAN", "UNAVAILABLE", "3036"})
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -103,6 +106,18 @@ def _validate_timeout(raw_timeout: Any) -> float:
         ) from exc
 
 
+def _worker_error_code(exc: urllib.error.HTTPError) -> str | None:
+    """A known Worker error code from a small JSON error body; None for anything else."""
+    try:
+        raw = exc.read(MAX_ERROR_BODY_BYTES + 1)
+        if len(raw) > MAX_ERROR_BODY_BYTES:
+            return None
+        code = str(json.loads(raw.decode("utf-8")).get("code"))
+    except Exception:
+        return None
+    return code if code in WORKER_ERROR_CODES else None
+
+
 def plan_question(
     *,
     question: str,
@@ -161,8 +176,10 @@ def plan_question(
         with opener.open(req, timeout=timeout) as resp:
             raw_data = resp.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
+        worker_code = _worker_error_code(exc)
+        suffix = f" (worker code {worker_code})" if worker_code else ""
         raise AssistantProviderUnavailable(
-            f"AI Worker returned HTTP {exc.code}: {exc.reason}"
+            f"AI Worker returned HTTP {exc.code}: {exc.reason}{suffix}"
         ) from exc
     except urllib.error.URLError as exc:
         raise AssistantProviderUnavailable(
