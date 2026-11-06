@@ -61,6 +61,7 @@ staticfiles/
 !**/schema.sql
 !scripts/reset_d1_test_db.sql
 !backend/assethub_api/backends/d1/sql/0002_week5_assistant.sql
+!deploy/sql/week5_d1_metadata_baseline.sql
 *.dump
 dumps/
 backups/
