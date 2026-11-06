@@ -46,6 +46,21 @@ Dự án áp dụng mô hình kiểm soát chất lượng qua từng Gate tuầ
 | **Gate 5** | Authenticated Grounded Chat & Support APIs (51 focused tests đã duyệt) | **APPROVED & COMMITTED** | Đã commit tại `c5fb8fdae3bbc800fbd5f9ae029bd68aca0de265`. Đây là 51 test trọng tâm của Task 5, không phải toàn bộ test suite; đánh giá LLM thật vẫn đang chờ ở Gate 3-L. |
 | **Gate 8** | D1 Local Target Proof & Rehearsal | **D1 LOCAL CHECKPOINT APPROVED (Task 8 chưa đóng)** | Lượt opt-in trên **SQLite thật qua Wrangler D1 local với fake AI**: **7/7 PASS (65,79s)** ở HEAD `2427612`, rehearsal `cdf264d6`, fixture `6cb8ea31`; Codex duyệt sau khi kiểm hash và cleanup. Chạy mặc định 3 file: **121 PASS, 15 SKIP (38,21s)**. Phần browser, cấu hình và deploy của Task 8 còn chờ. |
 
+### 2.1. Đánh Giá Hạn Mức & Dự Toán Chi Phí Gate 3-L (Gate 3-L Quota & Budget Preflight)
+
+- **Ảnh chụp Dashboard người dùng (06/11/2026 07:50 VN):** Ghi nhận `"Neurons used today: 0 / 10k"`; đồ thị 24 giờ ghi nhận tổng 11.52 Neurons từ ngày 05/11 (không tính vào hạn mức hôm nay). Ảnh chụp chưa hiển thị rõ gói cước Free hay Paid.
+- **Đo lường ngoại tuyến (Offline Measurement) trên 12 ca kiểm thử (`planner_eval_cases.json`):**
+  * Baseline trước rút gọn (Pretty JSON Schema `indent=2`): **132.675 bytes** tổng input (10.847 bytes system prompt/ca).
+  * Bản rút gọn (Compact JSON Schema): **76.731 bytes** tổng input (6.185 bytes system prompt/ca; tiết kiệm 55.944 bytes qua 12 ca). Hai bản schema tương đương ngữ nghĩa 100%, chỉ loại bỏ khoảng trắng dư thừa.
+  * Bảng giá Cloudflare chính thức cho `@cf/meta/llama-3.1-8b-instruct-fp8`: 13.778 Neurons / 1M input tokens và 26.128 Neurons / 1M output tokens.
+  * **Dự toán bảo thủ (Conservative Projection) cho bản compact:** Giả định 1 token / byte UTF-8 + dự phòng 512 tokens chat-template/lượt gọi + kịch trần 768 tokens output/lượt gọi $\to$ dự toán **1.382,65 Neurons** cho toàn bộ 12 ca.
+  * **Dự phòng hạn mức:** Nếu mức tiêu thụ nền bằng 0 và không có tác vụ nào khác phát sinh, lượng Neurons còn lại là **8.617,35 Neurons**.
+- **Ranh giới an toàn & Giới hạn cam kết:**
+  * Con số 1.382,65 Neurons là dự toán bảo thủ theo công thức giả định, **không phải bảo đảm thực tế từ nhà cung cấp (provider guarantee)**.
+  * Trước khi kích hoạt đánh giá live, bắt buộc phải xác nhận gói cước/hạn mức thực tế và nhận được sự đồng thuận rõ ràng từ người dùng.
+  * Chính sách đánh giá nghiêm ngặt: tối đa $\le 12$ cuộc gọi, tuyệt đối không retry hay chạy lại tự động; ngân sách đánh giá không vượt quá 2.000 Neurons để bảo toàn tối thiểu $\ge 8.000$ Neurons cho phiên demo thực tế. Nếu không đáp ứng đủ điều kiện này, Gate 3-L phải duy trì trạng thái PENDING.
+- **Trạng thái thực thi:** Bản compact đã được Codex duyệt offline: **52/52 Worker tests PASS** (`tests/assistant.test.js`). Gate 3-L tiếp tục giữ trạng thái **`LLM_EVAL_PENDING`**; chưa gọi AI thật, chưa triển khai Worker, và chưa đánh dấu hoàn tất Task 8.
+
 ---
 
 ## 3. Quy Trình Xác Minh & Chạy Kiểm Thử (Verification & Demo Procedures)

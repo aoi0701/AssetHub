@@ -316,6 +316,38 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(options.messages[1].content).toContain('MANAGER');
     });
 
+    it('embeds the full canonical schema compactly in the system prompt sent to the model', async () => {
+      env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(validDecision) });
+
+      const res = await handleAssistantPlan(assistantRequest(validPayload), env);
+      expect(res.status).toBe(200);
+
+      const [, options] = env.AI.run.mock.calls[0];
+      const system = options.messages[0].content;
+      const head = 'theo đúng JSON Schema sau:\n\n';
+      const tail = '\n\nYêu cầu bắt buộc:';
+      const start = system.indexOf(head) + head.length;
+      const end = system.indexOf(tail);
+      expect(start).toBeGreaterThan(head.length - 1);
+      expect(end).toBeGreaterThan(start);
+      const embedded = system.slice(start, end);
+
+      const canonical = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../assistant.schema.json'), 'utf8'));
+      expect(JSON.parse(embedded)).toEqual(canonical);
+      expect(embedded).not.toMatch(/\n/);
+      const pretty = JSON.stringify(canonical, null, 2);
+      expect(Buffer.byteLength(embedded)).toBeLessThan(Buffer.byteLength(pretty));
+
+      // Instructions around the schema stay intact.
+      expect(system.startsWith('Bạn là AI Planner cho hệ thống quản lý tài sản AssetHub.')).toBe(true);
+      for (let rule = 1; rule <= 7; rule += 1) {
+        expect(system).toContain(`\n${rule}. `);
+      }
+      expect(system).toContain('"kind", "calls", "clarification", "reason"');
+      expect(system).toContain('KHÔNG bọc trong markdown code fence');
+      expect(options.messages[1].content).toContain(validPayload.question);
+    });
+
     it('prefers env.ASSISTANT_MODEL over env.AI_MODEL', async () => {
       env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(validDecision) });
       const customEnv = {
