@@ -30,6 +30,8 @@ LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 MAX_ERROR_BODY_BYTES = 1024  # Worker error bodies are tiny JSON objects
 # The Worker's own error codes; anything else in an error body is never echoed.
 WORKER_ERROR_CODES = frozenset({"INVALID_PLAN", "UNAVAILABLE", "3036"})
+# Why the Worker refused a plan; named only alongside INVALID_PLAN.
+INVALID_PLAN_REASONS = frozenset({"CODE_FENCE", "JSON_PARSE_ERROR", "SCHEMA_VALIDATION_FAILED", "PAYLOAD_TOO_LARGE"})
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -106,16 +108,19 @@ def _validate_timeout(raw_timeout: Any) -> float:
         ) from exc
 
 
-def _worker_error_code(exc: urllib.error.HTTPError) -> str | None:
-    """A known Worker error code from a small JSON error body; None for anything else."""
+def _worker_error_code(exc: urllib.error.HTTPError) -> tuple[str | None, str | None]:
+    """Known Worker error code and INVALID_PLAN reason from a small JSON error body; None for anything else."""
     try:
         raw = exc.read(MAX_ERROR_BODY_BYTES + 1)
         if len(raw) > MAX_ERROR_BODY_BYTES:
-            return None
-        code = str(json.loads(raw.decode("utf-8")).get("code"))
+            return None, None
+        body = json.loads(raw.decode("utf-8"))
+        code, reason = str(body.get("code")), body.get("reason_code")
     except Exception:
-        return None
-    return code if code in WORKER_ERROR_CODES else None
+        return None, None
+    if code not in WORKER_ERROR_CODES:
+        return None, None
+    return code, reason if code == "INVALID_PLAN" and isinstance(reason, str) and reason in INVALID_PLAN_REASONS else None
 
 
 def plan_question(
@@ -176,11 +181,14 @@ def plan_question(
         with opener.open(req, timeout=timeout) as resp:
             raw_data = resp.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        worker_code = _worker_error_code(exc)
-        suffix = f" (worker code {worker_code})" if worker_code else ""
-        raise AssistantProviderUnavailable(
-            f"AI Worker returned HTTP {exc.code}: {exc.reason}{suffix}"
-        ) from exc
+        worker_code, worker_reason = _worker_error_code(exc)
+        suffix = ""
+        if worker_code:
+            suffix = f" (worker code {worker_code}, reason {worker_reason})" if worker_reason else f" (worker code {worker_code})"
+        error = AssistantProviderUnavailable(f"AI Worker returned HTTP {exc.code}: {exc.reason}{suffix}")
+        # Callers classify on these, never on the message text.
+        error.http_status, error.worker_code, error.worker_reason = exc.code, worker_code, worker_reason
+        raise error from exc
     except urllib.error.URLError as exc:
         raise AssistantProviderUnavailable(
             f"AI Worker connection failed: {exc.reason}"

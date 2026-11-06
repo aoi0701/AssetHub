@@ -147,9 +147,16 @@ def _normalize_decision(decision: dict, actor: User) -> dict:
 
 # --- evaluation ---------------------------------------------------------------------------
 
+def _echo_form(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", normalize_text(text)).split())
+
+
 def _clarification_problems(text, case: dict) -> list[str]:
     if not isinstance(text, str) or not text.strip():
         return ["clarification is blank"]
+    # Only an exact echo is caught; whether a clarification really helps stays a manual review.
+    if _echo_form(text) == _echo_form(case["question"]):
+        return ["clarification repeats the question"]
     allowed = {ref["asset_code"] for turn in case["context"] for ref in turn["refs"]}
     folded = text.upper()
     named = [code for code in Asset.objects.values_list("asset_code", flat=True) if code.upper() in folded]
@@ -230,7 +237,9 @@ def evaluate_case(case: dict, graph: dict, planner, *, redact=()) -> dict:
         return row
     except AssistantProviderUnavailable as error:
         message = _redact(str(error), redact)
-        kind = "protocol_error" if str(error).startswith(_INVALID_DECISION_PREFIX) else "provider_error"
+        # The Worker refusing the model's plan is the planner's failure, not an outage: the run goes on.
+        refused = getattr(error, "http_status", None) == 502 and getattr(error, "worker_code", None) == "INVALID_PLAN"
+        kind = "protocol_error" if refused or str(error).startswith(_INVALID_DECISION_PREFIX) else "provider_error"
         row.update(verdict=kind, error=message)
         return row
 

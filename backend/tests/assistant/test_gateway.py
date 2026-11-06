@@ -423,6 +423,61 @@ def test_error_body_read_is_capped_and_never_hides_the_http_error(body: _ErrorBo
     assert body.sizes == [1025]
     assert opener.open.call_count == 1
 
+@pytest.mark.parametrize("body, message", [
+    ({"code": "INVALID_PLAN", "reason_code": "SCHEMA_VALIDATION_FAILED"},
+     "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED)"),
+    ({"code": "INVALID_PLAN", "reason_code": "CODE_FENCE"},
+     "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason CODE_FENCE)"),
+    ({"code": "INVALID_PLAN", "reason_code": "test-service-token-abc"},
+     "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN)"),
+    ({"code": "INVALID_PLAN", "reason_code": "schema_validation_failed"},
+     "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN)"),
+    ({"code": "INVALID_PLAN", "reason_code": ["JSON_PARSE_ERROR"]},
+     "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN)"),
+    ({"code": "UNAVAILABLE", "reason_code": "JSON_PARSE_ERROR"},
+     "AI Worker returned HTTP 502: Bad Gateway (worker code UNAVAILABLE)"),
+], ids=["schema", "fence", "token-as-reason", "wrong-case", "not-string", "reason-only-for-invalid-plan"])
+def test_invalid_plan_reason_is_named_only_when_known(
+    mock_ai_server: MockAIServerState, body: dict, message: str
+) -> None:
+    mock_ai_server.response_status = 502
+    mock_ai_server.response_body = json.dumps({"error": "Invalid AI plan", **body, **LEAKY_BODY_FIELDS}).encode()
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="test question")
+
+    assert str(exc_info.value) == message
+
+
+def test_http_error_carries_status_and_known_codes_as_attributes() -> None:
+    body = _ErrorBody(b'{"code": "INVALID_PLAN", "reason_code": "PAYLOAD_TOO_LARGE"}')
+    error = urllib.error.HTTPError("http://127.0.0.1:8787/api/assistant/plan", 502, "Bad Gateway", {}, body)
+    opener = MagicMock()
+    opener.open.side_effect = error
+
+    with override_settings(AI_WORKER_URL="http://127.0.0.1:8787"):
+        with patch("apps.assistant.gateway.get_opener", return_value=opener):
+            with pytest.raises(AssistantProviderUnavailable) as exc_info:
+                plan_question(question="test question")
+
+    raised = exc_info.value
+    assert (raised.http_status, raised.worker_code, raised.worker_reason) == (502, "INVALID_PLAN", "PAYLOAD_TOO_LARGE")
+    assert body.sizes == [1025], "the error body is read once, capped"
+
+
+def test_unusable_error_body_leaves_no_worker_code_attribute(mock_ai_server: MockAIServerState) -> None:
+    mock_ai_server.response_status = 502
+    mock_ai_server.response_body = b"<html>(worker code INVALID_PLAN)</html>"
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="test question")
+
+    raised = exc_info.value
+    assert (raised.http_status, raised.worker_code, raised.worker_reason) == (502, None, None)
+    assert str(raised) == FALLBACK_502
+
 # 6. Network Connection and Timeout Errors
 
 def test_connection_refused_raises_unavailable() -> None:

@@ -359,6 +359,73 @@ def test_invalid_decision_from_gateway_counts_as_protocol_error_and_continues(as
     assert {row["case_id"]: row["verdict"] for row in record["cases"]}["E2"] == "protocol_error"
 
 
+def _worker_error(status, code, message="AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN)"):
+    error = AssistantProviderUnavailable(message)
+    error.http_status, error.worker_code, error.worker_reason = status, code, None
+    return error
+
+
+def test_worker_invalid_plan_is_a_protocol_error_the_run_continues_and_fails(assistant_graph, perfect, prepared):
+    perfect.decisions[prepared["P1"]["question"]] = _worker_error(502, "INVALID_PLAN")
+
+    record = run_suite(load_cases(), assistant_graph, perfect, live=True)
+
+    rows = {row["case_id"]: row for row in record["cases"]}
+    assert rows["P1"]["verdict"] == "protocol_error"
+    assert rows["P1"]["actual"] is None and rows["P1"]["tool_results"] == []
+    assert all(row["verdict"] == "match" for case_id, row in rows.items() if case_id != "P1")
+    assert record["gate_status"] == "LIVE_FAILED"
+    assert record["planner_calls"] == 12 and len(perfect.calls) == 12
+
+
+def test_every_case_invalid_plan_still_spends_at_most_twelve_calls(assistant_graph, perfect, prepared):
+    for case in prepared.values():
+        perfect.decisions[case["question"]] = _worker_error(502, "INVALID_PLAN")
+
+    record = run_suite(load_cases(), assistant_graph, perfect, live=True)
+
+    assert {row["verdict"] for row in record["cases"]} == {"protocol_error"}
+    assert record["planner_calls"] == 12 and len(perfect.calls) == 12
+    assert record["gate_status"] == "LIVE_FAILED"
+
+
+@pytest.mark.parametrize("error", [
+    _worker_error(503, "UNAVAILABLE", "AI Worker returned HTTP 503: Service Unavailable (worker code UNAVAILABLE)"),
+    _worker_error(429, "3036", "AI Worker returned HTTP 429: Too Many Requests (worker code 3036)"),
+    _worker_error(502, None, "AI Worker returned HTTP 502: Bad Gateway"),
+    _worker_error(503, "INVALID_PLAN", "AI Worker returned HTTP 503: x (worker code INVALID_PLAN)"),
+    AssistantProviderUnavailable("AI Worker returned HTTP 502: (worker code INVALID_PLAN)"),
+    AssistantProviderUnavailable("AI Worker connection failed: refused"),
+], ids=["503", "quota", "502-no-code", "invalid-plan-wrong-status", "message-only", "network"])
+def test_other_worker_and_network_errors_still_stop_the_run(assistant_graph, perfect, prepared, error):
+    perfect.decisions[prepared["E2"]["question"]] = error
+
+    record = run_suite(load_cases(), assistant_graph, perfect, live=True)
+
+    assert record["gate_status"] == "LIVE_BLOCKED"
+    assert record["planner_calls"] == 2
+    rows = {row["case_id"]: row["verdict"] for row in record["cases"]}
+    assert rows["E2"] == "provider_error" and rows["E3"] == "not_run"
+
+
+@pytest.mark.parametrize("echo", ["Máy này ai giữ?", "  máy NÀY ai giu  ", "May nay, ai giu!", "MÁY NÀY AI GIỮ"])
+def test_clarification_that_echoes_the_question_is_a_mismatch(assistant_graph, prepared, echo):
+    row = evaluate(prepared, assistant_graph, "A1", clarify(echo))
+    assert row["verdict"] == "mismatch"
+    assert any("repeats the question" in item for item in row["mismatches"])
+    assert row["clarification_for_review"] == echo
+
+
+def test_echo_check_applies_to_every_clarify_case(assistant_graph, prepared):
+    case = prepared["A2"]
+    row = evaluate(prepared, assistant_graph, "A2", clarify(case["question"].upper()))
+    assert any("repeats the question" in item for item in row["mismatches"])
+
+
+def test_real_clarification_that_reuses_question_words_still_matches(assistant_graph, prepared):
+    row = evaluate(prepared, assistant_graph, "A1", clarify("Máy này là máy nào? Bạn cho tôi mã tài sản nhé."))
+    assert row["verdict"] == "match"
+
 def test_planner_protocol_error_is_recorded(assistant_graph, prepared):
     case = prepared["E1"]
     row = evaluate_case(case, assistant_graph, OracleCopy({case["question"]: PlannerProtocolError("bad")}))
