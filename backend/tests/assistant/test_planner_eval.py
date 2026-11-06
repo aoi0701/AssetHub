@@ -497,6 +497,68 @@ def test_run_metadata_records_versions_without_credentials():
     assert meta["started_at"].endswith("Z")
 
 
+def test_validated_calls_keep_the_original_filters_while_actual_stays_normalized(assistant_graph, prepared):
+    case = prepared["E1"]
+    sent = tools("assets.summary", category="Laptop", statuses=["AVAILABLE"], department="IT")
+    row = evaluate_case(case, assistant_graph, OracleCopy({case["question"]: sent}))
+
+    assert row["validated_calls"] == sent["calls"]
+    assert row["validated_calls"][0]["arguments"]["department"] == "IT"
+    assert "department" not in row["actual"]["calls"][0]["arguments"]  # a manager's own department is dropped, as before
+    assert row["verdict"] == "match"
+
+    row["validated_calls"][0]["arguments"]["category"] = "changed"
+    row["validated_calls"][0]["arguments"]["statuses"].append("IN_USE")
+    assert row["actual"]["calls"][0]["arguments"] == {"category": "laptop", "statuses": ["AVAILABLE"]}
+
+
+def test_validated_calls_show_whether_the_planner_dropped_or_kept_a_filter(assistant_graph, prepared):
+    case = prepared["P2"]
+    dropped = evaluate_case(case, assistant_graph, OracleCopy({case["question"]: tools("assets.summary", category="Laptop")}))
+    kept_own = evaluate_case(case, assistant_graph, OracleCopy({case["question"]: tools("assets.summary", category="Laptop", department="IT")}))
+
+    assert dropped["validated_calls"][0]["arguments"] == {"category": "Laptop"}
+    assert kept_own["validated_calls"][0]["arguments"] == {"category": "Laptop", "department": "IT"}
+    assert dropped["actual"] == kept_own["actual"]  # the old evidence could not tell these two apart
+
+
+@pytest.mark.parametrize("failure", [
+    PlannerProtocolError("invalid plan with secret-token-xyz"),
+    AssistantProviderUnavailable("AI Worker request timed out: secret-token-xyz"),
+    {"kind": "tools", "calls": [{"name": "assets.search", "arguments": {"password": "secret-token-xyz"}}],
+     "clarification": None, "reason": None},
+], ids=["protocol", "provider", "schema-invalid"])
+def test_failures_never_log_the_invalid_output(assistant_graph, prepared, failure):
+    case = prepared["E1"]
+    row = evaluate_case(case, assistant_graph, OracleCopy({case["question"]: failure}), redact=["secret-token-xyz"])
+
+    assert row["validated_calls"] is None and row["actual"] is None
+    assert "secret-token-xyz" not in json.dumps(row)
+
+
+def test_not_run_rows_have_no_validated_calls(assistant_graph, prepared):
+    cases = list(prepared.values())
+    order = {case["question"]: AssistantProviderUnavailable("down") for case in cases}
+    record = run_suite(cases, assistant_graph, OracleCopy(order), live=True)
+    assert all(row["validated_calls"] is None for row in record["cases"])
+
+
+def test_worker_version_comes_from_the_environment_without_network_or_git_writes(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("no network")
+    monkeypatch.setattr("socket.socket.connect", refuse)
+    args = dict(endpoint="https://planner.example/api/assistant/plan", model="@cf/test/model")
+
+    monkeypatch.delenv("ASSISTANT_EVAL_WORKER_VERSION", raising=False)
+    assert run_metadata(**args)["deployed_worker_version"] is None
+    monkeypatch.setenv("ASSISTANT_EVAL_WORKER_VERSION", "  9f1c2e7a-0b3d  ")
+    assert run_metadata(**args)["deployed_worker_version"] == "9f1c2e7a-0b3d"
+    monkeypatch.setenv("ASSISTANT_EVAL_WORKER_VERSION", "bad value\nwith spaces")
+    assert run_metadata(**args)["deployed_worker_version"] == "unknown"
+    monkeypatch.setenv("ASSISTANT_EVAL_WORKER_VERSION", "x" * 65)
+    assert run_metadata(**args)["deployed_worker_version"] == "unknown"
+
+
 # --- live gate: decided from the environment alone ----------------------------------------
 
 READY = {

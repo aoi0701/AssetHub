@@ -230,6 +230,8 @@ def _empty_row(case: dict, verdict: str, planner_calls: int) -> dict:
         "verdict": verdict,
         "planner_calls": planner_calls,
         "planner_latency_ms": None,
+        # Calls as the Worker returned them after contract validation, before filters equal to the scope are dropped.
+        "validated_calls": None,
     }
 
 
@@ -259,6 +261,7 @@ def evaluate_case(case: dict, graph: dict, planner, *, redact=()) -> dict:
         row.update(verdict=kind, error=message)
         return row
 
+    row["validated_calls"] = copy.deepcopy(decision["calls"])
     row["actual"] = _normalize_decision(decision, actor)
     mismatches = [
         f"{field} differs" for field in ("kind", "calls", "reason") if row["actual"][field] != row["expected"][field]
@@ -382,6 +385,17 @@ def _sha256(*paths) -> str:
     return digest.hexdigest()
 
 
+_WORKER_VERSION_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,64}")
+
+
+def _worker_version(environ) -> str | None:
+    """Passed in by whoever deployed the Worker; never looked up here. Anything odd is recorded as unknown."""
+    value = (environ.get("ASSISTANT_EVAL_WORKER_VERSION") or "").strip()
+    if not value:
+        return None
+    return value if _WORKER_VERSION_PATTERN.fullmatch(value) else "unknown"
+
+
 def run_metadata(*, endpoint: str, model: str) -> dict:
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, capture_output=True, text=True, check=True)
     return {
@@ -391,5 +405,6 @@ def run_metadata(*, endpoint: str, model: str) -> dict:
         "schema_sha256": _sha256(PLAN_SCHEMA_PATH),
         "worker_prompt_sha256": _sha256(*(_REPO_ROOT / path for path in _WORKER_PROMPT_FILES)),
         "commit": head.stdout.strip(),
+        "deployed_worker_version": _worker_version(os.environ),
         "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
