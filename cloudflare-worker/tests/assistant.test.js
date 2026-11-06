@@ -1109,6 +1109,30 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(data.reason_code).toBe('CODE_FENCE');
       expect(data.rule_code).toBeUndefined();
     });
+
+    it.each([
+      ['UNKNOWN_KEY', { category: 'laptop', injected_private_key: 'PRIVATE_VALUE' }],
+      ['BLANK_OR_NULL', { category: null }],
+      ['BAD_STATUS', { statuses: ['PRIVATE_STATUS'] }],
+      ['BAD_LIMIT', { category: 'laptop', limit: 3 }],
+      ['INVALID_ARGS', null],
+    ])('returns a static detail_code %s without reflecting argument values', async (detailCode, arguments_) => {
+      const decision = {
+        kind: 'tools',
+        calls: [{ name: 'assets.summary', arguments: arguments_ }],
+        clarification: null,
+        reason: null,
+      };
+      env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(decision) });
+      const res = await worker.fetch(assistantRequest(sensitivePayload), env);
+      expect(res.status).toBe(502);
+      const data = await res.json();
+      expect(data.rule_code).toBe('TOOL_ARGS');
+      expect(data.detail_code).toBe(detailCode);
+      expect(JSON.stringify(data)).not.toContain('PRIVATE_VALUE');
+      expect(JSON.stringify(data)).not.toContain('PRIVATE_STATUS');
+      expect(JSON.stringify(data)).not.toContain('injected_private_key');
+    });
   });
 
   describe('Upstream AI Errors (429 & 503)', () => {

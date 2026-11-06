@@ -17,6 +17,7 @@ from django.test import override_settings
 from apps.assistant.contracts import AssistantProviderUnavailable, PlannerDecision
 from apps.assistant.gateway import (
     MAX_RESPONSE_BYTES,
+    SCHEMA_DETAIL_CODES,
     SCHEMA_RULE_CODES,
     USER_AGENT,
     NoRedirectHandler,
@@ -549,6 +550,60 @@ def test_rule_code_ignored_when_status_not_502(mock_ai_server: MockAIServerState
 
     assert str(exc_info.value) == "AI Worker returned HTTP 503: Service Unavailable (worker code UNAVAILABLE)"
     assert exc_info.value.worker_rule is None
+
+
+@pytest.mark.parametrize("detail_code", [
+    "UNKNOWN_KEY", "BLANK_OR_NULL", "BAD_STATUS", "BAD_LIMIT", "INVALID_ARGS", "UNTRUSTED_DETAIL",
+])
+def test_schema_detail_code_is_named_only_when_allowlisted(
+    mock_ai_server: MockAIServerState, detail_code: str
+) -> None:
+    mock_ai_server.response_status = 502
+    mock_ai_server.response_body = json.dumps({
+        "code": "INVALID_PLAN",
+        "reason_code": "SCHEMA_VALIDATION_FAILED",
+        "rule_code": "TOOL_ARGS",
+        "detail_code": detail_code,
+        "argument_value": "PRIVATE_VALUE",
+        "prompt": "PRIVATE_PROMPT",
+    }).encode()
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="test question")
+
+    if detail_code in SCHEMA_DETAIL_CODES:
+        assert f"detail {detail_code}" in str(exc_info.value)
+        assert exc_info.value.worker_detail == detail_code
+    else:
+        assert "detail " not in str(exc_info.value)
+        assert exc_info.value.worker_detail is None
+    assert "PRIVATE_VALUE" not in str(exc_info.value)
+    assert "PRIVATE_PROMPT" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("status, reason, rule", [
+    (503, "SCHEMA_VALIDATION_FAILED", "TOOL_ARGS"),
+    (502, "CODE_FENCE", "TOOL_ARGS"),
+    (502, "SCHEMA_VALIDATION_FAILED", "ROOT_SHAPE"),
+])
+def test_schema_detail_code_requires_502_tool_args_failure(
+    mock_ai_server: MockAIServerState, status: int, reason: str, rule: str
+) -> None:
+    mock_ai_server.response_status = status
+    mock_ai_server.response_body = json.dumps({
+        "code": "INVALID_PLAN",
+        "reason_code": reason,
+        "rule_code": rule,
+        "detail_code": "UNKNOWN_KEY",
+    }).encode()
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="test question")
+
+    assert exc_info.value.worker_detail is None
+    assert "detail UNKNOWN_KEY" not in str(exc_info.value)
 
 # 6. Network Connection and Timeout Errors
 

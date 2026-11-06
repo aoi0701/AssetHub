@@ -128,66 +128,70 @@ function parseIsoDate(val, isUntil = false) {
 
 function validateToolArgs(toolName, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) {
-    return false;
+    return 'INVALID_ARGS';
   }
 
   const keys = Object.keys(args);
+  const checkString = (value, maxLength) => {
+    if (value === null || (typeof value === 'string' && !value.trim())) return 'BLANK_OR_NULL';
+    return isCleanString(value, maxLength) ? null : 'INVALID_ARGS';
+  };
+  const checkStatuses = () => {
+    if (!Array.isArray(args.statuses) || args.statuses.length === 0) return 'BAD_STATUS';
+    const seen = new Set();
+    for (const status of args.statuses) {
+      if (typeof status !== 'string' || !ALLOWED_ASSET_STATUSES.includes(status) || seen.has(status)) {
+        return 'BAD_STATUS';
+      }
+      seen.add(status);
+    }
+    return null;
+  };
 
   if (toolName === 'assets.search') {
     const allowed = ['query', 'asset_code', 'category', 'statuses', 'department', 'holder', 'limit'];
     for (const k of keys) {
-      if (!allowed.includes(k)) return false;
+      if (!allowed.includes(k)) return 'UNKNOWN_KEY';
     }
-    if (Object.prototype.hasOwnProperty.call(args, 'query') && !isCleanString(args.query, 100)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'asset_code') && !isCleanString(args.asset_code, 50)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'category') && !isCleanString(args.category, 100)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'department') && !isCleanString(args.department, 100)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'holder') && !isCleanString(args.holder, 100)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'limit') && !isValidLimit(args.limit)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'statuses')) {
-      if (!Array.isArray(args.statuses) || args.statuses.length === 0) return false;
-      const seen = new Set();
-      for (const st of args.statuses) {
-        if (typeof st !== 'string' || !ALLOWED_ASSET_STATUSES.includes(st) || seen.has(st)) return false;
-        seen.add(st);
+    for (const [key, max] of [['query', 100], ['asset_code', 50], ['category', 100], ['department', 100], ['holder', 100]]) {
+      if (Object.prototype.hasOwnProperty.call(args, key)) {
+        const detail = checkString(args[key], max);
+        if (detail) return detail;
       }
     }
-    return true;
+    if (Object.prototype.hasOwnProperty.call(args, 'limit') && !isValidLimit(args.limit)) return 'BAD_LIMIT';
+    if (Object.prototype.hasOwnProperty.call(args, 'statuses')) return checkStatuses();
+    return null;
   }
 
   if (toolName === 'assets.summary') {
     const allowed = ['query', 'asset_code', 'category', 'statuses', 'department', 'holder', 'group_by'];
+    if (Object.prototype.hasOwnProperty.call(args, 'limit')) return 'BAD_LIMIT';
     for (const k of keys) {
-      if (!allowed.includes(k)) return false;
+      if (!allowed.includes(k)) return 'UNKNOWN_KEY';
     }
-    // Summary forbids limit strictly!
-    if (Object.prototype.hasOwnProperty.call(args, 'limit')) return false;
-
-    if (Object.prototype.hasOwnProperty.call(args, 'query') && !isCleanString(args.query, 100)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'asset_code') && !isCleanString(args.asset_code, 50)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'category') && !isCleanString(args.category, 100)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'department') && !isCleanString(args.department, 100)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'holder') && !isCleanString(args.holder, 100)) return false;
-    if (Object.prototype.hasOwnProperty.call(args, 'statuses')) {
-      if (!Array.isArray(args.statuses) || args.statuses.length === 0) return false;
-      const seen = new Set();
-      for (const st of args.statuses) {
-        if (typeof st !== 'string' || !ALLOWED_ASSET_STATUSES.includes(st) || seen.has(st)) return false;
-        seen.add(st);
+    for (const [key, max] of [['query', 100], ['asset_code', 50], ['category', 100], ['department', 100], ['holder', 100]]) {
+      if (Object.prototype.hasOwnProperty.call(args, key)) {
+        const detail = checkString(args[key], max);
+        if (detail) return detail;
       }
+    }
+    if (Object.prototype.hasOwnProperty.call(args, 'statuses')) {
+      const detail = checkStatuses();
+      if (detail) return detail;
     }
     if (Object.prototype.hasOwnProperty.call(args, 'group_by')) {
       if (args.group_by !== null && !ALLOWED_SUMMARY_GROUP_BYS.includes(args.group_by)) {
-        return false;
+        return 'INVALID_ARGS';
       }
     }
-    return true;
+    return null;
   }
 
   if (toolName === 'assets.history') {
     const allowed = ['asset_code', 'mine', 'actions', 'since', 'until', 'limit'];
     for (const k of keys) {
-      if (!allowed.includes(k)) return false;
+      if (!allowed.includes(k)) return 'UNKNOWN_KEY';
     }
 
     const hasCodeProp = Object.prototype.hasOwnProperty.call(args, 'asset_code');
@@ -195,25 +199,26 @@ function validateToolArgs(toolName, args) {
 
     // Selector: exactly one selector must be present
     if (hasCodeProp && hasMineProp) {
-      return false; // cannot specify both
+      return 'INVALID_ARGS'; // cannot specify both
     }
     if (!hasCodeProp && !hasMineProp) {
-      return false; // must specify at least one
+      return 'INVALID_ARGS'; // must specify at least one
     }
 
     if (hasCodeProp) {
-      if (!isCleanString(args.asset_code, 50)) return false;
+      const detail = checkString(args.asset_code, 50);
+      if (detail) return detail;
     }
 
     if (hasMineProp) {
-      if (args.mine !== true) return false; // mine: false, null, or wrong type forbidden
+      if (args.mine !== true) return 'INVALID_ARGS'; // mine: false, null, or wrong type forbidden
     }
 
     if (Object.prototype.hasOwnProperty.call(args, 'actions')) {
-      if (!Array.isArray(args.actions) || args.actions.length === 0) return false;
+      if (!Array.isArray(args.actions) || args.actions.length === 0) return 'INVALID_ARGS';
       const seen = new Set();
       for (const act of args.actions) {
-        if (typeof act !== 'string' || !ALLOWED_ACTION_TYPES.includes(act) || seen.has(act)) return false;
+        if (typeof act !== 'string' || !ALLOWED_ACTION_TYPES.includes(act) || seen.has(act)) return 'INVALID_ARGS';
         seen.add(act);
       }
     }
@@ -223,61 +228,62 @@ function validateToolArgs(toolName, args) {
 
     if (Object.prototype.hasOwnProperty.call(args, 'since')) {
       sinceDt = parseIsoDate(args.since, false);
-      if (!sinceDt) return false;
+      if (!sinceDt) return 'INVALID_ARGS';
     }
 
     if (Object.prototype.hasOwnProperty.call(args, 'until')) {
       untilDt = parseIsoDate(args.until, true);
-      if (!untilDt) return false;
+      if (!untilDt) return 'INVALID_ARGS';
     }
 
     if (sinceDt && untilDt && sinceDt > untilDt) {
-      return false;
+      return 'INVALID_ARGS';
     }
 
-    if (Object.prototype.hasOwnProperty.call(args, 'limit') && !isValidLimit(args.limit)) {
-      return false;
-    }
+    if (Object.prototype.hasOwnProperty.call(args, 'limit') && !isValidLimit(args.limit)) return 'BAD_LIMIT';
 
-    return true;
+    return null;
   }
 
   if (toolName === 'requests.search') {
     const allowed = ['query', 'request_type', 'status', 'limit'];
     for (const k of keys) {
-      if (!allowed.includes(k)) return false;
+      if (!allowed.includes(k)) return 'UNKNOWN_KEY';
     }
-    if (Object.prototype.hasOwnProperty.call(args, 'query') && !isCleanString(args.query, 100)) return false;
+    if (Object.prototype.hasOwnProperty.call(args, 'query')) {
+      const detail = checkString(args.query, 100);
+      if (detail) return detail;
+    }
     if (Object.prototype.hasOwnProperty.call(args, 'request_type')) {
       if (typeof args.request_type !== 'string' || !ALLOWED_REQUEST_TYPES.includes(args.request_type)) {
-        return false;
+        return 'INVALID_ARGS';
       }
     }
     if (Object.prototype.hasOwnProperty.call(args, 'status')) {
       if (typeof args.status !== 'string' || !ALLOWED_REQUEST_STATUSES.includes(args.status)) {
-        return false;
+        return 'BAD_STATUS';
       }
     }
-    if (Object.prototype.hasOwnProperty.call(args, 'limit') && !isValidLimit(args.limit)) return false;
-    return true;
+    if (Object.prototype.hasOwnProperty.call(args, 'limit') && !isValidLimit(args.limit)) return 'BAD_LIMIT';
+    return null;
   }
 
   if (toolName === 'procedures.lookup') {
     const allowed = ['topic'];
     for (const k of keys) {
-      if (!allowed.includes(k)) return false;
+      if (!allowed.includes(k)) return 'UNKNOWN_KEY';
     }
     if (
       !Object.prototype.hasOwnProperty.call(args, 'topic') ||
       typeof args.topic !== 'string' ||
       !ALLOWED_PROCEDURE_TOPICS.includes(args.topic)
     ) {
-      return false;
+      return 'INVALID_ARGS';
     }
-    return true;
+    return null;
   }
 
-  return false;
+  return 'INVALID_ARGS';
 }
 
 export function checkPlannerDecision(d) {
@@ -330,8 +336,9 @@ export function checkPlannerDecision(d) {
       if (typeof call.name !== 'string' || !ALLOWED_TOOLS.includes(call.name)) {
         return 'TOOL_NAME';
       }
-      if (!validateToolArgs(call.name, call.arguments)) {
-        return 'TOOL_ARGS';
+      const argsError = validateToolArgs(call.name, call.arguments);
+      if (argsError) {
+        return `TOOL_ARGS_${argsError}`;
       }
     }
     return null;
@@ -617,12 +624,14 @@ export async function handleAssistantPlan(request, env) {
 
   const ruleCode = checkPlannerDecision(parsedDecision);
   if (ruleCode !== null) {
+    const hasToolDetail = ruleCode.startsWith('TOOL_ARGS_');
     return jsonResponse(
       {
         error: 'Invalid AI plan',
         code: 'INVALID_PLAN',
         reason_code: 'SCHEMA_VALIDATION_FAILED',
-        rule_code: ruleCode,
+        rule_code: hasToolDetail ? 'TOOL_ARGS' : ruleCode,
+        ...(hasToolDetail ? { detail_code: ruleCode.slice('TOOL_ARGS_'.length) } : {}),
       },
       502
     );
