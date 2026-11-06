@@ -11,4 +11,4 @@ send_metrics = false
 binding = "AI"
 
 [vars]
-ASSISTANT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+ASSISTANT_MODEL = "@cf/google/gemma-4-26b-a4b-it"

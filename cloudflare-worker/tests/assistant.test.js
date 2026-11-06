@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import worker, { handleAssistantPlan, validatePlannerDecision } from '../src/assistant.js';
+import canonicalSchema from '../assistant.schema.json' with { type: 'json' };
 
 describe('Cloudflare Assistant Planner Worker', () => {
   const env = {
@@ -1113,6 +1114,211 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(JSON.stringify(data)).not.toContain('PRIVATE_VALUE');
       expect(JSON.stringify(data)).not.toContain('PRIVATE_STATUS');
       expect(JSON.stringify(data)).not.toContain('injected_private_key');
+    });
+  });
+
+  describe('Gemma 4 provider adapter', () => {
+    const GEMMA = '@cf/google/gemma-4-26b-a4b-it';
+    const gemmaEnv = { ...env, ASSISTANT_MODEL: GEMMA };
+    const envelope = (message, finish_reason = 'stop') => ({ choices: [{ index: 0, message: { role: 'assistant', ...message }, finish_reason }] });
+    const answer = (decision) => envelope({ content: JSON.stringify(decision) });
+    const countKey = (node, key) => {
+      if (Array.isArray(node)) return node.reduce((sum, item) => sum + countKey(item, key), 0);
+      if (node && typeof node === 'object') {
+        return Object.entries(node).reduce((sum, [k, v]) => sum + (k === key ? 1 : 0) + countKey(v, key), 0);
+      }
+      return 0;
+    };
+    const run = async (output, useEnv = gemmaEnv) => {
+      env.AI.run.mockResolvedValueOnce(output);
+      return worker.fetch(assistantRequest(validPayload), useEnv);
+    };
+
+    it('sends the verified Gemma 4 request: json_schema wrapper, no thinking, max_completion_tokens', async () => {
+      const res = await run(answer(validDecision));
+      expect(res.status).toBe(200);
+      expect((await res.json()).decision).toEqual(validDecision);
+
+      const [model, options] = env.AI.run.mock.calls[0];
+      expect(model).toBe(GEMMA);
+      expect(Object.keys(options).sort()).toEqual(
+        ['chat_template_kwargs', 'max_completion_tokens', 'messages', 'n', 'response_format', 'stream', 'temperature'].sort()
+      );
+      expect(options).toMatchObject({
+        max_completion_tokens: 768,
+        temperature: 0.1,
+        n: 1,
+        stream: false,
+        chat_template_kwargs: { enable_thinking: false },
+      });
+      expect(options.max_tokens).toBeUndefined();
+      expect(options.messages.map((m) => m.role)).toEqual(['system', 'user']);
+      expect(options.response_format.type).toBe('json_schema');
+      expect(Object.keys(options.response_format.json_schema).sort()).toEqual(['name', 'schema']);
+      expect(options.response_format.json_schema.name).toBe('planner_decision');
+    });
+
+    // Independent of the implementation: walk the canonical schema and drop only what the provider rejected.
+    const projectRoot = (node) => {
+      const out = project(node);
+      for (const branch of out.oneOf) {
+        if (!('items' in branch.properties.calls)) branch.properties.calls.items = project(node.properties.calls.items);
+      }
+      return out;
+    };
+    const project = (node) => {
+      if (Array.isArray(node)) return node.map(project);
+      if (!node || typeof node !== 'object') return node;
+      const lengthBound = 'minLength' in node || 'maxLength' in node;
+      const requiredOnlyNot = node.not && Object.keys(node.not).join() === 'required' && node.not.required.length === 1;
+      return Object.fromEntries(
+        Object.entries(node)
+          .filter(([key]) => key !== 'uniqueItems' && !(key === 'not' && requiredOnlyNot) && !(key === 'pattern' && lengthBound))
+          .map(([key, value]) => [key, project(value)])
+      );
+    };
+
+    it('derives the generation schema from the canonical one by dropping only uniqueItems and patterns that clash with a length', async () => {
+      await run(answer(validDecision));
+      const provided = env.AI.run.mock.calls[0][1].response_format.json_schema.schema;
+      const onDisk = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../assistant.schema.json'), 'utf8'));
+
+      expect(countKey(onDisk, 'uniqueItems')).toBeGreaterThan(0);
+      expect(countKey(provided, 'uniqueItems')).toBe(0);
+      expect(canonicalSchema).toEqual(onDisk); // the imported canonical schema is untouched
+      expect(countKey(canonicalSchema, 'uniqueItems')).toBe(countKey(onDisk, 'uniqueItems'));
+      expect(countKey(canonicalSchema, 'pattern')).toBe(countKey(onDisk, 'pattern'));
+      expect(provided).not.toBe(canonicalSchema);
+      expect(provided).toEqual(projectRoot(onDisk)); // nothing else was loosened
+
+      // Only the clashing patterns are gone: the length-free date patterns stay, every length stays.
+      expect(countKey(provided, 'pattern')).toBeGreaterThan(0);
+      expect(countKey(provided, 'pattern')).toBeLessThan(countKey(onDisk, 'pattern'));
+      const clashing = (node) => {
+        if (Array.isArray(node)) return node.some(clashing);
+        if (!node || typeof node !== 'object') return false;
+        return ('pattern' in node && ('minLength' in node || 'maxLength' in node)) || Object.values(node).some(clashing);
+      };
+      expect(clashing(onDisk)).toBe(true);
+      expect(clashing(provided)).toBe(false);
+      for (const key of ['minLength', 'maxLength', 'enum', 'const', 'minItems', 'maxItems', 'oneOf', 'minimum', 'maximum']) {
+        expect(countKey(provided, key)).toBe(countKey(onDisk, key));
+      }
+      // Every root branch now carries the root's calls items; the bounds that tell the branches apart are unchanged.
+      const rootItems = onDisk.properties.calls.items;
+      const branchCalls = provided.oneOf.map((branch) => branch.properties.calls);
+      expect(branchCalls).toHaveLength(4);
+      for (const calls of branchCalls) expect(calls.items).toEqual(rootItems);
+      expect(provided.properties.calls).toEqual(onDisk.properties.calls);
+      expect(branchCalls.map(({ minItems, maxItems }) => [minItems, maxItems])).toEqual([[1, 3], [undefined, 0], [undefined, 0], [undefined, 0]]);
+      expect(onDisk.oneOf.every((branch) => !('items' in branch.properties.calls))).toBe(true);
+      expect(countKey(provided, '$ref')).toBe(countKey(onDisk, '$ref') + 4);
+      // The redundant "not" is dropped; oneOf of required-only branches already excludes both selectors and none.
+      expect(countKey(onDisk, 'not')).toBe(2);
+      expect(countKey(provided, 'not')).toBe(0);
+      expect(countKey(provided, 'required')).toBe(countKey(onDisk, 'required') - 2);
+      expect(provided.definitions.AssetsHistoryArgs.oneOf).toEqual([{ required: ['asset_code'] }, { required: ['mine'] }]);
+      const falseSchemas = (node) => {
+        if (Array.isArray(node)) return node.reduce((sum, item) => sum + falseSchemas(item), 0);
+        if (!node || typeof node !== 'object') return 0;
+        return Object.entries(node).reduce((sum, [k, v]) => sum + (v === false && k !== 'additionalProperties' ? 1 : 0) + falseSchemas(v), 0);
+      };
+      expect(falseSchemas(provided)).toBe(0); // the provider refuses a boolean false schema
+      expect(onDisk.definitions.AssetsHistoryArgs.oneOf[0].not).toEqual({ required: ['mine'] });
+      expect(provided.definitions.AssetsHistoryArgs.properties.mine).toEqual(onDisk.definitions.AssetsHistoryArgs.properties.mine);
+      expect(provided.required).toEqual(['kind', 'calls', 'clarification', 'reason']);
+      expect(provided.additionalProperties).toBe(false);
+      expect(provided.definitions.AssetsSearchArgs.additionalProperties).toBe(false);
+      expect(provided.definitions.AssetsSearchArgs.properties.asset_code.minLength).toBe(1);
+      expect(provided.definitions.AssetsSearchArgs.properties.asset_code.maxLength).toBe(50);
+      expect(provided.definitions.AssetsSearchArgs.properties.asset_code.pattern).toBeUndefined();
+      expect(provided.definitions.AssetsSearchArgs.properties.statuses.minItems).toBe(1);
+      expect(provided.definitions.AssetsHistoryArgs.properties.since.pattern).toBe(onDisk.definitions.AssetsHistoryArgs.properties.since.pattern);
+    });
+
+    it('keeps the legacy request unchanged for other models', async () => {
+      env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(validDecision) });
+      const res = await worker.fetch(assistantRequest(validPayload), env);
+      expect(res.status).toBe(200);
+      const [model, options] = env.AI.run.mock.calls[0];
+      expect(model).toBe('@cf/meta/llama-3.1-8b-instruct-fp8');
+      expect(Object.keys(options).sort()).toEqual(['max_tokens', 'messages', 'response_format', 'temperature']);
+      expect(options.max_tokens).toBe(768);
+      expect(options.response_format).toEqual({ type: 'json_object' });
+    });
+
+    it('reads only choices[0].message.content and ignores reasoning', async () => {
+      const res = await run(envelope({ content: JSON.stringify(validDecision), reasoning_content: 'private thoughts' }));
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(await res.json())).not.toContain('private thoughts');
+    });
+
+    it.each([
+      ['no choices', {}, 'SCHEMA_VALIDATION_FAILED'],
+      ['empty choices', { choices: [] }, 'SCHEMA_VALIDATION_FAILED'],
+      ['two choices', { choices: [answer(validDecision).choices[0], answer(validDecision).choices[0]] }, 'SCHEMA_VALIDATION_FAILED'],
+      ['no message', { choices: [{ finish_reason: 'stop' }] }, 'SCHEMA_VALIDATION_FAILED'],
+      ['null content', envelope({ content: null }), 'SCHEMA_VALIDATION_FAILED'],
+      ['blank content', envelope({ content: '  ' }), 'SCHEMA_VALIDATION_FAILED'],
+      ['object content', envelope({ content: validDecision }), 'SCHEMA_VALIDATION_FAILED'],
+      ['plan only in reasoning', envelope({ content: null, reasoning_content: JSON.stringify(validDecision) }), 'SCHEMA_VALIDATION_FAILED'],
+      ['refusal', envelope({ content: JSON.stringify(validDecision), refusal: 'cannot help' }), 'SCHEMA_VALIDATION_FAILED'],
+      ['tool calls', envelope({ content: JSON.stringify(validDecision), tool_calls: [{ id: 'x', type: 'function', function: { name: 'f', arguments: '{}' } }] }), 'SCHEMA_VALIDATION_FAILED'],
+      ['cut off', envelope({ content: JSON.stringify(validDecision) }, 'length'), 'JSON_PARSE_ERROR'],
+      ['missing finish_reason', envelope({ content: JSON.stringify(validDecision) }, null), 'SCHEMA_VALIDATION_FAILED'],
+      ['odd finish_reason', envelope({ content: JSON.stringify(validDecision) }, 'content_filter'), 'SCHEMA_VALIDATION_FAILED'],
+      ['legacy shape', { response: JSON.stringify(validDecision) }, 'SCHEMA_VALIDATION_FAILED'],
+    ])('fails closed on %s', async (_name, output, reason) => {
+      const res = await run(output);
+      expect(res.status).toBe(502);
+      const body = await res.json();
+      expect(body).toMatchObject({ code: 'INVALID_PLAN', reason_code: reason });
+      expect(body.decision).toBeUndefined();
+    });
+
+    it.each([
+      ['not JSON', 'sorry, here is the plan', 'JSON_PARSE_ERROR', undefined],
+      ['code fence', '```json\n{}\n```', 'CODE_FENCE', undefined],
+    ])('does not salvage content that is %s and never echoes it', async (_name, content, reason) => {
+      const res = await run(envelope({ content }));
+      expect(res.status).toBe(502);
+      const text = await res.text();
+      expect(JSON.parse(text)).toMatchObject({ code: 'INVALID_PLAN', reason_code: reason });
+      expect(text).not.toContain('sorry');
+    });
+
+    it('rejects oversized content with the existing public code', async () => {
+      const res = await run(envelope({ content: JSON.stringify({ filler: 'x'.repeat(70 * 1024) }) }));
+      expect(res.status).toBe(502);
+      expect((await res.json()).reason_code).toBe('PAYLOAD_TOO_LARGE');
+    });
+
+    it.each([
+      ['both history selectors', { asset_code: 'AST-1', mine: true }, 502],
+      ['no history selector', { limit: 5 }, 502],
+      ['mine: false', { mine: false }, 502],
+      ['the asset_code selector alone', { asset_code: 'AST-1' }, 200],
+      ['the mine selector alone', { mine: true }, 200],
+    ])('enforces the history selector on Gemma output: %s', async (_name, args, status) => {
+      const decision = { kind: 'tools', calls: [{ name: 'assets.history', arguments: args }], clarification: null, reason: null };
+      const res = await run(answer(decision));
+      expect(res.status).toBe(status);
+      if (status === 502) expect(await res.json()).toMatchObject({ code: 'INVALID_PLAN', rule_code: 'TOOL_ARGS' });
+      else expect((await res.json()).decision).toEqual(decision);
+    });
+
+    it.each([
+      ['duplicate statuses (uniqueItems was dropped from the hint)', { statuses: ['AVAILABLE', 'AVAILABLE'] }, 'BAD_STATUS'],
+      ['null string argument', { category: null }, 'BLANK_OR_NULL'],
+      ['unknown argument', { category: 'laptop', limit: 5 }, 'BAD_LIMIT'],
+      ['unknown key', { category: 'laptop', role: 'admin' }, 'UNKNOWN_KEY'],
+      ['reserved __ in a string (pattern was dropped from the hint)', { category: 'a__b' }, 'INVALID_ARGS'],
+      ['whitespace-only string (pattern was dropped from the hint)', { category: '   ' }, 'BLANK_OR_NULL'],
+    ])('still rejects %s with 502', async (_name, args, detail) => {
+      const decision = { kind: 'tools', calls: [{ name: 'assets.summary', arguments: args }], clarification: null, reason: null };
+      const res = await run(answer(decision));
+      expect(res.status).toBe(502);
+      expect(await res.json()).toMatchObject({ code: 'INVALID_PLAN', rule_code: 'TOOL_ARGS', detail_code: detail });
     });
   });
 

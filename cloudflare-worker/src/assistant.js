@@ -80,6 +80,67 @@ function buildUserPrompt(question, context, scope) {
   return JSON.stringify({ question, context, caller_metadata: scope });
 }
 
+const GEMMA4_MODEL = '@cf/google/gemma-4-26b-a4b-it';
+
+function isRequiredOnly(node) {
+  return (
+    node !== null &&
+    typeof node === 'object' &&
+    Object.keys(node).length === 1 &&
+    Array.isArray(node.required) &&
+    node.required.length === 1 &&
+    typeof node.required[0] === 'string'
+  );
+}
+
+// Generation hint only, a copy of the canonical schema. The provider (xgrammar) rejects uniqueItems, a pattern on a string that
+// also has minLength/maxLength, and "not" (probe errors 8007). So: those are dropped (only the exact form {not: {required: [key]}};
+// the oneOf next to it already excludes both and none, so it is redundant), and branch "calls" arrays get the root items.
+// Anything else is left for the provider to reject. checkPlannerDecision still enforces every one of these constraints on the output.
+const PROVIDER_SCHEMA = JSON.parse(JSON.stringify(schema), function (key, value) {
+  if (key === 'uniqueItems') return undefined;
+  if (key === 'pattern' && ('minLength' in this || 'maxLength' in this)) return undefined;
+  if (key === 'not' && isRequiredOnly(value)) return undefined;
+  return value;
+});
+// Each root branch repeats "calls" with only its own length bounds; the provider compiles branches alone and needs the items
+// the root already declares (probe 4: minItems 1 without items). Copying them adds no constraint the schema did not already have.
+for (const branch of PROVIDER_SCHEMA.oneOf) {
+  const calls = branch.properties?.calls;
+  if (calls && !('items' in calls)) calls.items = { ...PROVIDER_SCHEMA.properties.calls.items };
+}
+
+function buildAiRequest(model, messages) {
+  if (model === GEMMA4_MODEL) {
+    return {
+      messages,
+      max_completion_tokens: 768,
+      temperature: 0.1,
+      n: 1,
+      stream: false,
+      chat_template_kwargs: { enable_thinking: false },
+      response_format: { type: 'json_schema', json_schema: { name: 'planner_decision', schema: PROVIDER_SCHEMA } },
+    };
+  }
+  return { messages, temperature: 0.1, max_tokens: 768, response_format: { type: 'json_object' } };
+}
+
+// Only choices[0].message.content as a string is a plan; reasoning, refusals, tool calls and cut-off answers are not.
+function gemma4Content(output) {
+  const choices = output && typeof output === 'object' ? output.choices : null;
+  if (!Array.isArray(choices) || choices.length !== 1) return { reason: 'SCHEMA_VALIDATION_FAILED' };
+  const choice = choices[0];
+  const message = choice && typeof choice === 'object' ? choice.message : null;
+  if (!message || typeof message !== 'object') return { reason: 'SCHEMA_VALIDATION_FAILED' };
+  if (choice.finish_reason === 'length') return { reason: 'JSON_PARSE_ERROR' };
+  if (choice.finish_reason !== 'stop') return { reason: 'SCHEMA_VALIDATION_FAILED' };
+  if (message.refusal || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0)) {
+    return { reason: 'SCHEMA_VALIDATION_FAILED' };
+  }
+  if (typeof message.content !== 'string' || !message.content.trim()) return { reason: 'SCHEMA_VALIDATION_FAILED' };
+  return { content: message.content };
+}
+
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -514,15 +575,13 @@ export async function handleAssistantPlan(request, env) {
 
   let aiOutput;
   try {
-    aiOutput = await env.AI.run(model, {
-      messages: [
+    aiOutput = await env.AI.run(
+      model,
+      buildAiRequest(model, [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildUserPrompt(question, context, scope) },
-      ],
-      temperature: 0.1,
-      max_tokens: 768,
-      response_format: { type: 'json_object' },
-    });
+      ])
+    );
   } catch (err) {
     const errStr = `${String(err)} ${err?.message || ''}`;
     const errCode = err && typeof err === 'object' ? err.code : undefined;
@@ -546,6 +605,14 @@ export async function handleAssistantPlan(request, env) {
   }
 
   let parsedDecision = null;
+
+  if (model === GEMMA4_MODEL) {
+    const extracted = gemma4Content(aiOutput);
+    if (extracted.reason) {
+      return jsonResponse({ error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: extracted.reason }, 502);
+    }
+    aiOutput = extracted.content; // a string now: same byte cap, fence check, parser and validator as before
+  }
 
   if (
     typeof aiOutput === 'object' &&
