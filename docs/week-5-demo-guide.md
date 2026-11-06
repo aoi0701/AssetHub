@@ -31,6 +31,11 @@ Tài liệu hướng dẫn vận hành, tham số cấu hình, kiểm thử và 
 > **Điều Kiện Triển Khai Dự Kiến (Planned Deployment Conditions):**
 > Các cấu hình như tham số Gunicorn `--timeout 120`, các cờ môi trường `ASSISTANT_ENABLED=true` / `VITE_ASSISTANT_ENABLED=true`, các tuyến route Frontend, các giao diện người dùng (UI Tasks 6/7) và kiểm thử trình duyệt (Browser Proof / Playwright E2E) là **điều kiện triển khai theo kế hoạch**, hiện tại **chưa được deploy hay kết nối (not yet deployed or wired)** trên môi trường live. UI Tasks 6/7 mới là bản chuẩn bị offline với MSW, **chưa nghiệm thu**. Task 8 **chưa đóng**; ngoài Worker đánh giá riêng của Gate 3-L (đã deploy thật, giữ lại để review), chưa deploy thành phần nào khác của trợ lý.
 
+### 1.3. Công Cụ Quản Lý & Triển Khai Cloudflare (Cloudflare Tooling)
+
+- **Wrangler CLI (Chính thức đang sử dụng):** Dự án hiện triển khai Cloudflare Workers qua Wrangler CLI `4.158.0` (`npm_config_offline=true npx --no-install wrangler deploy --config wrangler.assistant-eval.toml`).
+- **Cloudflare CLI (`cf` v1.0.0-beta.19):** Công cụ `cf` mới đã được cài đặt cục bộ và lệnh `cf auth whoami` xác nhận xác thực thành công đúng tài khoản AssetHub. Hiện tại, quy trình phát triển **giữ nguyên cấu hình `wrangler.toml`** và tuyệt đối không tự ý chạy `cf migrate`, `cf init` hoặc `cf deploy` trên kho mã nguồn.
+
 ---
 
 ## 2. Trạng Thái Các Cổng Chất Lượng (Status of Quality Gates)
@@ -41,7 +46,7 @@ Dự án áp dụng mô hình kiểm soát chất lượng qua từng Gate tuầ
 | :--- | :--- | :---: | :--- |
 | **Gate 1** | Contract locks (Models, SQL, DTO, Signatures, Error Codes) | **APPROVED & VERIFIED** | Đã khóa schema CSDL, DTO contracts, JSON schema và bộ mã lỗi chuẩn (`CONVERSATION_SCOPE_CHANGED`, `CLIENT_REQUEST_ID_CONFLICT`, `CONVERSATION_BUSY`, `STALE_VERSION_CONFLICT`). |
 | **Gate 2** | Local AI Gateway & Mock Worker | **APPROVED & VERIFIED** | Đã kiểm chứng tính tương thích giữa backend `gateway.py` và Cloudflare Worker mock endpoint nội bộ. |
-| **Gate 3-L** | Offline Evaluator & Live AI Cloud Evaluation | **LIVE_BLOCKED** (sau lượt live 3) | Lượt live 1 trên Worker đánh giá riêng `assethub-assistant-eval`, model `@cf/meta/llama-3.1-8b-instruct-fp8`, prompt ở commit `f611abee`: **5 lần gọi AI thật, 7 ca `not_run`** (E1–E3 gọi sai tool, F1 sai selector, F2 HTTP 502 UNKNOWN). Lượt live 2 (prompt `e7a4d746`): **10 lần gọi AI thật (tổng 15)**; sau review tay có **6 ca đạt** (E2, E3, F1, F2, O1, O2); E1 thiếu `AVAILABLE`, A1 lặp câu hỏi, A2 tự đoán mã, P1 HTTP 502 `INVALID_PLAN`. Lượt live 3 (HEAD `0fce0011`, Worker version `c6855093`, prompt SHA `d5b5462b`, artifact SHA `63d8f473`): **7 lần gọi AI thật (tổng 22 / trần 27)**; **6 ca match** (E1, E2, E3, F1, F2, A1) được Claude review tay xác nhận đạt (E1 bắt đúng `AVAILABLE` ra 23/23; A1 làm rõ chuẩn không lặp câu hỏi). Ca A2 gặp lỗi `AI Worker request timed out: The read operation timed out` ở ngưỡng cấu hình 30s; evaluator tự dừng; 5 ca `not_run` (O1, O2, P1, P2, H1). Tuyệt đối **không ghép các ca giữa các lượt chạy** thành pass. Gate 3-L tiếp tục giữ **LIVE_BLOCKED**. |
+| **Gate 3-L** | Offline Evaluator & Live AI Cloud Evaluation | **CHƯA ĐẠT** (lượt 9 mới nhất: `LIVE_FAILED`) | Lượt live 1: 5 calls (E1–E3 sai tool, F1 sai selector, F2 HTTP 502). Lượt live 2: 10 calls. Lượt live 3: 7 calls (A2 timeout 30s). Lượt 6: 12 calls (commit `05ca6e1`, `LIVE_FAILED`). Lượt 7: 12 calls (commit `07610a49`, `LIVE_FAILED`). Lượt 8: 12 calls (commit `4b72a4c`, version `9edf30e3`, artifact `gate3l-2026-11-06T074719.499043Z.json`, `LIVE_FAILED`; 6 match, 3 `protocol_error` F1, F2, A1 mang detail `BLANK_OR_NULL`, 3 mismatch A2, P1, P2). Lượt 9 (mới nhất; commit `79888f08`, prompt SHA `c855075e`, Worker version `5e754251-b171-4842-8561-e46d0af4cc9d`, artifact `gate3l-2026-11-06T085659.249676Z.json`): **12 calls trong 42,8s, `LIVE_FAILED`**; **8 ca match** (E1, E2, E3, F1, F2, O1, O2, H1), **3 ca `protocol_error`** (A1, A2, P1: rule `TOOL_ARGS` kèm detail `BLANK_OR_NULL`), **1 ca mismatch** (P2: `validated_calls` bị Scope đè department HR được hỏi - bằng chứng scope-as-filter). Không có provider error. Tuyệt đối **không ghép các ca giữa các lượt chạy** thành pass. Gate 3-L **chưa đạt**; không có Gate PASS. |
 | **Gate 4** | Storage & Support Ticket Atomic Engine | **APPROVED & VERIFIED** | Cơ chế đặt chỗ lượt hỏi (`reserve_turn`), xử lý tranh chấp OCC, hết hạn stale turn CAS 180s, và bàn giao tự động SupportTicket nguyên tử đã hoàn tất. |
 | **Gate 5** | Authenticated Grounded Chat & Support APIs (51 focused tests đã duyệt) | **APPROVED & COMMITTED** | Đã commit tại `c5fb8fdae3bbc800fbd5f9ae029bd68aca0de265`. Đây là 51 test trọng tâm của Task 5, không phải toàn bộ test suite; đánh giá LLM thật vẫn đang chờ ở Gate 3-L. |
 | **Gate 8** | D1 Local Target Proof & Rehearsal | **D1 LOCAL CHECKPOINT APPROVED (Task 8 chưa đóng)** | Lượt opt-in trên **SQLite thật qua Wrangler D1 local với fake AI**: **7/7 PASS (65,79s)** ở HEAD `2427612`, rehearsal `cdf264d6`, fixture `6cb8ea31`; Codex duyệt sau khi kiểm hash và cleanup. Chạy mặc định 3 file: **121 PASS, 15 SKIP (38,21s)**. Phần browser, cấu hình và deploy của Task 8 còn chờ. |
@@ -52,28 +57,48 @@ Dự án áp dụng mô hình kiểm soát chất lượng qua từng Gate tuầ
   * Trước lượt live 1 (06/11/2026 07:50 VN): `"Neurons used today: 0 / 10k"`.
   * Trước lượt live 2 (06/11/2026 08:08 VN): `"Neurons used today: 128,28 / 10k"`.
   * Trước lượt live 3 (06/11/2026 08:45 VN): `"Neurons used today: 462,07 / 10.000"`; đồ thị 24 giờ ghi nhận 473,58 Neurons (gồm 11,52 Neurons của ngày 05/11).
-  * Sau lượt live 3: Mức tiêu thụ thực tế là **UNKNOWN** (chưa có ảnh chụp dashboard mới; không gọi management API để tránh lãng phí request). Người dùng xác nhận gói **Workers Free**.
+  * Sau lượt 6 (13:01 VN, ảnh dashboard): `Neurons used today` **2,61k / 10k**. Đây là tổng thực của dashboard trong ngày, **không phân bổ chính xác cho một batch** nào. Người dùng xác nhận gói **Workers Free**.
+  * Sau lượt 7 (13:44 VN, ảnh dashboard): `Neurons used today` **3,18k / 10k**. Đây là mức dùng quan sát được của tài khoản trong ngày, **không phải mức tiêu thụ chính xác của riêng lượt 7**.
 - **Đo lường ngoại tuyến (Offline Measurement) trên 12 ca kiểm thử (`planner_eval_cases.json`):**
   * Baseline ban đầu (Pretty JSON Schema `indent=2`): **132.675 bytes** tổng input (10.847 bytes system prompt/ca).
   * Bản compact cũ (commit `f611abee`): **76.731 bytes** tổng input (6.185 bytes system prompt/ca).
   * Prompt lượt 2 (`e7a4d746`, sha256 `a5c7714f`): **105.943 bytes** tổng input; dự toán **1.785,13 Neurons** cho 12 ca.
   * Prompt lượt 3 (JSON mode + semantic clarity, sha256 `08f383b3`): **118.951 bytes** tổng input (system prompt 9.802 bytes); dự toán **1.964,35 Neurons** cho 12 ca (giả định 1 token / byte UTF-8 + dự phòng 512 tokens chat-template/lượt gọi + kịch trần 768 tokens output/lượt gọi; giá FP8: 13.778 neurons/1 triệu input tokens và 26.128 neurons/1 triệu output tokens).
-- **Sổ ngân sách bảo thủ ngày 06/11/2026:**
-  * Mức tiêu thụ thực tế ghi nhận trước lượt 3 (ảnh 08:45 VN): **462,07 Neurons**.
-  * Dự toán một lượt 12 ca cho prompt lượt 3: **1.964,35 Neurons**.
-  * **Tổng dự toán ngày:** $462,07 + 1.964,35 = \mathbf{2.426,42\text{ Neurons}}$ (đây là dự toán bảo thủ, không phải số thực tế hay bảo đảm; mức trần kiểm thử là 4.000 Neurons/ngày, phần còn lại trên lý thuyết là 1.573,58 Neurons).
-  * **Dự phòng demo còn lại:** $10.000 - 2.426,42 = \mathbf{7.573,58\text{ Neurons}}$ (đáp ứng trên lý thuyết mức tối thiểu $\ge 6.000$ Neurons dành cho demo; đây là dự toán bảo thủ, không phải số thực tế hay bảo đảm từ nhà cung cấp).
-  * Các con số trên là dự toán theo công thức bảo thủ, **không phải số thực tế hay bảo đảm từ nhà cung cấp (provider guarantee)**.
+- **Sổ ngân sách (số thực của dashboard):**
+  * Mốc trước lượt 6: khoảng **2,09k Neurons** (theo lời người dùng). Mốc sau lượt 6 (ảnh 13:01 VN): **2,61k Neurons**. Mốc trước Lượt 8 (ảnh 13:44 VN): **3,18k Neurons / 10k**.
+  * Mốc trước Lượt 9: ảnh Workers AI ghi nhận **3,76k / 10k** Neurons (ảnh chart 24h ghi 3,77k không dùng để đối soát).
+  * Hạn mức người dùng xác lập: trần kiểm thử **8k Neurons/ngày** và bảo lưu dự phòng tối thiểu **2k Neurons** cho demo. Sau Lượt 9 (đã thực hiện thêm 12 inference calls, lũy kế **107 calls**), số thực tế dashboard hiện tại là **UNKNOWN**; không dùng 3,18k hay 3,76k làm con số hiện tại sau Lượt 9; hệ thống chờ người dùng gửi ảnh dashboard mới trước khi chạy Lượt 10, tuyệt đối không tự gọi API để suy đoán.
+  * Các con số dự toán theo công thức (ví dụ 2.057,81 Neurons cho 12 ca ở prompt mới nhất) chỉ là **dự toán quy ước**, không phải số thực tế hay bảo đảm từ nhà cung cấp, và không được dùng làm số thực.
 - **Ranh giới an toàn & Giới hạn cam kết:**
-  * Bắt buộc giữ trần kiểm thử $\le 4.000$ Neurons/ngày và bảo toàn tối thiểu $\ge 6.000$ Neurons cho phiên demo thực tế.
+  * Bắt buộc giữ mốc dừng kiểm thử $\le 8.000$ Neurons/ngày và bảo toàn tối thiểu $\ge 2.000$ Neurons cho phiên demo thực tế.
   * Mỗi lượt đánh giá tối đa $\le 12$ cuộc gọi mới; tuyệt đối không retry tự động, không lặp lại suite vô hạn khi gặp lỗi.
   * Tuyệt đối không ghép các ca thành công giữa các lượt chạy khác nhau thành pass (zero cherry-picking).
-- **Trạng thái thực thi sau Lượt live 3:**
-  * Gate 3-L tiếp tục ở trạng thái **`LIVE_BLOCKED`**; Task 8 chưa đóng và chưa đạt Gate PASS.
-  * Cả 3 artifact đánh giá được lưu trữ đầy đủ cục bộ (bị gitignore, chỉ có trên máy local):
+- **Trạng thái thực thi sau Lượt 9 (mới nhất):**
+  * Gate 3-L **chưa đạt** (Lượt 9 `LIVE_FAILED`); Task 8 chưa đóng và không có Gate PASS.
+  * Toàn bộ các artifact đánh giá được lưu trữ đầy đủ cục bộ (bị gitignore, chỉ có trên máy local):
     - Lượt 1: `backend/reports/assistant/gate3l-2026-11-06T010313.930112Z.json` (5 calls: E1–E3 sai tool, F1 sai selector, F2 HTTP 502 UNKNOWN, 7 not_run).
     - Lượt 2: `backend/reports/assistant/gate3l-2026-11-06T012339.014183Z.json` (SHA `a41bf089`; 10 calls: 6 ca đạt sau review tay, E1 thiếu `AVAILABLE`, A1 lặp câu hỏi, A2 tự đoán mã, P1 HTTP 502 `INVALID_PLAN`, 2 not_run).
     - Lượt 3: `backend/reports/assistant/gate3l-2026-11-06T014804.986343Z.json` (SHA `63d8f4739fcc7314148ec1e11a9c555cec8061e1ae3f2d3e4501f8abc073f739`; 7 calls, tổng lũy kế cả 3 lượt là **22 calls / trần 27**; 6 ca match gồm E1, E2, E3, F1, F2, A1 được Claude review tay xác nhận đạt; ca A2 timeout; 5 ca not_run).
+    - Lượt 4: `backend/reports/assistant/gate3l-2026-11-06T020832.900704Z.json` (`LIVE_FAILED`; 12 calls, lũy kế **34**; 10 match, 1 mismatch, 1 `protocol_error`).
+    - Lượt 5: `backend/reports/assistant/gate3l-2026-11-06T022512.913576Z.json` (SHA `e6befdfce2c811a9c0bd116023b1da6cee632096f6da8c9ef6ce4645686c79b1`; `LIVE_FAILED`; 12 calls, lũy kế **46**; 10 match, 1 mismatch, 1 `protocol_error`).
+    - Chẩn đoán A2: 1 lần gọi, lỗi `TOOL_ARGS`, lũy kế **47** (`backend/reports/assistant/diag-a2-2026-11-06T033547.224908Z.json`).
+    - Bộ extended (tách riêng, **không phải Gate 3-L cơ sở**): `backend/reports/assistant/gate3l-extended-2026-11-06T034115.146949Z.json` (SHA `b656770ca7c86c7679f797782a381514bb831d84d00c57729f063855e9bd32b7`; `EXTENDED_FAILED`; 12 calls, lũy kế **59**; 5 match, 5 mismatch, 2 `protocol_error`).
+    - Lượt 6: `backend/reports/assistant/gate3l-2026-11-06T055149.750564Z.json` (SHA `fd1f0574b600d9df033f93048515c66024dbf10ad30ac4eac22d3db5e518f33e`; `LIVE_FAILED`; 12 calls, lũy kế **71**; 6 match E2, F1, F2, O1, O2, H1; 3 mismatch E1, E3, P2; 3 `protocol_error` A1, A2, P1 với rule `TOOL_ARGS`).
+    - Lượt 7: `backend/reports/assistant/gate3l-2026-11-06T063907.831394Z.json` (SHA `b8b78c4c73128be96c3df869991948c59c3e62ff98fcef752f0da18321854abf`, Codex đã kiểm chứng hash; `LIVE_FAILED`; 12 calls, lũy kế **83**; 6 match E1, E2, E3, O1, O2, H1; 3 `protocol_error` F1, F2, A1; 3 mismatch A2, P1, P2).
+    - Lượt 8: `backend/reports/assistant/gate3l-2026-11-06T074719.499043Z.json` (SHA `229d801d6487eb85a5f7dc03b532e12082e4f40886f9867fa01591ad4f8b45b1`; `LIVE_FAILED`; 12 calls, lũy kế **95**; 6 match E1, E2, E3, O1, O2, H1; 3 `protocol_error` F1, F2, A1 với rule `TOOL_ARGS` và detail `BLANK_OR_NULL`; 3 mismatch A2, P1, P2). Đợt này đã triển khai patch chẩn đoán tĩnh: cả 3 ca `protocol_error` đều chỉ ra mã lỗi chi tiết `BLANK_OR_NULL`, xác nhận mô hình sinh chuỗi rỗng `""` hoặc `null` trong đối số string của công cụ thay vì bỏ hẳn khóa optional.
+    - Lượt 9 (mới nhất): `backend/reports/assistant/gate3l-2026-11-06T085659.249676Z.json` (SHA `45d75bd3a2d5568a627c51d3631a813867f5abe35a313ba5d303618283e96a4a`, Codex đã review artifact/hash; HEAD `79888f0845577705f2c2023f8e2f2f48df37a833`, evaluator prompt SHA `c855075e644a0b2801e1f8ad1bfd2d207fbb7414a096f9c702d32151b2ae66ec`, Worker deployed version `5e754251-b171-4842-8561-e46d0af4cc9d`; `LIVE_FAILED`; 12 calls trong 42,8s, lũy kế **107 calls**; **8 ca match**: E1, E2, E3, F1, F2, O1, O2, H1; **3 ca `protocol_error`**: A1, A2, P1 với rule `TOOL_ARGS` và detail `BLANK_OR_NULL`; **1 ca mismatch**: P2). Không có `provider_error`. Ca P2 ghi nhận `validated_calls` bị phòng từ Scope đè mất phòng HR được hỏi trong câu hỏi (bằng chứng thực tế cho lỗi scope-as-filter). Bản prompt `810cdb2` (source `9efa0692`, evaluator prompt `c855075e`) **ĐÃ DEPLOY và ĐÃ LIVE** ở lượt 9 này (cùng mã nguồn cherry-pick `79888f0`).
+    - Quy tắc giữ nguyên: **không ghép ca giữa các lượt**. Lượt 9 không phải Gate PASS; Task 6/7/8 và Week 5 chưa hoàn tất. Các artifact chỉ có trên máy local (bị gitignore).
+- **Hiện trạng Prompt & Kiểm thử ngoại tuyến sau Lượt 9:**
+  * Prompt mới nhất đã được Codex review và commit tại `49815dd9965edf53aa9b7ff9a7d47b786e9e524c`:
+    - Rút gọn hướng dẫn routing; giữ định dạng JSON body (`question`, `context`, `caller_metadata`) bảo đảm metadata wire và clock.
+    - Hashes kỹ thuật: Source SHA256 (`cloudflare-worker/src/assistant.js`): `64424704a6d5795cf46e4197fbd7f1656405fb8bd1961e4b7b6b75e34030ac52`.
+    - Evaluator prompt SHA256 (`source + schema`): `30f4ac74a9812793a848183388dd0fa67ab02de6af27a88dbe2dd1e7ae5e77f4`.
+    - `SYSTEM_PROMPT` thực tế sau nội suy: **10.164 UTF-8 bytes** (rút gọn từ 13.291 bytes).
+    - Kiểm thử offline: Worker Vitest đạt **105/105 PASS**, `diff --check` sạch.
+    - Tổng 12 payload đo giả lập phù hợp scope: **125.734 UTF-8 bytes**.
+    - Dự toán quy ước cho 12 ca base: **2.057,81 Neurons** (theo công thức: 1 token/byte UTF-8 + 512 template tokens/call + 768 max output tokens/call; rates FP8: 13.778 N/M input tokens, 26.128 N/M output tokens; chỉ là giả lập đo lường, không phải cam kết của provider, không phải số actual, và không khẳng định mô hình pass).
+  * Trạng thái triển khai: **CHƯA deploy và CHƯA chạy live** bản prompt commit `49815dd` này.
+  * Metadata evidence commit `1ba75df` đã được root duyệt; hiện chưa có artifact live nào sử dụng metadata commit này.
   * **Phân tích kỹ thuật sự cố Timeout tại ca A2 (Lượt 3):**
     - Cấu hình timeout thực tế tại Gateway: `ASSISTANT_AI_TIMEOUT_SECONDS=30` (30 giây) theo đúng đặc tả và cài đặt trong `backend/assethub_api/settings.py:188` và `backend/apps/assistant/gateway.py:150`.
     - Lỗi ghi nhận: gateway báo read timeout (`"AI Worker request timed out: The read operation timed out"`), không có transport trace.
@@ -81,7 +106,9 @@ Dự án áp dụng mô hình kiểm soát chất lượng qua từng Gate tuầ
     - **Nguyên nhân gốc của timeout:** **Chưa rõ (UNKNOWN)** do thiếu nhật ký kết nối tầng mạng và nhật ký xử lý máy chủ Cloudflare (server-side logs); không khẳng định lỗi mạng hay provider outage khi chưa có bằng chứng cụ thể.
     - Đo lường thời gian (per-case timing) đã được commit tại HEAD `06ed8e1` trên 2 file do Claude sở hữu (`planner_eval.py` và `test_planner_eval.py`); Codex đã kiểm chứng 151/151 tests PASS (7,16s) ở chế độ offline. Các artifact cũ (Lượt 1, 2, 3) không có thông tin latency và được giữ nguyên vẹn, không chỉnh sửa.
   * Worker bản cuối (`08f383b3`) đã bật `response_format: { type: 'json_object' }` và mã lỗi chẩn đoán tĩnh (`reason_code`); trang tài liệu Cloudflare ghi nhận `@cf/meta/llama-3.1-8b-instruct-fp8` có `Planned Deprecation: 11/15/2026` (ghi nhận làm phụ thuộc triển khai tương lai, chưa đổi model).
-  * UI 6/7, Task 8 và Week 5 vẫn chưa đóng. Chưa deploy ứng dụng chính, chưa bật cờ môi trường.
+  * Frontend (route `/assistant`, `/assistant/support`, menu và cờ `VITE_ASSISTANT_ENABLED`) hiện là **bản chuẩn bị, chưa nghiệm thu** vì điều kiện Gate 3-L chưa đạt. Codex đã kiểm chứng: 193/193 frontend tests PASS, build exit 0 (có cảnh báo chunk lớn), Playwright 6/6 với API mock (không chạm backend hay Cloudflare).
+  * Bổ sung bằng chứng UI offline (chưa phải E2E cloud, không Gate PASS): request assistant có timeout 120000 ms riêng (axios chung giữ nguyên), test hành vi timeout phục hồi lượt đã lưu không gửi lại; Vitest 194/194, build OK; Playwright (cổng 5176, mock toàn bộ `/api`) 7/7 gồm kiểm tra IME không gửi khi đang soạn. Ảnh desktop 1280px và 320px, cùng ảnh IME, nằm ở `frontend/e2e-screenshots/assistant/` (thư mục git bỏ qua).
+  * Task 6/7 chưa nghiệm thu do Gate 3-L chưa PASS; Task 8 và Week 5 chưa đóng. Chưa deploy ứng dụng chính, chưa bật cờ môi trường.
 
 ---
 
