@@ -1,3 +1,5 @@
+import { handleAssistantPlan } from './assistant.js';
+
 function parsePositiveInteger(val) {
   if (typeof val === 'number') {
     return (Number.isInteger(val) && Number.isFinite(val) && val > 0 && Number.isSafeInteger(val)) ? val : null;
@@ -20,6 +22,10 @@ function parsePositiveInteger(val) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/api/assistant/plan') {
+      return handleAssistantPlan(request, env);
+    }
 
     if (url.pathname !== '/api/suggest-category') {
       return new Response(JSON.stringify({ error: 'Not Found' }), {

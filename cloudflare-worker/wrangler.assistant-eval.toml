@@ -1,0 +1,14 @@
+# Gate 3-L evaluation Worker. Separate from the demo Worker in wrangler.toml, which it does not affect.
+# Runs only the reviewed planner code: every authorized POST, on any path, reaches the planner.
+# AI_SERVICE_TOKEN is a secret loaded with `wrangler secret put`; its value never goes in this file.
+name = "assethub-assistant-eval"
+main = "src/assistant.js"
+compatibility_date = "2024-04-01"
+workers_dev = true
+send_metrics = false
+
+[ai]
+binding = "AI"
+
+[vars]
+ASSISTANT_MODEL = "@cf/google/gemma-4-26b-a4b-it"

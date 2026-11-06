@@ -1,5 +1,6 @@
 import datetime
 import re
+from collections import Counter
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -217,10 +218,16 @@ class ReportService:
         if category_id is not None:
             assets_qs = assets_qs.filter(category_id=category_id)
 
+        # One grouped query feeds all three distributions: on D1 every query is a network round trip.
+        status_counts, cat_counts, counts_by_dept = Counter(), Counter(), Counter()
+        for status, cat_id, dept_id, cnt in assets_qs.values_list(
+            'status', 'category_id', 'department_id'
+        ).annotate(cnt=Count('id')):
+            status_counts[status] += cnt
+            cat_counts[cat_id] += cnt
+            counts_by_dept[dept_id] += cnt
+
         # Status distribution
-        status_counts = dict(
-            assets_qs.values_list('status').annotate(cnt=Count('id'))
-        )
         status_distribution = [
             {
                 "status": s_code,
@@ -231,9 +238,6 @@ class ReportService:
         ]
 
         # Category distribution
-        cat_counts = dict(
-            assets_qs.values_list('category_id').annotate(cnt=Count('id'))
-        )
         category_distribution = []
         for cat in Category.objects.all().order_by('id'):
             category_distribution.append({
@@ -247,9 +251,6 @@ class ReportService:
             department_distribution = []
         else:
             # Admin sees all departments + unallocated
-            counts_by_dept = dict(
-                assets_qs.values_list('department_id').annotate(cnt=Count('id'))
-            )
             department_distribution = []
             for dept in Department.objects.all().order_by('name', 'id'):
                 department_distribution.append({

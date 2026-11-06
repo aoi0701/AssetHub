@@ -39,6 +39,9 @@ services:
       AI_WORKER_URL: ${AI_WORKER_URL:-}
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-}
       AI_MODEL: ${AI_MODEL:-@cf/meta/llama-3.1-8b-instruct-fp8}
+      # Week 5 asset assistant: off by default; the model is a Worker var (ASSISTANT_MODEL), not set here
+      ASSISTANT_ENABLED: ${ASSISTANT_ENABLED:-false}
+      ASSISTANT_AI_TIMEOUT_SECONDS: ${ASSISTANT_AI_TIMEOUT_SECONDS:-30}
     ports:
       - "127.0.0.1:${DEMO_BACKEND_PORT:-8001}:8000"
     healthcheck:
@@ -49,7 +52,7 @@ services:
       start_period: 15s
     volumes:
       - ../backend:/app:ro
-    command: ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "2", "assethub_api.wsgi:application"]
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "2", "--timeout", "120", "assethub_api.wsgi:application"]
 
   # Optional Named Tunnel container
   cloudflared:

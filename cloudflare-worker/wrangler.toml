@@ -7,6 +7,8 @@ binding = "AI"
 
 [vars]
 AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+# Week 5 assistant planner only; /api/assistant/plan prefers it over AI_MODEL, the category endpoint is unchanged
+ASSISTANT_MODEL = "@cf/google/gemma-4-26b-a4b-it"
 
 [[d1_databases]]
 binding = "DB"

@@ -11,6 +11,7 @@ Isolation Rules:
 - Strict token authentication and local file-backed persistence.
 - Strict process ownership: Only manage the process spawned by this instance.
 - Port collision guard: Refuse to start and never kill external processes.
+- Listener ownership: The bridge token is only sent to a listener held by our child's process group.
 - Run-scoped directory and marker ownership: Only clean directories with matching marker.
 """
 
@@ -28,9 +29,10 @@ import sqlite3
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +83,30 @@ TARGET_TABLES: List[str] = [
 _active_harnesses: List["D1TargetHarness"] = []
 
 
+PROC_ROOT = Path("/proc")
+TCP_STATE_LISTEN = "0A"
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
 def get_repo_root() -> Path:
     """Resolve project repository root from module location."""
     return Path(__file__).resolve().parents[4]
+
+
+WRANGLER_COMMAND = ("npx", "--no-install", "wrangler")
+
+
+def wrangler_env() -> Dict[str, str]:
+    """
+    Turns off the known outbound paths: --no-install alone still lets npx ask the registry, and
+    miniflare fetches its cf metadata unless told not to. This is configuration, not a network sandbox.
+    """
+    return {
+        **os.environ,
+        "npm_config_offline": "true",
+        "WRANGLER_SEND_METRICS": "false",
+        "CLOUDFLARE_CF_FETCH_ENABLED": "false",
+    }
 
 
 def assert_safe_environment(cmd_args: List[str]) -> None:
@@ -382,7 +405,7 @@ def ingest_d1_ddl(
 ) -> subprocess.CompletedProcess:
     """
     Ingests spikes/cf-d1-spike/schema.sql into local D1 via:
-    cd spikes/cf-d1-spike/bridge-worker && npx wrangler d1 execute assethub-test-d1 --local --file=../schema.sql --persist-to=<persist_dir> -y
+    cd spikes/cf-d1-spike/bridge-worker && npx --no-install wrangler d1 execute assethub-test-d1 --local --file=../schema.sql --persist-to=<persist_dir> -y
     """
     repo_root = get_repo_root()
     if bridge_worker_dir is None:
@@ -399,8 +422,7 @@ def ingest_d1_ddl(
         raise FileNotFoundError(f"Schema file not found: {schema_file}")
 
     cmd = [
-        "npx",
-        "wrangler",
+        *WRANGLER_COMMAND,
         "d1",
         "execute",
         db_name,
@@ -414,6 +436,7 @@ def ingest_d1_ddl(
     result = subprocess.run(
         cmd,
         cwd=str(bridge_worker_dir),
+        env=wrangler_env(),
         capture_output=True,
         text=True,
         check=True,
@@ -473,19 +496,114 @@ def check_bridge_health(
         return False
 
 
+def _listening_socket_inodes(port: int) -> List[str]:
+    """Listening TCP sockets on port, on any address, in this network namespace."""
+    inodes = []
+    for table, required in (("net/tcp", True), ("net/tcp6", False)):
+        try:
+            lines = (PROC_ROOT / table).read_text().splitlines()[1:]
+        except FileNotFoundError:
+            # Only absence means this kernel has no IPv6; any other read error leaves listeners unseen.
+            if required:
+                raise
+            continue
+        for line in lines:
+            fields = line.split()
+            if fields[3] == TCP_STATE_LISTEN and int(fields[1].rsplit(":", 1)[1], 16) == port:
+                inodes.append(fields[9])
+    return inodes
+
+
+def _socket_holders(inodes: List[str]) -> Dict[str, List[int]]:
+    """PIDs holding each socket. Processes of other users are unreadable, so they never appear as holders."""
+    holders: Dict[str, List[int]] = {inode: [] for inode in inodes}
+    links = {f"socket:[{inode}]": inode for inode in inodes}
+    for entry in PROC_ROOT.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            for fd in (entry / "fd").iterdir():
+                inode = links.get(os.readlink(fd))
+                if inode is not None:
+                    holders[inode].append(int(entry.name))
+        except OSError:
+            continue
+    return holders
+
+
+def _is_owned_child(proc: Any) -> bool:
+    """Kernel facts rather than what the object claims: our direct child, leading its own process group."""
+    if proc is None:
+        return False
+    try:
+        status = (PROC_ROOT / str(proc.pid) / "status").read_text()
+        parent = next(int(line.split()[1]) for line in status.splitlines() if line.startswith("PPid:"))
+        return parent == os.getpid() and os.getpgid(proc.pid) == proc.pid
+    except (OSError, StopIteration, ValueError):
+        return False
+
+
+def _child_owns_port(proc: Any, port: int) -> bool:
+    """
+    True if every listener on port belongs to proc's process group, the group terminate_process stops.
+    False if nothing listens yet. Raises RuntimeError without touching the listener in any other case.
+    """
+    try:
+        inodes = _listening_socket_inodes(port)
+        holders = _socket_holders(inodes)
+    except OSError as exc:
+        raise RuntimeError(f"Cannot prove who listens on port {port}: {exc}") from exc
+    if not inodes:
+        return False
+    if not _is_owned_child(proc):
+        raise RuntimeError(f"Listener on port {port} is not owned by a child of this harness.")
+    for pids in holders.values():
+        try:
+            if not pids or any(os.getpgid(pid) != proc.pid for pid in pids):
+                raise RuntimeError(f"Listener on port {port} is not owned by this harness's child process group.")
+        except ProcessLookupError as exc:
+            raise RuntimeError(f"Listener on port {port} is not owned: its holder exited.") from exc
+    return True
+
+
+def _loopback_port(url: str) -> int:
+    """The explicit port of a plain-HTTP loopback URL; anything else is refused before any I/O."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("Bridge URL is not valid.") from exc
+    if parsed.scheme != "http" or parsed.hostname not in LOOPBACK_HOSTS or port is None or parsed.username:
+        raise RuntimeError("Bridge URL must be plain HTTP to a loopback host with an explicit port.")
+    return port
+
+
+def assert_bridge_owned(proc: Optional[subprocess.Popen], url: str) -> None:
+    """
+    Call right before sending the bridge token to url. Raises RuntimeError unless url is a loopback
+    HTTP address and every listener on its port belongs to proc's process group. Never touches the
+    listener. This stops a request reaching the wrong process by accident; /proc and the later
+    connect are not atomic, so it does not stop an attacker swapping the port between the two.
+    """
+    port = _loopback_port(url)
+    if not _child_owns_port(proc, port):
+        raise RuntimeError(f"Listener on port {port} is not owned: nothing is listening.")
+
+
 def wait_for_bridge_ready(
     proc: Optional[subprocess.Popen] = None,
     url: str = DEFAULT_QUERY_URL,
     token: Optional[str] = None,
     timeout: float = 15.0,
 ) -> bool:
-    """Wait up to timeout seconds for bridge to respond to SELECT 1."""
+    """Wait up to timeout seconds for our own bridge to answer SELECT 1; the token goes to no other listener."""
+    port = _loopback_port(url)
     start_time = time.time()
     while time.time() - start_time < timeout:
         if proc is not None and proc.poll() is not None:
             _, err = proc.communicate()
             raise RuntimeError(f"wrangler dev process exited prematurely with code {proc.returncode}: {err}")
-        if check_bridge_health(url=url, token=token, timeout=1.5):
+        if _child_owns_port(proc, port) and check_bridge_health(url=url, token=token, timeout=1.5):
             return True
         time.sleep(0.3)
     return False
@@ -527,14 +645,20 @@ def verify_d1_target_clean_sqlite(persist_dir: Optional[Path] = None) -> Dict[st
 def verify_d1_target_clean_bridge(
     url: str = DEFAULT_QUERY_URL,
     token: Optional[str] = None,
+    before_request: Optional[Callable[[], None]] = None,
 ) -> Dict[str, int]:
-    """Inspect local D1 via Worker Bridge HTTP query to verify table existence and zero rows."""
+    """
+    Inspect local D1 via Worker Bridge HTTP query to verify table existence and zero rows.
+    before_request runs before every query and may raise to stop the token being sent.
+    """
     token_val = token or DEFAULT_TOKEN
-    res = query_bridge_http(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'sqlite_%';",
-        url=url,
-        token=token_val,
-    )
+
+    def query(sql: str) -> Dict[str, Any]:
+        if before_request is not None:
+            before_request()
+        return query_bridge_http(sql, url=url, token=token_val)
+
+    res = query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'sqlite_%';")
     if not res.get("success"):
         raise RuntimeError(f"Failed to query sqlite_master over bridge: {res}")
 
@@ -551,7 +675,7 @@ def verify_d1_target_clean_bridge(
     row_counts: Dict[str, int] = {}
     non_empty: Dict[str, int] = {}
     for t in TARGET_TABLES:
-        c_res = query_bridge_http(f'SELECT count(*) as cnt FROM "{t}";', url=url, token=token_val)
+        c_res = query(f'SELECT count(*) as cnt FROM "{t}";')
         if not c_res.get("success"):
             raise RuntimeError(f"Failed to query row count for table '{t}': {c_res}")
         items = c_res.get("results", [])
@@ -591,9 +715,13 @@ def start_d1_bridge(
     bridge_worker_dir: Optional[Path] = None,
     timeout: float = 15.0,
     run_id: Optional[str] = None,
+    on_started: Optional[Callable[[subprocess.Popen], None]] = None,
 ) -> subprocess.Popen:
     """
-    Launch npx wrangler dev on host:port with:
+    on_started receives the child right after launch, before the first request carrying the token.
+    If it raises, the child is stopped like any other startup failure.
+
+    Launch npx --no-install wrangler dev on host:port with:
     --ip <host> --port <port> --persist-to <persist_dir> --env-file <env_file>
     Tests connection via socket.connect_ex first: Fails immediately if port is in use.
     Spawns process via start_new_session=True.
@@ -612,8 +740,7 @@ def start_d1_bridge(
         bridge_worker_dir = repo_root / "spikes" / "cf-d1-spike" / "bridge-worker"
 
     cmd = [
-        "npx",
-        "wrangler",
+        *WRANGLER_COMMAND,
         "dev",
         "--ip",
         host,
@@ -629,17 +756,19 @@ def start_d1_bridge(
     proc = subprocess.Popen(
         cmd,
         cwd=str(bridge_worker_dir),
+        env=wrangler_env(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         start_new_session=True,
         text=True,
     )
 
-    if run_id:
-        write_run_marker(persist_dir_path, run_id=run_id, pid=proc.pid)
-
     query_url = f"http://{host}:{port}/api/v1/query"
     try:
+        if on_started is not None:
+            on_started(proc)
+        if run_id:
+            write_run_marker(persist_dir_path, run_id=run_id, pid=proc.pid)
         is_ready = wait_for_bridge_ready(proc=proc, url=query_url, token=token_val, timeout=timeout)
         if not is_ready:
             terminate_process(proc)
@@ -754,6 +883,8 @@ class D1TargetHarness:
                 env_file=self.env_file,
                 token=self.token,
                 run_id=self.run_id,
+                # Request guards check self.process, so it must be known before the readiness probe.
+                on_started=lambda proc: setattr(self, "process", proc),
             )
 
             # Update marker with active PID
@@ -775,11 +906,16 @@ class D1TargetHarness:
 
     def query(self, sql: str, params: Optional[List[Any]] = None) -> Dict[str, Any]:
         """Execute query against running bridge."""
+        assert_bridge_owned(self.process, self.query_url)
         return query_bridge_http(sql, params=params, url=self.query_url, token=self.token)
 
     def verify_clean(self) -> Dict[str, int]:
         """Verify all target tables exist and have 0 rows."""
-        return verify_d1_target_clean_bridge(url=self.query_url, token=self.token)
+        return verify_d1_target_clean_bridge(
+            url=self.query_url,
+            token=self.token,
+            before_request=lambda: assert_bridge_owned(self.process, self.query_url),
+        )
 
     def teardown(self) -> None:
         """Teardown only this harness's process and purge only its own files."""

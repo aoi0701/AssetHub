@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'apps.requests.apps.RequestsConfig',
     'apps.reports.apps.ReportsConfig',
     'apps.ai.apps.AiConfig',
+    'apps.assistant.apps.AssistantConfig',
 ]
 
 MIDDLEWARE = [
@@ -184,6 +185,8 @@ R2_PRESIGNED_URL_EXPIRE_SECONDS = int(os.environ.get('R2_PRESIGNED_URL_EXPIRE_SE
 AI_SERVICE_TOKEN = os.environ.get('AI_SERVICE_TOKEN', 'dev-ai-secret-token-2026')
 AI_WORKER_URL = os.environ.get('AI_WORKER_URL', 'http://127.0.0.1:8787')
 AI_MODEL = os.environ.get('AI_MODEL', '@cf/meta/llama-3.1-8b-instruct-fp8')
+ASSISTANT_AI_TIMEOUT_SECONDS = int(os.environ.get('ASSISTANT_AI_TIMEOUT_SECONDS', '30'))
+ASSISTANT_ENABLED = os.environ.get('ASSISTANT_ENABLED', 'False').lower() in ('true', '1')
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -212,6 +215,7 @@ REST_FRAMEWORK = {
         'anon': '1000/minute',
         'auth_login': os.environ.get('AUTH_LOGIN_THROTTLE_RATE', '10/minute'),
         'auth_register': os.environ.get('AUTH_REGISTER_THROTTLE_RATE', '10/minute'),
+        'assistant': '10/minute',
     },
 }
 
