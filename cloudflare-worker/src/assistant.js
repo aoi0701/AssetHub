@@ -49,21 +49,24 @@ Yêu cầu bắt buộc:
 1. Bắt buộc trả về đúng 4 khóa root: "kind", "calls", "clarification", "reason". Không thêm bất kỳ khóa root nào khác.
 2. "kind" chỉ được là một trong: "tools", "clarify", "handoff", "out_of_scope".
 3. Khi "kind" là "tools", "calls" chứa từ 1 đến 3 công cụ hợp lệ trong danh sách cho phép, "clarification": null, "reason": null.
-4. Khi "kind" là "clarify", "calls": [], "clarification": chuỗi hỏi lại (1-300 ký tự), "reason": null.
+4. Khi "kind" là "clarify", "calls": [], "clarification": chuỗi hỏi lại thông tin hoặc lựa chọn còn thiếu (1-300 ký tự), TUYỆT ĐỐI KHÔNG lặp lại nguyên văn câu hỏi của người dùng, "reason": null.
 5. Khi "kind" là "handoff", "calls": [], "clarification": null, "reason": "missing_knowledge" hoặc "unsupported_asset_question".
 6. Khi "kind" là "out_of_scope", "calls": [], "clarification": null, "reason": null.
 7. Chỉ trả về DUY NHẤT một JSON object hợp lệ, KHÔNG bọc trong markdown code fence, KHÔNG kèm bất kỳ lời giải thích hay văn bản nào ngoài JSON.
 
 Quy tắc định tuyến công cụ (Tool Routing Guidance):
-- Thống kê, đếm số lượng: CHỈ dùng "assets.summary" khi đối tượng là TÀI SẢN. Đặt loại tài sản vào "category", KHÔNG đặt vào "query". Giữ nguyên "department", "holder", "asset_code" nếu người dùng chỉ định cụ thể. Chỉ thêm statuses: ["AVAILABLE"] khi hỏi tài sản chưa cấp, còn trống hoặc sẵn sàng; không thêm statuses nếu hỏi tổng số.
+- Thống kê, đếm số lượng tài sản: CHỈ dùng "assets.summary" khi đối tượng là TÀI SẢN. Đặt loại tài sản vào "category", KHÔNG đặt vào "query". Các từ ngữ "chưa cấp", "chưa được cấp", "chưa cấp phát", "trống", "sẵn sàng" ĐỀU biểu thị trạng thái khả dụng, BẮT BUỘC đặt statuses: ["AVAILABLE"]; tuyệt đối KHÔNG bỏ qua bộ lọc trạng thái khi người dùng đã yêu cầu. Giữ nguyên "department", "holder", "asset_code" nếu người dùng chỉ định cụ thể. Chỉ không truyền statuses khi hỏi tổng số toàn bộ tài sản.
 - Tra cứu hoặc đếm phiếu yêu cầu (requests): dùng "requests.search" với "request_type" (ALLOCATE, RETURN, DAMAGE_REPORT), "status" (PENDING, APPROVED, REJECTED) hoặc "query"; tuyệt đối KHÔNG dùng "assets.summary" cho phiếu yêu cầu (ví dụ hỏi "bao nhiêu phiếu").
 - Tra cứu danh sách/chi tiết tài sản: dùng "assets.search". Khi có mã tài sản cụ thể, bắt buộc đặt vào "asset_code" và giữ nguyên mã gốc; trường "query" chỉ dùng cho từ khóa tìm kiếm tự do khi không có mã. Khi hỏi theo người giữ, đặt tên vào "holder", không đặt vào "query".
 - Lịch sử tài sản: dùng "assets.history" với "asset_code" cho tài sản cụ thể, HOẶC "mine": true khi hỏi lịch sử tài sản của chính mình; KHÔNG kết hợp cả hai selector cùng lúc, KHÔNG tự thêm tham số ngoài schema.
 - Quy trình/quy định chính thức: dùng "procedures.lookup" với đúng 1 trong 5 chủ đề hỗ trợ: "allocate", "return", "damage_report", "roles", "asset_statuses". Mọi câu hỏi chính sách/quy định khác nằm ngoài 5 chủ đề này: chọn "kind": "handoff" với "reason": "missing_knowledge".
-- Câu hỏi tiếp nối (Follow-up) có đại từ thay thế (ví dụ: "máy đó", "thiết bị này"): ưu tiên mã tài sản nêu rõ trong câu hỏi. Nếu cần đối chiếu Context, xét lượt gần nhất liên quan và các mã phân biệt (không coi 1 mã lặp qua nhiều lượt là nhiều tài sản):
-  * Nếu chỉ có đúng 1 mã phân biệt: dùng mã đó cho "asset_code".
-  * Nếu có từ 2 mã phân biệt trở lên gây mơ hồ: chọn "kind": "clarify" liệt kê chính xác các mã đó từ refs để hỏi lại người dùng.
-  * Nếu không có ref nào: chọn "kind": "clarify" để hỏi lại người dùng.
+- Câu hỏi tiếp nối (Follow-up) có đại từ thay thế (ví dụ: "máy đó", "thiết bị này", "nó"):
+  * Ưu tiên mã tài sản nếu người dùng nêu rõ trong câu hỏi; không làm hỏng câu hỏi nêu rõ mã cụ thể hoặc câu hỏi về cả hai/tất cả thiết bị.
+  * Nếu câu hỏi không nêu mã cụ thể và dùng đại từ số ít mơ hồ: BẮT BUỘC xét refs ở lượt gần nhất liên quan và đếm các mã phân biệt trong lượt đó (lặp lại cùng 1 mã qua nhiều lượt không tính thành nhiều thiết bị).
+  * Nếu lượt gần nhất liên quan có từ 2 mã phân biệt trở lên gây mơ hồ: BẮT BUỘC chọn "kind": "clarify" liệt kê chính xác các mã ứng viên từ refs của lượt đó để người dùng chọn; TUYỆT ĐỐI KHÔNG tự tiện chọn 1 mã và KHÔNG tự bịa thêm bộ lọc (như category, query, holder).
+  * Nếu lượt gần nhất liên quan có đúng 1 mã phân biệt: dùng mã đó cho "asset_code".
+  * Nếu Context không có ref nào: chọn "kind": "clarify" yêu cầu cung cấp mã tài sản.
+- Khi làm rõ ("clarify"): trường "clarification" phải là câu hỏi người dùng cần cung cấp mã tài sản hoặc lựa chọn cụ thể nào, TUYỆT ĐỐI KHÔNG lặp lại nguyên văn câu hỏi của người dùng.
 - Câu hỏi hoàn toàn ngoài phạm vi quản lý tài sản (thời tiết, chào hỏi chung, du lịch, thể thao, xã hội...): chọn "kind": "out_of_scope".`;
 
 function buildUserPrompt(question, context, scope) {
@@ -496,6 +499,7 @@ export async function handleAssistantPlan(request, env) {
       ],
       temperature: 0.1,
       max_tokens: 768,
+      response_format: { type: 'json_object' },
     });
   } catch (err) {
     const errStr = `${String(err)} ${err?.message || ''}`;
@@ -531,10 +535,16 @@ export async function handleAssistantPlan(request, env) {
     try {
       const serialized = JSON.stringify(parsedDecision);
       if (new TextEncoder().encode(serialized).byteLength > MAX_OUTPUT_BYTES) {
-        return jsonResponse({ error: 'Invalid AI plan', code: 'INVALID_PLAN' }, 502);
+        return jsonResponse(
+          { error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: 'PAYLOAD_TOO_LARGE' },
+          502
+        );
       }
     } catch {
-      return jsonResponse({ error: 'Invalid AI plan', code: 'INVALID_PLAN' }, 502);
+      return jsonResponse(
+        { error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: 'SCHEMA_VALIDATION_FAILED' },
+        502
+      );
     }
   } else {
     let rawResponse = '';
@@ -547,28 +557,43 @@ export async function handleAssistantPlan(request, env) {
     }
 
     if (!rawResponse || typeof rawResponse !== 'string') {
-      return jsonResponse({ error: 'Invalid AI plan', code: 'INVALID_PLAN' }, 502);
+      return jsonResponse(
+        { error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: 'SCHEMA_VALIDATION_FAILED' },
+        502
+      );
     }
 
     if (new TextEncoder().encode(rawResponse).byteLength > MAX_OUTPUT_BYTES) {
-      return jsonResponse({ error: 'Invalid AI plan', code: 'INVALID_PLAN' }, 502);
+      return jsonResponse(
+        { error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: 'PAYLOAD_TOO_LARGE' },
+        502
+      );
     }
 
     const text = rawResponse.trim();
     // Task 3: No salvage parsing. Code fence, prose or non-JSON MUST result in 502!
     if (text.startsWith('```') || text.endsWith('```')) {
-      return jsonResponse({ error: 'Invalid AI plan', code: 'INVALID_PLAN' }, 502);
+      return jsonResponse(
+        { error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: 'CODE_FENCE' },
+        502
+      );
     }
 
     try {
       parsedDecision = JSON.parse(text);
     } catch {
-      return jsonResponse({ error: 'Invalid AI plan', code: 'INVALID_PLAN' }, 502);
+      return jsonResponse(
+        { error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: 'JSON_PARSE_ERROR' },
+        502
+      );
     }
   }
 
   if (!validatePlannerDecision(parsedDecision)) {
-    return jsonResponse({ error: 'Invalid AI plan', code: 'INVALID_PLAN' }, 502);
+    return jsonResponse(
+      { error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: 'SCHEMA_VALIDATION_FAILED' },
+      502
+    );
   }
 
   return jsonResponse({ decision: parsedDecision }, 200);

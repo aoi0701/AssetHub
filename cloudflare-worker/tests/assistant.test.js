@@ -348,6 +348,23 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(options.messages[1].content).toContain(validPayload.question);
     });
 
+    it('passes response_format json_object, messages and temperature to env.AI.run', async () => {
+      env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(validDecision) });
+
+      const res = await worker.fetch(assistantRequest(validPayload), env);
+      expect(res.status).toBe(200);
+
+      expect(env.AI.run).toHaveBeenCalledTimes(1);
+      const [model, options] = env.AI.run.mock.calls[0];
+      expect(model).toBe('@cf/meta/llama-3.1-8b-instruct-fp8');
+      expect(options.temperature).toBe(0.1);
+      expect(options.max_tokens).toBe(768);
+      expect(options.response_format).toEqual({ type: 'json_object' });
+      expect(options.messages).toHaveLength(2);
+      expect(options.messages[0].role).toBe('system');
+      expect(options.messages[1].role).toBe('user');
+    });
+
     it('includes general Vietnamese semantic tool-routing guidance without hardcoded evaluation codes', async () => {
       env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(validDecision) });
 
@@ -377,11 +394,18 @@ describe('Cloudflare Assistant Planner Worker', () => {
       expect(system).toContain('out_of_scope');
       expect(system).toContain('missing_knowledge');
 
-      // Specific selection rule nuances
+      // Specific selection rule nuances & anti-echo & latest-turn distinct refs
       expect(system).toContain('CHỈ dùng "assets.summary" khi đối tượng là TÀI SẢN');
       expect(system).toContain('tuyệt đối KHÔNG dùng "assets.summary" cho phiếu yêu cầu');
       expect(system).toContain('KHÔNG tự thêm tham số ngoài schema');
-      expect(system).toContain('không coi 1 mã lặp qua nhiều lượt là nhiều tài sản');
+      expect(system).toContain('chưa cấp');
+      expect(system).toContain('chưa được cấp');
+      expect(system).toContain('TUYỆT ĐỐI KHÔNG lặp lại nguyên văn câu hỏi của người dùng');
+      expect(system).toContain('lượt gần nhất liên quan');
+      expect(system).toContain('đếm các mã phân biệt trong lượt đó');
+      expect(system).toContain('lặp lại cùng 1 mã qua nhiều lượt không tính thành nhiều thiết bị');
+      expect(system).toContain('không làm hỏng câu hỏi nêu rõ mã cụ thể hoặc câu hỏi về cả hai/tất cả thiết bị');
+      expect(system).toContain('TUYỆT ĐỐI KHÔNG tự tiện chọn 1 mã và KHÔNG tự bịa thêm bộ lọc');
 
       // Ensure no hardcoded evaluation specifics
       expect(system).not.toContain('W5-IT');
@@ -769,6 +793,57 @@ describe('Cloudflare Assistant Planner Worker', () => {
       const data = await res.json();
       expect(data.error).toBe('Invalid AI plan');
       expect(data.code).toBe('INVALID_PLAN');
+      expect(data.reason_code).toBe('PAYLOAD_TOO_LARGE');
+    });
+
+    it('returns static allowlisted reason_code on 502 and never reflects dynamic user or model text', async () => {
+      const ALLOWED_REASON_CODES = [
+        'CODE_FENCE',
+        'JSON_PARSE_ERROR',
+        'SCHEMA_VALIDATION_FAILED',
+        'PAYLOAD_TOO_LARGE',
+      ];
+
+      const testCases = [
+        {
+          response: '```json\n{"kind":"tools"}\n```',
+          expectedReason: 'CODE_FENCE',
+        },
+        {
+          response: 'Malformed { not json <script>alert(1)</script>',
+          expectedReason: 'JSON_PARSE_ERROR',
+        },
+        {
+          response: JSON.stringify({ kind: 'tools', calls: [{ name: 'unknown_tool' }], clarification: null, reason: null }),
+          expectedReason: 'SCHEMA_VALIDATION_FAILED',
+        },
+        {
+          response: 'y'.repeat(66000),
+          expectedReason: 'PAYLOAD_TOO_LARGE',
+        },
+      ];
+
+      const sensitivePayload = {
+        question: 'SENSITIVE_LEAK_PROMPT_KEYWORD_XYZ',
+        context: [],
+        scope: {},
+      };
+
+      for (const tc of testCases) {
+        env.AI.run.mockResolvedValueOnce({ response: tc.response });
+        const res = await worker.fetch(assistantRequest(sensitivePayload), env);
+        expect(res.status).toBe(502);
+        const data = await res.json();
+        expect(data.code).toBe('INVALID_PLAN');
+        expect(ALLOWED_REASON_CODES).toContain(data.reason_code);
+        expect(data.reason_code).toBe(tc.expectedReason);
+
+        // Security assertion: verify dynamic user text or raw model error strings are NOT in response
+        const rawJson = JSON.stringify(data);
+        expect(rawJson).not.toContain('SENSITIVE_LEAK_PROMPT_KEYWORD_XYZ');
+        expect(rawJson).not.toContain('alert(1)');
+        expect(rawJson).not.toContain('unknown_tool');
+      }
     });
   });
 
