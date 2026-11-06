@@ -3,6 +3,17 @@ import schema from '../assistant.schema.json' with { type: 'json' };
 const MAX_REQUEST_BYTES = 32 * 1024; // 32768 bytes
 const MAX_OUTPUT_BYTES = 64 * 1024; // 65536 bytes
 
+export const SCHEMA_RULE_CODES = [
+  'ROOT_SHAPE',
+  'KIND_INVALID',
+  'CALLS_INVALID',
+  'CLARIFICATION_INVALID',
+  'REASON_INVALID',
+  'TOOL_SHAPE',
+  'TOOL_NAME',
+  'TOOL_ARGS',
+];
+
 const ALLOWED_ROOT_KEYS = ['kind', 'calls', 'clarification', 'reason'];
 const ALLOWED_KINDS = ['tools', 'clarify', 'handoff', 'out_of_scope'];
 const ALLOWED_TOOLS = [
@@ -266,41 +277,44 @@ function validateToolArgs(toolName, args) {
   return false;
 }
 
-export function validatePlannerDecision(d) {
+export function checkPlannerDecision(d) {
   if (!d || typeof d !== 'object' || Array.isArray(d)) {
-    return false;
+    return 'ROOT_SHAPE';
   }
 
   const keys = Object.keys(d);
   if (keys.length !== 4) {
-    return false;
+    return 'ROOT_SHAPE';
   }
   for (const k of ALLOWED_ROOT_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(d, k)) {
-      return false;
+      return 'ROOT_SHAPE';
     }
   }
 
   const { kind, calls, clarification, reason } = d;
 
   if (typeof kind !== 'string' || !ALLOWED_KINDS.includes(kind)) {
-    return false;
+    return 'KIND_INVALID';
   }
 
   if (!Array.isArray(calls)) {
-    return false;
+    return 'CALLS_INVALID';
   }
 
   if (kind === 'tools') {
     if (calls.length < 1 || calls.length > 3) {
-      return false;
+      return 'CALLS_INVALID';
     }
-    if (clarification !== null || reason !== null) {
-      return false;
+    if (clarification !== null) {
+      return 'CLARIFICATION_INVALID';
+    }
+    if (reason !== null) {
+      return 'REASON_INVALID';
     }
     for (const call of calls) {
       if (!call || typeof call !== 'object' || Array.isArray(call)) {
-        return false;
+        return 'TOOL_SHAPE';
       }
       const callKeys = Object.keys(call);
       if (
@@ -308,55 +322,62 @@ export function validatePlannerDecision(d) {
         !Object.prototype.hasOwnProperty.call(call, 'name') ||
         !Object.prototype.hasOwnProperty.call(call, 'arguments')
       ) {
-        return false;
+        return 'TOOL_SHAPE';
       }
       if (typeof call.name !== 'string' || !ALLOWED_TOOLS.includes(call.name)) {
-        return false;
+        return 'TOOL_NAME';
       }
       if (!validateToolArgs(call.name, call.arguments)) {
-        return false;
+        return 'TOOL_ARGS';
       }
     }
-    return true;
+    return null;
   }
 
   if (kind === 'clarify') {
     if (calls.length !== 0) {
-      return false;
+      return 'CALLS_INVALID';
     }
     if (typeof clarification !== 'string' || clarification.length < 1 || clarification.length > 300) {
-      return false;
+      return 'CLARIFICATION_INVALID';
     }
     if (reason !== null) {
-      return false;
+      return 'REASON_INVALID';
     }
-    return true;
+    return null;
   }
 
   if (kind === 'handoff') {
     if (calls.length !== 0) {
-      return false;
+      return 'CALLS_INVALID';
     }
     if (clarification !== null) {
-      return false;
+      return 'CLARIFICATION_INVALID';
     }
     if (typeof reason !== 'string' || !ALLOWED_REASONS.includes(reason)) {
-      return false;
+      return 'REASON_INVALID';
     }
-    return true;
+    return null;
   }
 
   if (kind === 'out_of_scope') {
     if (calls.length !== 0) {
-      return false;
+      return 'CALLS_INVALID';
     }
-    if (clarification !== null || reason !== null) {
-      return false;
+    if (clarification !== null) {
+      return 'CLARIFICATION_INVALID';
     }
-    return true;
+    if (reason !== null) {
+      return 'REASON_INVALID';
+    }
+    return null;
   }
 
-  return false;
+  return 'ROOT_SHAPE';
+}
+
+export function validatePlannerDecision(d) {
+  return checkPlannerDecision(d) === null;
 }
 
 async function readCappedBody(request, maxBytes) {
@@ -591,9 +612,15 @@ export async function handleAssistantPlan(request, env) {
     }
   }
 
-  if (!validatePlannerDecision(parsedDecision)) {
+  const ruleCode = checkPlannerDecision(parsedDecision);
+  if (ruleCode !== null) {
     return jsonResponse(
-      { error: 'Invalid AI plan', code: 'INVALID_PLAN', reason_code: 'SCHEMA_VALIDATION_FAILED' },
+      {
+        error: 'Invalid AI plan',
+        code: 'INVALID_PLAN',
+        reason_code: 'SCHEMA_VALIDATION_FAILED',
+        rule_code: ruleCode,
+      },
       502
     );
   }

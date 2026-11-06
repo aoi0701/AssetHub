@@ -17,6 +17,7 @@ from django.test import override_settings
 from apps.assistant.contracts import AssistantProviderUnavailable, PlannerDecision
 from apps.assistant.gateway import (
     MAX_RESPONSE_BYTES,
+    SCHEMA_RULE_CODES,
     USER_AGENT,
     NoRedirectHandler,
     get_opener,
@@ -476,7 +477,78 @@ def test_unusable_error_body_leaves_no_worker_code_attribute(mock_ai_server: Moc
 
     raised = exc_info.value
     assert (raised.http_status, raised.worker_code, raised.worker_reason) == (502, None, None)
+    assert getattr(raised, "worker_rule", None) is None
     assert str(raised) == FALLBACK_502
+
+
+@pytest.mark.parametrize("rule_code, expected_message", [
+    ("ROOT_SHAPE", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED, rule ROOT_SHAPE)"),
+    ("KIND_INVALID", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED, rule KIND_INVALID)"),
+    ("CALLS_INVALID", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED, rule CALLS_INVALID)"),
+    ("CLARIFICATION_INVALID", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED, rule CLARIFICATION_INVALID)"),
+    ("REASON_INVALID", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED, rule REASON_INVALID)"),
+    ("TOOL_SHAPE", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED, rule TOOL_SHAPE)"),
+    ("TOOL_NAME", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED, rule TOOL_NAME)"),
+    ("TOOL_ARGS", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED, rule TOOL_ARGS)"),
+    ("UNKNOWN_RULE_XYZ", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED)"),
+    ("root_shape", "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason SCHEMA_VALIDATION_FAILED)"),
+])
+def test_schema_rule_code_is_named_only_when_allowlisted(
+    mock_ai_server: MockAIServerState, rule_code: str, expected_message: str
+) -> None:
+    mock_ai_server.response_status = 502
+    mock_ai_server.response_body = json.dumps({
+        "error": "Invalid AI plan",
+        "code": "INVALID_PLAN",
+        "reason_code": "SCHEMA_VALIDATION_FAILED",
+        "rule_code": rule_code,
+        **LEAKY_BODY_FIELDS,
+    }).encode()
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="test question")
+
+    assert str(exc_info.value) == expected_message
+    if rule_code in SCHEMA_RULE_CODES:
+        assert exc_info.value.worker_rule == rule_code
+    else:
+        assert exc_info.value.worker_rule is None
+
+
+def test_rule_code_ignored_when_reason_not_schema_validation_failed(mock_ai_server: MockAIServerState) -> None:
+    mock_ai_server.response_status = 502
+    mock_ai_server.response_body = json.dumps({
+        "error": "Invalid AI plan",
+        "code": "INVALID_PLAN",
+        "reason_code": "CODE_FENCE",
+        "rule_code": "ROOT_SHAPE",
+        **LEAKY_BODY_FIELDS,
+    }).encode()
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="test question")
+
+    assert str(exc_info.value) == "AI Worker returned HTTP 502: Bad Gateway (worker code INVALID_PLAN, reason CODE_FENCE)"
+    assert exc_info.value.worker_rule is None
+
+
+def test_rule_code_ignored_when_status_not_502(mock_ai_server: MockAIServerState) -> None:
+    mock_ai_server.response_status = 503
+    mock_ai_server.response_body = json.dumps({
+        "error": "Service unavailable",
+        "code": "UNAVAILABLE",
+        "reason_code": "SCHEMA_VALIDATION_FAILED",
+        "rule_code": "ROOT_SHAPE",
+    }).encode()
+
+    with override_settings(AI_WORKER_URL=mock_ai_server.base_url):
+        with pytest.raises(AssistantProviderUnavailable) as exc_info:
+            plan_question(question="test question")
+
+    assert str(exc_info.value) == "AI Worker returned HTTP 503: Service Unavailable (worker code UNAVAILABLE)"
+    assert exc_info.value.worker_rule is None
 
 # 6. Network Connection and Timeout Errors
 

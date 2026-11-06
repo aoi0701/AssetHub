@@ -32,6 +32,17 @@ MAX_ERROR_BODY_BYTES = 1024  # Worker error bodies are tiny JSON objects
 WORKER_ERROR_CODES = frozenset({"INVALID_PLAN", "UNAVAILABLE", "3036"})
 # Why the Worker refused a plan; named only alongside INVALID_PLAN.
 INVALID_PLAN_REASONS = frozenset({"CODE_FENCE", "JSON_PARSE_ERROR", "SCHEMA_VALIDATION_FAILED", "PAYLOAD_TOO_LARGE"})
+# Specific schema validation failure rule allowlist; named only alongside SCHEMA_VALIDATION_FAILED on HTTP 502.
+SCHEMA_RULE_CODES = frozenset({
+    "ROOT_SHAPE",
+    "KIND_INVALID",
+    "CALLS_INVALID",
+    "CLARIFICATION_INVALID",
+    "REASON_INVALID",
+    "TOOL_SHAPE",
+    "TOOL_NAME",
+    "TOOL_ARGS",
+})
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -108,19 +119,30 @@ def _validate_timeout(raw_timeout: Any) -> float:
         ) from exc
 
 
-def _worker_error_code(exc: urllib.error.HTTPError) -> tuple[str | None, str | None]:
-    """Known Worker error code and INVALID_PLAN reason from a small JSON error body; None for anything else."""
+def _worker_error_code(exc: urllib.error.HTTPError) -> tuple[str | None, str | None, str | None]:
+    """Known Worker error code, INVALID_PLAN reason, and optional rule_code from a small JSON error body."""
     try:
         raw = exc.read(MAX_ERROR_BODY_BYTES + 1)
         if len(raw) > MAX_ERROR_BODY_BYTES:
-            return None, None
+            return None, None, None
         body = json.loads(raw.decode("utf-8"))
-        code, reason = str(body.get("code")), body.get("reason_code")
+        code, reason, rule = str(body.get("code")), body.get("reason_code"), body.get("rule_code")
     except Exception:
-        return None, None
+        return None, None, None
     if code not in WORKER_ERROR_CODES:
-        return None, None
-    return code, reason if code == "INVALID_PLAN" and isinstance(reason, str) and reason in INVALID_PLAN_REASONS else None
+        return None, None, None
+    valid_reason = (
+        reason if code == "INVALID_PLAN" and isinstance(reason, str) and reason in INVALID_PLAN_REASONS else None
+    )
+    valid_rule = (
+        rule
+        if exc.code == 502
+        and valid_reason == "SCHEMA_VALIDATION_FAILED"
+        and isinstance(rule, str)
+        and rule in SCHEMA_RULE_CODES
+        else None
+    )
+    return code, valid_reason, valid_rule
 
 
 def plan_question(
@@ -181,13 +203,21 @@ def plan_question(
         with opener.open(req, timeout=timeout) as resp:
             raw_data = resp.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        worker_code, worker_reason = _worker_error_code(exc)
+        worker_code, worker_reason, worker_rule = _worker_error_code(exc)
         suffix = ""
         if worker_code:
-            suffix = f" (worker code {worker_code}, reason {worker_reason})" if worker_reason else f" (worker code {worker_code})"
+            if worker_reason and worker_rule:
+                suffix = f" (worker code {worker_code}, reason {worker_reason}, rule {worker_rule})"
+            elif worker_reason:
+                suffix = f" (worker code {worker_code}, reason {worker_reason})"
+            else:
+                suffix = f" (worker code {worker_code})"
         error = AssistantProviderUnavailable(f"AI Worker returned HTTP {exc.code}: {exc.reason}{suffix}")
         # Callers classify on these, never on the message text.
-        error.http_status, error.worker_code, error.worker_reason = exc.code, worker_code, worker_reason
+        error.http_status = exc.code
+        error.worker_code = worker_code
+        error.worker_reason = worker_reason
+        error.worker_rule = worker_rule
         raise error from exc
     except urllib.error.URLError as exc:
         raise AssistantProviderUnavailable(

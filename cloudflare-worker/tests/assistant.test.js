@@ -917,6 +917,82 @@ describe('Cloudflare Assistant Planner Worker', () => {
     });
   });
 
+  describe('Diagnostic Rule Code on Schema Validation Failure', () => {
+    const sensitivePayload = {
+      question: 'Thiết bị đó SENSITIVE_PROMPT_KEYWORD?',
+      context: [],
+      scope: {},
+    };
+
+    const ruleTestCases = [
+      {
+        name: 'ROOT_SHAPE on extra keys',
+        decision: { kind: 'tools', calls: [], clarification: null, reason: null, extra: 'bad' },
+        expectedRule: 'ROOT_SHAPE',
+      },
+      {
+        name: 'KIND_INVALID on unknown kind',
+        decision: { kind: 'unknown_kind', calls: [], clarification: null, reason: null },
+        expectedRule: 'KIND_INVALID',
+      },
+      {
+        name: 'CALLS_INVALID on empty tools calls',
+        decision: { kind: 'tools', calls: [], clarification: null, reason: null },
+        expectedRule: 'CALLS_INVALID',
+      },
+      {
+        name: 'CLARIFICATION_INVALID on non-string clarify text',
+        decision: { kind: 'clarify', calls: [], clarification: 123, reason: null },
+        expectedRule: 'CLARIFICATION_INVALID',
+      },
+      {
+        name: 'REASON_INVALID on non-null reason for clarify',
+        decision: { kind: 'clarify', calls: [], clarification: 'Xin mã?', reason: 'invalid_reason' },
+        expectedRule: 'REASON_INVALID',
+      },
+      {
+        name: 'TOOL_SHAPE on call item without arguments',
+        decision: { kind: 'tools', calls: [{ name: 'assets.search' }], clarification: null, reason: null },
+        expectedRule: 'TOOL_SHAPE',
+      },
+      {
+        name: 'TOOL_NAME on unknown tool',
+        decision: { kind: 'tools', calls: [{ name: 'unknown_tool', arguments: {} }], clarification: null, reason: null },
+        expectedRule: 'TOOL_NAME',
+      },
+      {
+        name: 'TOOL_ARGS on invalid tool argument',
+        decision: { kind: 'tools', calls: [{ name: 'assets.search', arguments: { limit: 999 } }], clarification: null, reason: null },
+        expectedRule: 'TOOL_ARGS',
+      },
+    ];
+
+    for (const tc of ruleTestCases) {
+      it(`returns rule_code ${tc.expectedRule} for ${tc.name}`, async () => {
+        env.AI.run.mockResolvedValueOnce({ response: JSON.stringify(tc.decision) });
+        const res = await worker.fetch(assistantRequest(sensitivePayload), env);
+        expect(res.status).toBe(502);
+        const data = await res.json();
+        expect(data.code).toBe('INVALID_PLAN');
+        expect(data.reason_code).toBe('SCHEMA_VALIDATION_FAILED');
+        expect(data.rule_code).toBe(tc.expectedRule);
+
+        // Security check: ensure no leaked properties
+        const rawJson = JSON.stringify(data);
+        expect(rawJson).not.toContain('SENSITIVE_PROMPT_KEYWORD');
+      });
+    }
+
+    it('does not include rule_code on JSON_PARSE_ERROR or CODE_FENCE', async () => {
+      env.AI.run.mockResolvedValueOnce({ response: '```json\n{"kind": "tools"}\n```' });
+      const res = await worker.fetch(assistantRequest(sensitivePayload), env);
+      expect(res.status).toBe(502);
+      const data = await res.json();
+      expect(data.reason_code).toBe('CODE_FENCE');
+      expect(data.rule_code).toBeUndefined();
+    });
+  });
+
   describe('Upstream AI Errors (429 & 503)', () => {
     it('returns 429 on quota exceeded error code 3036', async () => {
       const quotaErr = new Error('Workers AI Quota Exceeded');
