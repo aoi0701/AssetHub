@@ -43,6 +43,7 @@ SCHEMA_RULE_CODES = frozenset({
     "TOOL_NAME",
     "TOOL_ARGS",
 })
+SCHEMA_DETAIL_CODES = frozenset({"UNKNOWN_KEY", "BLANK_OR_NULL", "BAD_STATUS", "BAD_LIMIT", "INVALID_ARGS"})
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -119,18 +120,21 @@ def _validate_timeout(raw_timeout: Any) -> float:
         ) from exc
 
 
-def _worker_error_code(exc: urllib.error.HTTPError) -> tuple[str | None, str | None, str | None]:
-    """Known Worker error code, INVALID_PLAN reason, and optional rule_code from a small JSON error body."""
+def _worker_error_code(
+    exc: urllib.error.HTTPError,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Known Worker codes from a small JSON error body; never return dynamic text."""
     try:
         raw = exc.read(MAX_ERROR_BODY_BYTES + 1)
         if len(raw) > MAX_ERROR_BODY_BYTES:
-            return None, None, None
+            return None, None, None, None
         body = json.loads(raw.decode("utf-8"))
-        code, reason, rule = str(body.get("code")), body.get("reason_code"), body.get("rule_code")
+        code, reason = str(body.get("code")), body.get("reason_code")
+        rule, detail = body.get("rule_code"), body.get("detail_code")
     except Exception:
-        return None, None, None
+        return None, None, None, None
     if code not in WORKER_ERROR_CODES:
-        return None, None, None
+        return None, None, None, None
     valid_reason = (
         reason if code == "INVALID_PLAN" and isinstance(reason, str) and reason in INVALID_PLAN_REASONS else None
     )
@@ -142,7 +146,16 @@ def _worker_error_code(exc: urllib.error.HTTPError) -> tuple[str | None, str | N
         and rule in SCHEMA_RULE_CODES
         else None
     )
-    return code, valid_reason, valid_rule
+    valid_detail = (
+        detail
+        if exc.code == 502
+        and valid_reason == "SCHEMA_VALIDATION_FAILED"
+        and valid_rule == "TOOL_ARGS"
+        and isinstance(detail, str)
+        and detail in SCHEMA_DETAIL_CODES
+        else None
+    )
+    return code, valid_reason, valid_rule, valid_detail
 
 
 def plan_question(
@@ -203,11 +216,13 @@ def plan_question(
         with opener.open(req, timeout=timeout) as resp:
             raw_data = resp.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        worker_code, worker_reason, worker_rule = _worker_error_code(exc)
+        worker_code, worker_reason, worker_rule, worker_detail = _worker_error_code(exc)
         suffix = ""
         if worker_code:
             if worker_reason and worker_rule:
                 suffix = f" (worker code {worker_code}, reason {worker_reason}, rule {worker_rule})"
+                if worker_detail:
+                    suffix = f" (worker code {worker_code}, reason {worker_reason}, rule {worker_rule}, detail {worker_detail})"
             elif worker_reason:
                 suffix = f" (worker code {worker_code}, reason {worker_reason})"
             else:
@@ -218,6 +233,7 @@ def plan_question(
         error.worker_code = worker_code
         error.worker_reason = worker_reason
         error.worker_rule = worker_rule
+        error.worker_detail = worker_detail
         raise error from exc
     except urllib.error.URLError as exc:
         raise AssistantProviderUnavailable(
